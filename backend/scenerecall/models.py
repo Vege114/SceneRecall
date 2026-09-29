@@ -69,6 +69,38 @@ class SearchInput(Contract):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+class CharacterEditInput(Contract):
+    name: str | None = Field(default=None, max_length=200)
+    aliases: list[str] | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=10000)
+    notes: str | None = Field(default=None, max_length=100000)
+    appearance: list[str] | None = Field(default=None, max_length=64)
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_edit(self):
+        editable = self.model_fields_set - {"expected_revision"}
+        if not editable or any(getattr(self, field) is None for field in editable):
+            raise ValueError("请提供要修改的角色档案字段；清空内容请使用空字符串或空列表")
+        if self.aliases and any(not alias.strip() or len(alias) > 200 for alias in self.aliases):
+            raise ValueError("角色别名不能为空，且每个别名不能超过 200 字")
+        if self.appearance and any(not trait.strip() or len(trait) > 2000 for trait in self.appearance):
+            raise ValueError("角色外观特征不能为空，且每条不能超过 2000 字")
+        return self
+
+
+class CharacterMergeInput(Contract):
+    target_id: str = Field(min_length=1, max_length=180)
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
+
+
+class CharacterReanalysisInput(Contract):
+    scope: Literal["asset", "series"] = "asset"
+    max_requests: int = Field(default=1000, ge=1, le=100000, strict=True)
+    max_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
+
+
 class Observation(BaseModel):
     model_config = ConfigDict(extra="allow")
     schema_version: str = "1.0"

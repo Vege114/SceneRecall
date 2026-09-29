@@ -346,10 +346,13 @@ class Library:
             return annotation
 
     def records(self, asset_id: str | None = None) -> list[dict]:
+        from .characters import CharacterStore
+        characters = CharacterStore(self)
         result = []
         for asset in [self.get_asset(asset_id)] if asset_id else self.list_assets():
             annotations = self.annotations(asset["id"])
-            for record in self.observations(asset["id"]) + self.subtitles(asset["id"]):
+            observations = characters.decorate_observations(asset["id"], self.observations(asset["id"]))
+            for record in observations + self.subtitles(asset["id"]):
                 is_visual = "summary" in record
                 related = [a for a in annotations if a["record_id"] == record["id"]]
                 text = record.get("summary", record.get("text", ""))
@@ -370,6 +373,7 @@ class Library:
                         for entity in entities:
                             if entity["id"] == annotation.get("entity_id"):
                                 entity["name"] = annotation["character_name"]
+                                entity["character_name"] = annotation["character_name"]
                                 entity["aliases"] = annotation.get("aliases") or []
                 description = text
                 # An unreadable cue remains visible for repair but is not searchable content.
@@ -378,6 +382,8 @@ class Library:
                 if is_visual:
                     for entity in entities:
                         description += " " + " ".join(str(entity.get(k, "")) for k in ("appearance", "label", "name", "description"))
+                        if entity.get("character_id"):
+                            names.extend([entity.get("character_name", ""), *(entity.get("aliases") or [])])
                     for event in record.get("events", []):
                         description += " " + str(event.get("action", ""))
                     description += " " + " ".join(names)
@@ -391,7 +397,7 @@ class Library:
                                "thumbnail": frames[0] if frames else None, "evidence_frame_ids": frames,
                                "source": record.get("source", "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
                                "entities": entities, "events": record.get("events", []),
-                               "character": " ".join(names), "favorite": favorite, "note": note,
+                               "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
                                "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", [])})
         return result
 
@@ -495,6 +501,8 @@ class Library:
                 registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
                 for frame_id in registry:
                     restored.frame_path(asset_id, frame_id)
+            from .characters import CharacterStore
+            CharacterStore(restored).validate_all()
             paths = [p for p in staging.rglob("*") if p.is_file() and p.name != "library.json"]
             from .media import fingerprint
             for path in (staging / "media").glob("*"):

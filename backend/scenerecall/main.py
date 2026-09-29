@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hmac
+import io
 import mimetypes
 import os
 import secrets
@@ -10,15 +11,19 @@ import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from . import codex_cli
+from .characters import CharacterStore, StaleCharacterRevision
 from .jobs import JobQueue
 from .library import Library, atomic_json, read_json, safe_id, uid
-from .models import AnalysisInput, AnnotationInput, AssetInput, SearchInput
+from .models import (
+    AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput,
+    CharacterMergeInput, CharacterReanalysisInput, SearchInput,
+)
 from .providers import ProviderManager
 from .search import SearchEngine
 
@@ -30,6 +35,7 @@ DEFAULTS = {"bindings": {k: None for k in ("vision", "subtitle", "embedding", "q
 def create_app(data_dir: Path | None = None, start_worker=True, providers=None, token=None, allowed_ports=None):
     root = data_dir or Path(os.environ.get("SCENERECALL_DATA", str(Path.home() / "SceneRecallLibrary")))
     library = Library(Path(root))
+    characters = CharacterStore(library)
     providers = providers or ProviderManager(library.root / "private")
     search = SearchEngine(library.root / "indexes", providers)
     queue = JobQueue(library, providers, search)
@@ -48,6 +54,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     app = FastAPI(title="SceneRecall", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.library, app.state.providers, app.state.search, app.state.jobs = library, providers, search, queue
     app.state.session_token = session_token
+    app.state.characters = characters
 
     @app.middleware("http")
     async def local_session(request: Request, call_next):
@@ -82,6 +89,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
         return JSONResponse({"detail": str(exc)[:800]}, status_code=400)
+
+    @app.exception_handler(StaleCharacterRevision)
+    async def stale_characters(request, exc):
+        return JSONResponse({"detail": str(exc)[:800]}, status_code=409)
 
     @app.exception_handler(FileNotFoundError)
     async def missing(request, exc):
@@ -209,6 +220,85 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.post("/api/assets/{asset_id}/relocate")
     async def relocate(asset_id: str, payload: dict = Body(...)):
         return await asyncio.to_thread(library.relocate, asset_id, payload["video_path"])
+
+    def refresh_character_search(asset_id: str):
+        # Dossiers are shared across episodes, so all affected projections change.
+        for related in characters.catalog(asset_id)["assets"]:
+            search.upsert(library.records(related["id"]))
+
+    @app.get("/api/assets/{asset_id}/characters")
+    async def character_catalog(asset_id: str):
+        return characters.catalog(asset_id)
+
+    @app.get("/api/assets/{asset_id}/characters/{character_id}/portrait")
+    async def character_portrait(asset_id: str, character_id: str):
+        from PIL import Image, ImageOps
+
+        with library.lock:
+            reference = characters.portrait_reference(asset_id, character_id)
+            path = library.frame_path(reference["asset_id"], reference["frame_id"])
+        with Image.open(path) as source:
+            picture = ImageOps.exif_transpose(source).convert("RGB")
+            if reference.get("box"):
+                x, y, width, height = reference["box"]
+                left, top = int(x * picture.width), int(y * picture.height)
+                right = max(left + 1, min(picture.width, round((x + width) * picture.width)))
+                bottom = max(top + 1, min(picture.height, round((y + height) * picture.height)))
+                picture = picture.crop((left, top, right, bottom))
+            picture.thumbnail((768, 768))
+            output = io.BytesIO()
+            picture.save(output, format="JPEG", quality=90)
+        return Response(output.getvalue(), media_type="image/jpeg")
+
+    @app.patch("/api/assets/{asset_id}/characters/{character_id}")
+    async def character_edit(asset_id: str, character_id: str, payload: CharacterEditInput):
+        with library.lock:
+            profile = characters.update(asset_id, character_id, payload.model_dump(exclude_unset=True))
+            refresh_character_search(asset_id)
+        return profile
+
+    @app.delete("/api/assets/{asset_id}/characters/{character_id}")
+    async def character_delete(asset_id: str, character_id: str,
+                               expected_revision: int | None = Query(default=None, ge=0)):
+        with library.lock:
+            characters.delete(asset_id, character_id, expected_revision=expected_revision)
+            refresh_character_search(asset_id)
+        return {"ok": True}
+
+    @app.post("/api/assets/{asset_id}/characters/{character_id}/merge")
+    async def character_merge(asset_id: str, character_id: str, payload: CharacterMergeInput):
+        with library.lock:
+            profile = characters.merge(asset_id, character_id, payload.target_id,
+                                       expected_revision=payload.expected_revision)
+            refresh_character_search(asset_id)
+        return profile
+
+    @app.post("/api/assets/{asset_id}/characters/reanalyze")
+    async def character_reanalyze(asset_id: str, payload: CharacterReanalysisInput):
+        with library.lock:
+            catalog = characters.catalog(asset_id)
+            if payload.expected_revision is not None and payload.expected_revision != catalog["revision"]:
+                raise StaleCharacterRevision("角色档案已更新，请刷新档案后重新提交识别")
+            selected = catalog["assets"] if payload.scope == "series" else [library.get_asset(asset_id)]
+            selected = sorted(selected, key=lambda item: (
+                item.get("season") if item.get("season") is not None else -1,
+                item.get("episode") if item.get("episode") is not None else -1,
+                item["created_at"], item["id"],
+            ))
+            current = settings()
+            # Validate every episode before enqueueing any, avoiding half-created batches.
+            configs = []
+            for asset in selected:
+                if not asset["source_available"]:
+                    raise ValueError(f"「{asset['title']}」原视频离线或已变化，请先定位原文件再重新识别")
+                request = AnalysisInput(**{**current["defaults"], "asset_id": asset["id"],
+                    "stages": ["vision"], "start_ms": 0, "end_ms": asset["duration_ms"], "force": True,
+                    "max_requests": payload.max_requests, "max_cost": payload.max_cost})
+                _, config = queue.validate(request, current)
+                config["character_reanalysis"] = True
+                configs.append((asset["id"], config))
+            jobs = [public_job(queue.add("analysis", config, selected_id)) for selected_id, config in configs]
+        return {"jobs": jobs, "revision": catalog["revision"], "scope_id": catalog["scope_id"]}
 
     @app.get("/api/assets/{asset_id}/media")
     async def media(asset_id: str):

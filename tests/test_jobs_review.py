@@ -32,7 +32,7 @@ class InjectedProvider:
         return AIResult([{"frame_id": frame["id"], "lines": [{"text": "合成字幕", "language": "zh", "uncertain": False}]}
                          for frame in frames], {}, 1, 0.01)
 
-    async def analyze(self, id, frames, start_ms, end_ms):
+    async def analyze(self, id, frames, start_ms, end_ms, character_context=None):
         self.calls.append(("vision", start_ms))
         if start_ms == self.fail_window and not self.failed_once:
             self.failed_once = True

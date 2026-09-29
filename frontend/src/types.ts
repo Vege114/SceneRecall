@@ -75,6 +75,36 @@ export interface Entity {
   description?: string;
   appearance?: string;
   position?: string;
+  character_id?: string;
+  character_name?: string;
+}
+export interface CharacterAppearance {
+  asset_id: string;
+  asset_title: string;
+  record_id: string;
+  start_ms: number;
+  end_ms: number;
+  entity_id: string;
+  frame_ids: string[];
+}
+export interface CharacterProfile {
+  id: string;
+  name: string;
+  aliases: string[];
+  description: string;
+  notes: string;
+  appearance?: string[];
+  user_edited?: boolean;
+  updated_at?: string;
+  representative?: { asset_id: string; frame_id: string; box?: number[] | null } | null;
+  appearances: CharacterAppearance[];
+  appearance_count: number;
+}
+export interface CharacterLibrary {
+  scope_id: string;
+  revision: number;
+  profiles: CharacterProfile[];
+  assets: Asset[];
 }
 export interface Observation {
   id: string;

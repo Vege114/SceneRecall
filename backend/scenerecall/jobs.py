@@ -6,12 +6,17 @@ import sqlite3
 
 from .library import Library, atomic_json, digest, now, read_json, uid
 from .models import AnalysisInput
-from .providers import MAX_OUTPUT_TOKENS, PROMPT_VERSION
+from .providers import (CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, MAX_OUTPUT_TOKENS,
+                        PROMPT_VERSION, SUBTITLE_PROMPT_VERSION, ProviderManager)
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
 
 class StopJob(Exception):
+    pass
+
+
+class CharacterContextChanged(ValueError):
     pass
 
 
@@ -58,7 +63,10 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
 
 class JobQueue:
     def __init__(self, library: Library, providers, search):
+        from .characters import CharacterStore
+
         self.library, self.providers, self.search = library, providers, search
+        self.characters = CharacterStore(library)
         self.path = library.root / "runtime" / "jobs.sqlite"
         self.task = None
         self.closed = False
@@ -139,6 +147,9 @@ class JobQueue:
                 raise ValueError("设置费用预算前，请填写所用模型的输入与输出单价")
             snapshots[stage] = profile
         config = {**request.model_dump(), "end_ms": end, "bindings": dict(bindings), "profile_snapshots": snapshots}
+        if "vision" in request.stages:
+            context = self.characters.context(request.asset_id)
+            config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision")}
         return asset, config
 
     def estimate(self, request: AnalysisInput, settings: dict) -> dict:
@@ -150,15 +161,22 @@ class JobQueue:
         subtitle_requests = math.ceil(subtitle_frames / 8)
         estimate_cost = 0.0
         unknown = False
+        character_context = self.character_context(request.asset_id, config.get("character_snapshot")) if vision else None
+        context_tokens = (len(ProviderManager.character_context_text(character_context).encode("utf-8"))
+                          + CHARACTER_INSTRUCTION_TOKENS) if vision else 0
+        reference_count = len((character_context or {}).get("reference_frames", []))
         for stage, count, frame_count in (("vision", vision, request.frames_per_window), ("subtitle", subtitle_requests, 8)):
             if count:
                 profile = config["profile_snapshots"][stage]
-                unit = self.estimated_call_cost(profile, frame_count)
+                unit = self.estimated_call_cost(profile, frame_count + (reference_count if stage == "vision" else 0),
+                                                context_tokens=context_tokens if stage == "vision" else 0)
                 unknown |= unit is None
                 estimate_cost += (unit or 0) * count
         warnings = ["请求数为切镜前估算，快速剪辑会增加窗口数；字幕去重可能减少请求。",
                     "估算不含自动向量索引；重试最多三次。费用以供应商实际用量为准。",
                     "请求数不足或预算不足时任务暂停，不会自动扩大预算。"]
+        if vision:
+            warnings.append("人物识别会逐镜头携带同一作品的现有档案及最多 8 张参考图；费用估算已含当前档案，后续档案增长会增加费用，每次请求前重新检查预算。")
         if any(profile.get("provider_type") == "codex_cli" for profile in config["profile_snapshots"].values()):
             warnings.append("Codex CLI 由已登录账户的订阅额度管理，金额费用未知，并不表示免费；请求数预算仍生效。")
         return {"duration_ms": duration, "estimated_frames": vision * request.frames_per_window + subtitle_frames,
@@ -166,13 +184,35 @@ class JobQueue:
                 "currency": "USD", "warnings": warnings}
 
     @staticmethod
-    def estimated_call_cost(profile: dict, frames: int = 0, text_count: int = 1):
+    def estimated_call_cost(profile: dict, frames: int = 0, text_count: int = 1, context_tokens: int = 0):
         if profile.get("provider_type") == "codex_cli":
             return None
         a, b = profile.get("input_price_per_million"), profile.get("output_price_per_million")
         if a is None or b is None:
             return None
-        return ((2048 * text_count + 4096 * frames) * a + MAX_OUTPUT_TOKENS * b) / 1_000_000
+        return ((2048 * text_count + 4096 * frames + context_tokens) * a + MAX_OUTPUT_TOKENS * b) / 1_000_000
+
+    def character_context(self, asset_id: str, expected: dict | None = None) -> dict:
+        context = self.characters.context(asset_id)
+        if expected is not None and any(context[key] != expected.get(key) for key in ("scope_id", "revision")):
+            raise CharacterContextChanged("角色档案已修改，此任务使用的是旧版档案。已完成结果保留；请在角色档案中按新版档案重新识别")
+        ProviderManager.character_context_text(context)
+        references = []
+        # All dossiers remain available as text. Bound expensive image context and
+        # prefer recently enriched profiles when the cast has more than eight roles.
+        for profile in sorted(context["profiles"], key=lambda p: p.get("updated_at", ""), reverse=True):
+            representative = profile.get("representative")
+            if not representative:
+                continue
+            try:
+                path = self.library.frame_path(representative["asset_id"], representative["frame_id"])
+            except (FileNotFoundError, ValueError):
+                continue
+            references.append({"id": "reference:" + profile["id"], "character_id": profile["id"],
+                               "path": str(path), "at_ms": 0, "box": representative.get("box")})
+            if len(references) == MAX_CHARACTER_REFERENCES:
+                break
+        return {**context, "reference_frames": references}
 
     def control(self, job_id: str, action: str, overrides=None) -> dict:
         job = self.get(job_id)
@@ -213,7 +253,7 @@ class JobQueue:
             raise StopJob()
         return job
 
-    def before_call(self, job_id: str, profile: dict, frames=0, text_count=1):
+    def before_call(self, job_id: str, profile: dict, frames=0, text_count=1, context_tokens=0):
         job = self.checkpoint(job_id)
         current_profile = self.providers.get(profile["id"])
         if model_identity(current_profile) != model_identity(profile):
@@ -231,7 +271,7 @@ class JobQueue:
             if job.get("cost_incomplete"):
                 self.update(job_id, status="paused", message="供应商未返回完整费用用量；当前费用未知，请核对账单或移除费用预算后继续")
                 raise StopJob()
-            reserve = self.estimated_call_cost(current_profile, frames, text_count)
+            reserve = self.estimated_call_cost(current_profile, frames, text_count, context_tokens)
             if reserve is None or (job["cost"] or 0) + reserve * 3 > max_cost:
                 self.update(job_id, status="paused", message="费用预算不足以预留下一批请求；请提高预算后继续")
                 raise StopJob()
@@ -253,8 +293,8 @@ class JobQueue:
                     cost=known if total_attempts and not incomplete else None,
                     known_cost=known, cost_incomplete=incomplete, inflight_attempts=0)
 
-    async def call(self, job_id: str, profile: dict, method, *args, frames=0):
-        self.before_call(job_id, profile, frames)
+    async def call(self, job_id: str, profile: dict, method, *args, frames=0, context_tokens=0):
+        self.before_call(job_id, profile, frames, context_tokens=context_tokens)
         try:
             result = await method(profile["id"], *args)
         except Exception as exc:
@@ -341,6 +381,7 @@ class JobQueue:
         return [frames[at] for at in times_ms]
 
     async def analyze(self, job_id: str):
+        from .characters import StaleCharacterRevision
         from .media import detect_shots, make_windows, sample_times
         from .subtitles import candidate_frames, merge_ocr_frames
 
@@ -354,6 +395,12 @@ class JobQueue:
         start, end = config["start_ms"], config["end_ms"]
         windows = []
         if "vision" in config["stages"]:
+            # Upgrade a pending pre-0.2 job once; every resumed/new job thereafter
+            # remains bound to the human revision that was actually requested.
+            context = self.character_context(asset_id, config.get("character_snapshot"))
+            if "character_snapshot" not in config:
+                config = {**config, "character_snapshot": {key: context[key] for key in ("scope_id", "revision")}}
+                self.update(job_id, config=config)
             self.update(job_id, stage="segmentation", message="正在检测镜头边界")
             segmentation_id = digest([start, end, "content-27-v1"])
             segmentation_file = directory / "segmentation" / segmentation_id / "shots.json"
@@ -369,11 +416,13 @@ class JobQueue:
         completed = 0
         for window in windows:
             self.checkpoint(job_id)
+            self.character_context(asset_id, config["character_snapshot"])
             profile = config["profile_snapshots"]["vision"]
             cache_key = digest([self.library.get_asset(asset_id)["fingerprint"], window, model_identity(profile),
-                                config["frames_per_window"], PROMPT_VERSION, "vision"])
+                                config["frames_per_window"], PROMPT_VERSION, "vision", config["character_snapshot"]])
             checkpoint_key = "vision:" + cache_key
             record_id = "obs_" + digest([asset_id, window["start_ms"], window["end_ms"]])
+            stage_path = directory / "analyses" / run_id / "vision-batches" / f"{cache_key}.json"
             existing = next((r for r in self.library.observations(asset_id) if r.get("cache_key") == cache_key), None)
             try:
                 if existing and (not config["force"] or existing.get("run_id") == run_id
@@ -382,22 +431,47 @@ class JobQueue:
                     self.update(job_id, completed=completed, progress=completed/max(total, 1), message="复用已完成的画面识别")
                     continue
                 self.update(job_id, stage="vision", message=f"画面识别 {window['start_ms']/1000:.1f}–{window['end_ms']/1000:.1f} 秒")
-                frames = await self.frames(asset_id, source, sample_times(window["start_ms"], window["end_ms"], config["frames_per_window"]))
-                frames = [frame for frame in frames if window["start_ms"] <= frame["at_ms"] < window["end_ms"]]
-                if not frames:
-                    raise ValueError("此窗口没有可用的实际视频帧，未跨镜头取用证据")
-                data = await self.call(job_id, profile, self.providers.analyze, frames, window["start_ms"], window["end_ms"], frames=len(frames))
-                allowed = {f["id"] for f in frames}
-                if not set(data.get("evidence_frame_ids", [])).issubset(allowed):
-                    raise ValueError("模型引用了不存在的证据帧")
-                data = {**data, "id": record_id, "asset_id": asset_id, "run_id": run_id, "window_id": window["id"],
-                        "shot_id": window["shot_id"], "start_ms": window["start_ms"], "end_ms": window["end_ms"],
-                        "cache_key": cache_key, "evidence_frame_ids": data.get("evidence_frame_ids") or list(allowed),
-                        "provenance": {"profile_id": profile["id"], "model": profile["model"], "prompt_version": PROMPT_VERSION}}
-                self.library.save_observation(asset_id, data)
+                data = read_json(stage_path)
+                if data is None:
+                    frames = await self.frames(asset_id, source, sample_times(window["start_ms"], window["end_ms"], config["frames_per_window"]))
+                    frames = [frame for frame in frames if window["start_ms"] <= frame["at_ms"] < window["end_ms"]]
+                    if not frames:
+                        raise ValueError("此窗口没有可用的实际视频帧，未跨镜头取用证据")
+                    context = self.character_context(asset_id, config["character_snapshot"])
+                    context_text = ProviderManager.character_context_text(context)
+                    # UTF-8 bytes bound dossier tokenization; reference images
+                    # also consume the normal image reserve.
+                    data = await self.call(job_id, profile, self.providers.analyze, frames, window["start_ms"], window["end_ms"],
+                                           context, frames=len(frames) + len(context["reference_frames"]),
+                                           context_tokens=len(context_text.encode("utf-8")) + CHARACTER_INSTRUCTION_TOKENS)
+                    allowed = {f["id"] for f in frames}
+                    if not set(data.get("evidence_frame_ids", [])).issubset(allowed):
+                        raise ValueError("模型引用了不存在的证据帧")
+                    data = {**data, "id": record_id, "asset_id": asset_id, "run_id": run_id, "window_id": window["id"],
+                            "shot_id": window["shot_id"], "start_ms": window["start_ms"], "end_ms": window["end_ms"],
+                            "cache_key": cache_key, "evidence_frame_ids": data.get("evidence_frame_ids") or list(allowed),
+                            "provenance": {"profile_id": profile["id"], "model": profile["model"], "prompt_version": PROMPT_VERSION,
+                                           "character_scope_id": context["scope_id"], "character_revision": context["revision"],
+                                           "character_context_digest": digest(context_text),
+                                           "character_profile_ids": [p["id"] for p in context["profiles"]]}}
+                    # Persist the validated provider result before either registry
+                    # or observation publication. Replays preserve local entity IDs
+                    # and cannot create orphan identities or repay a finished call.
+                    atomic_json(stage_path, data)
+                if any(data.get(key) != expected for key, expected in {
+                    "id": record_id, "asset_id": asset_id, "run_id": run_id, "cache_key": cache_key,
+                    "start_ms": window["start_ms"], "end_ms": window["end_ms"],
+                }.items()):
+                    raise ValueError("人物识别暂存结果不属于当前运行，请创建新任务")
+                with self.library.lock:
+                    self.character_context(asset_id, config["character_snapshot"])
+                    data = self.characters.apply_observation(asset_id, data, expected_revision=config["character_snapshot"]["revision"])
+                    self.library.save_observation(asset_id, data)
                 self.search.upsert(self.library.records(asset_id))
                 self.update(job_id, checkpoints=self.get(job_id)["checkpoints"] + [checkpoint_key])
             except StopJob:
+                raise
+            except (CharacterContextChanged, StaleCharacterRevision):
                 raise
             except Exception as exc:
                 self.update(job_id, failures=self.get(job_id)["failures"] + [{"unit": window["id"], "message": error_message(exc)}])
@@ -410,7 +484,7 @@ class JobQueue:
             times = subtitle_times[batch_start:batch_start+8]
             profile = config["profile_snapshots"]["subtitle"]
             cache_key = digest([self.library.get_asset(asset_id)["fingerprint"], times, min(end, times[-1] + interval),
-                                config["subtitle_crop"], model_identity(profile), PROMPT_VERSION, "subtitle"])
+                                config["subtitle_crop"], model_identity(profile), SUBTITLE_PROMPT_VERSION, "subtitle"])
             checkpoint_key = "subtitle:" + cache_key
             cache_path = directory / "analyses" / run_id / "subtitle-batches" / f"{cache_key}.json"
             possible = sorted((directory / "analyses").glob(f"*/subtitle-batches/{cache_key}.json"),
@@ -466,6 +540,8 @@ class JobQueue:
         elif subtitle_times and not all_ocr_ok:
             self.update(job_id, message="字幕批次有失败，完整轨道未切换；重试可复用已识别批次")
         self.checkpoint(job_id)
+        if "vision" in config["stages"]:
+            self.character_context(asset_id, config["character_snapshot"])
         await self.reindex(job_id, embedding_profile_id=config.get("bindings", {}).get("embedding"))
 
     async def reindex(self, job_id: str, embedding_profile_id=None):

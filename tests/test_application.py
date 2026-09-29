@@ -33,7 +33,7 @@ class TestProviders:
     def list(self):
         return [self.get("test")]
 
-    async def analyze(self, id, frames, start_ms, end_ms):
+    async def analyze(self, id, frames, start_ms, end_ms, character_context=None):
         self.calls.append("vision")
         if self.fail_vision:
             raise ProviderError("synthetic failure")

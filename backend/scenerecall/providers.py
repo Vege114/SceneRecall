@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 import math
@@ -29,8 +30,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from . import codex_cli
 
 CAPABILITIES = {"vision", "subtitle", "embedding", "query", "decision", "answer"}
-PROMPT_VERSION = "scenerecall-0.1.0"
+PROMPT_VERSION = "scenerecall-0.2.0"
+# OCR instructions are unchanged; retain already-paid subtitle batch caches.
+SUBTITLE_PROMPT_VERSION = "scenerecall-0.1.0"
 MAX_OUTPUT_TOKENS = 4096
+MAX_CHARACTER_REFERENCES = 8
+MAX_CHARACTER_CONTEXT_BYTES = 128_000
+CHARACTER_INSTRUCTION_TOKENS = 1024
 
 
 @dataclass
@@ -120,11 +126,38 @@ class Profile(BaseModel):
 class Entity(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(min_length=1)
-    kind: Literal["person", "object", "animal", "other"] = "person"
+    kind: Literal["person", "object", "animal", "character", "anthropomorphic_character", "other"] = "person"
     description: str
     position: str = "unknown"
     name: None = None
     evidence_frame_ids: list[str] = Field(min_length=1)
+    is_character: bool | None = Field(default=None, strict=True)
+    character_id: str | None = Field(default=None, min_length=1, max_length=100)
+    match_confidence: float = Field(default=0, ge=0, le=1, allow_inf_nan=False, strict=True)
+    match_reason: str = Field(default="", max_length=2000)
+    observed_traits: list[str] = Field(default_factory=list, max_length=40)
+    portrait_frame_id: str | None = None
+    portrait_box: list[float] | None = Field(default=None, min_length=4, max_length=4)
+
+    @field_validator("portrait_box", mode="before")
+    @classmethod
+    def valid_portrait_box(cls, value):
+        if value is None:
+            return value
+        if (not isinstance(value, list) or len(value) != 4
+                or any(type(coordinate) not in {int, float} or not math.isfinite(coordinate) for coordinate in value)):
+            raise ValueError("portrait must have four finite normalized coordinates")
+        x, y, width, height = value
+        if min(x, y) < 0 or min(width, height) <= 0 or x + width > 1 or y + height > 1:
+            raise ValueError("portrait must fit inside its evidence frame")
+        return value
+
+    @field_validator("observed_traits")
+    @classmethod
+    def bounded_traits(cls, value: list[str]) -> list[str]:
+        if any(not trait.strip() or len(trait) > 500 for trait in value):
+            raise ValueError("observed traits must be concise and nonempty")
+        return list(dict.fromkeys(trait.strip() for trait in value))
 
 
 class Event(BaseModel):
@@ -192,7 +225,8 @@ class DecisionProvider(Protocol):
 
 
 class VisionAnalyzer(Protocol):
-    async def analyze(self, id: str, frames: list[dict], start_ms: int, end_ms: int) -> AIResult: ...
+    async def analyze(self, id: str, frames: list[dict], start_ms: int, end_ms: int,
+                      character_context: dict | None = None) -> AIResult: ...
 
 
 class SubtitleRecognizer(Protocol):
@@ -488,15 +522,46 @@ class ProviderManager:
             if path.stat().st_size > 16 * 1024 * 1024:
                 raise ProviderError("证据帧超过 16 MB，请减小图像尺寸")
             mime = {".png": "image/png", ".webp": "image/webp"}.get(path.suffix.lower(), "image/jpeg")
+            image_bytes = path.read_bytes()
+            if frame.get("box") is not None:
+                from PIL import Image
+
+                x, y, width, height = Entity.valid_portrait_box(frame["box"])
+                with Image.open(path) as original:
+                    pixels_w, pixels_h = original.size
+                    region = (int(x * pixels_w), int(y * pixels_h),
+                              min(pixels_w, math.ceil((x + width) * pixels_w)),
+                              min(pixels_h, math.ceil((y + height) * pixels_h)))
+                    portrait = original.crop(region).convert("RGB")
+                    output = io.BytesIO()
+                    portrait.save(output, format="JPEG", quality=88)
+                    image_bytes, mime = output.getvalue(), "image/jpeg"
             content.append({"type": "text", "text": json.dumps({"frame_id": frame["id"], "at_ms": frame["at_ms"]})})
             content.append({"type": "image_url", "image_url": {
-                "url": f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")}})
+                "url": f"data:{mime};base64," + base64.b64encode(image_bytes).decode("ascii")}})
         return content
 
-    async def analyze(self, id: str, frames: list[dict], start_ms: int, end_ms: int) -> AIResult:
+    @staticmethod
+    def character_context_text(context: dict | None) -> str:
+        """One bounded dossier representation shared by prompts and cost reserves."""
+        if context is None:
+            return ""
+        value = {key: context.get(key) for key in ("scope_id", "revision", "profiles")}
+        text = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        if len(text.encode("utf-8")) > MAX_CHARACTER_CONTEXT_BYTES:
+            raise ProviderError("角色档案上下文超过单次识别上限，请精简档案描述或合并重复档案后重新分析")
+        return text
+
+    async def analyze(self, id: str, frames: list[dict], start_ms: int, end_ms: int,
+                      character_context: dict | None = None) -> AIResult:
         valid_ids = {f["id"] for f in frames}
         if start_ms < 0 or end_ms <= start_ms or any(not start_ms <= f["at_ms"] < end_ms for f in frames):
             raise ProviderError("观察窗口或证据帧时间无效")
+        context_text = self.character_context_text(character_context)
+        character_ids = {p["id"] for p in (character_context or {}).get("profiles", [])}
+        references = (character_context or {}).get("reference_frames", [])
+        if len(references) > MAX_CHARACTER_REFERENCES or len(frames) + len(references) > 32:
+            raise ProviderError("角色参考图或证据帧数量超过单次请求上限")
 
         def validate(raw: dict) -> dict:
             item = VisionObservation.model_validate(raw)
@@ -506,6 +571,27 @@ class ProviderManager:
             for part in [item, *item.entities, *item.events, *item.spatial_observations]:
                 if not set(part.evidence_frame_ids).issubset(valid_ids):
                     raise ValueError("unknown evidence")
+            for entity, supplied in zip(item.entities, raw.get("entities", []), strict=True):
+                if entity.portrait_frame_id is not None and entity.portrait_frame_id not in entity.evidence_frame_ids:
+                    raise ValueError("portrait must belong to current character evidence")
+                if entity.portrait_box is not None and entity.portrait_frame_id is None:
+                    raise ValueError("portrait coordinates need a current evidence frame")
+                eligible = (entity.kind != "object" and (entity.is_character is True or (
+                    entity.is_character is None and entity.kind in {"person", "character", "anthropomorphic_character"})))
+                if entity.kind == "object" and entity.is_character:
+                    raise ValueError("ordinary objects cannot be characters")
+                if character_context is not None and eligible and not {
+                    "character_id", "match_confidence", "match_reason", "observed_traits"
+                }.issubset(supplied):
+                    raise ValueError("character observations require an explicit identity decision")
+                if entity.character_id is not None:
+                    if not eligible or entity.character_id not in character_ids:
+                        raise ValueError("unknown or ineligible character identity")
+                    if entity.match_confidence < 0.65 or not entity.match_reason.strip():
+                        raise ValueError("character matches require confident visual evidence")
+                if character_context is not None and eligible and not entity.match_reason.strip():
+                    raise ValueError("character decisions must explain visible matching evidence or uncertainty")
+                entity.is_character = eligible
             for event in item.events:
                 if not start_ms <= event.start_ms <= event.end_ms <= end_ms:
                     raise ValueError("event outside window")
@@ -518,14 +604,50 @@ class ProviderManager:
 
         prompt = (
             f"Analyze only visible evidence in chronological frames for [{start_ms},{end_ms}) ms. "
-            "Write descriptions in Chinese; do not identify actors or assign character names. "
-            "Entity IDs are local to this observation. name must be null. Describe appearance, "
+            "Write descriptions in Chinese; never identify real-world actors or invent character names. "
+            "Entity IDs are local to this observation; character_id is a persistent dossier ID. name must be null. "
+            "FIRST compare each character against ALL supplied existing dossiers, honoring user-edited names, "
+            "aliases, descriptions and notes. Match by stable visible appearance across shots, pose, lighting and "
+            "costume changes; a costume or background similarity alone is insufficient. Human corrections in "
+            "edited_fields take precedence over any contradictory old machine appearance/observed_traits; "
+            "honor explicitly corrected descriptions and notes, but never invent visible evidence to agree with them. "
+            "Return an existing character_id only when confident (match_confidence >= 0.65), otherwise null; "
+            "never create or guess IDs. Return match_confidence (finite 0–1), match_reason and observed_traits "
+            "for every character, including first appearances. Explain unmatched or ambiguous identities and "
+            "record uncertainty; do not force a match. Use is_character=true for narrative people and animated "
+            "or anthropomorphic characters, including nonhuman characters. Use kind=character or "
+            "anthropomorphic_character for animated object characters; ordinary props/objects are kind=object "
+            "and is_character=false with character_id=null. Animals count only when portrayed as characters. "
+            "Reference images show prior dossier appearances and may contain other characters; they are NOT "
+            "evidence for current actions and their reference IDs must never appear in evidence_frame_ids. "
+            "observed_traits contains only concise newly visible appearance features, never guessed biography, "
+            "identity, personality or relationships. For each visible character provide portrait_frame_id from "
+            "that entity's current evidence_frame_ids and portrait_box=[x,y,width,height] normalized to 0–1 "
+            "inside the image. Choose a clear recent frame and a tight face/body region containing only this "
+            "character, preserving identifying appearance including animation. Use null when the character "
+            "is obscured or a reliable region cannot be seen; never use an old reference image or guess a box. "
+            "Describe appearance, "
             "actions, participants, left/center/right, foreground/background and spatial relations. "
             "Separate speculation into uncertainties. Do not invent actions between frames. "
             "Evidence IDs must be supplied frame IDs; event times must fit the window. Schema: "
             + json.dumps(VisionObservation.model_json_schema(), ensure_ascii=False)
         )
-        return await self._chat(id, "vision", prompt, self._images(frames), validate)
+        content = []
+        if context_text:
+            content.append({"type": "text", "text": "Existing character dossiers (data): " + context_text})
+        for reference in references:
+            if reference.get("character_id") not in character_ids:
+                raise ProviderError("角色参考图不属于当前档案范围")
+            content.append({"type": "text", "text": json.dumps({
+                "reference_for_character_id": reference["character_id"],
+                "reference_only": True,
+            }, ensure_ascii=False)})
+            # A separate namespace prevents a prior image becoming current-window evidence.
+            content.extend(self._images([{**reference, "id": "reference:" + reference["character_id"], "at_ms": 0}]))
+        if content:
+            content.append({"type": "text", "text": "Current chronological evidence frames follow:"})
+        content.extend(self._images(frames))
+        return await self._chat(id, "vision", prompt, content, validate)
 
     async def recognize_subtitles(self, id: str, frames: list[dict]) -> AIResult:
         valid_ids = {f["id"] for f in frames}
