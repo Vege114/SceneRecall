@@ -17,15 +17,31 @@ class AssetInput(Contract):
     season: int | None = Field(default=None, ge=0)
     episode: int | None = Field(default=None, ge=0)
     version: str = "原始版本"
-    subtitle_mode: Literal["embedded", "external"]
+    subtitle_mode: Literal["auto", "container", "embedded", "external"] = "auto"
     subtitle_path: str | None = None
-    subtitle_offset_ms: int = 0
+    subtitle_stream_index: int | None = Field(default=None, ge=0, strict=True)
+    subtitle_offset_ms: int = Field(default=0, strict=True)
 
     @model_validator(mode="after")
     def subtitles_required(self):
         if self.subtitle_mode == "external" and not self.subtitle_path:
             raise ValueError("外挂字幕模式必须提供 SRT、VTT 或 ASS 字幕文件")
+        if self.subtitle_mode != "external" and self.subtitle_path is not None:
+            raise ValueError("只有外挂字幕模式可以指定字幕文件")
+        if self.subtitle_mode not in {"auto", "container"} and self.subtitle_stream_index is not None:
+            raise ValueError("只有自动或容器字幕模式可以选择字幕轨")
+        if self.subtitle_mode == "embedded" and self.subtitle_offset_ms:
+            raise ValueError("画面字幕 OCR 不支持文字轨时间偏移")
         return self
+
+
+class SubtitleProbeInput(Contract):
+    video_path: str = Field(min_length=1)
+
+
+class SubtitleExtractInput(Contract):
+    subtitle_stream_index: int | None = Field(default=None, ge=0, strict=True)
+    subtitle_offset_ms: int = Field(default=0, strict=True)
 
 
 class AnalysisInput(Contract):

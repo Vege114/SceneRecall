@@ -19,10 +19,10 @@ from . import __version__
 from . import codex_cli
 from .characters import CharacterStore, StaleCharacterRevision
 from .jobs import JobQueue
-from .library import Library, atomic_json, read_json, safe_id, uid
+from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
 from .models import (
     AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput,
-    CharacterMergeInput, CharacterReanalysisInput, SearchInput,
+    CharacterMergeInput, CharacterReanalysisInput, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
 from .providers import ProviderManager
 from .search import SearchEngine
@@ -199,11 +199,27 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     async def assets():
         return [asset_view(a) for a in library.list_assets()]
 
+    @app.post("/api/media/subtitle-tracks")
+    async def media_subtitle_tracks(payload: SubtitleProbeInput):
+        return await asyncio.to_thread(subtitle_track_info, Path(payload.video_path))
+
     @app.post("/api/assets")
     async def asset_register(payload: AssetInput):
         if payload.subtitle_mode == "embedded" and not settings()["bindings"].get("subtitle"):
             raise ValueError("画面内嵌字幕模式请先配置并绑定字幕视觉模型")
         asset = await asyncio.to_thread(library.register, payload)
+        await search.rebuild(library.records())
+        return asset_view(asset)
+
+    @app.get("/api/assets/{asset_id}/subtitle-tracks")
+    async def asset_subtitle_tracks(asset_id: str):
+        source = library.require_source(asset_id)
+        return await asyncio.to_thread(subtitle_track_info, source)
+
+    @app.post("/api/assets/{asset_id}/subtitles/extract")
+    async def asset_subtitle_extract(asset_id: str, payload: SubtitleExtractInput):
+        asset = await asyncio.to_thread(library.extract_subtitles, asset_id,
+                                       payload.subtitle_stream_index, payload.subtitle_offset_ms)
         await search.rebuild(library.records())
         return asset_view(asset)
 

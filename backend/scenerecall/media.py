@@ -96,7 +96,7 @@ def probe(path: Path) -> dict:
     # Matroska's reported duration can include the initial timestamp offset.
     # FFmpeg playback/seek positions use time relative to that initial offset.
     if matroska:
-        duration -= max(0, origin)
+        duration -= origin
     width, height = int(video.get("width", 0)), int(video.get("height", 0))
     rotation = next((s.get("rotation", 0) for s in video.get("side_data_list", [])
                      if "rotation" in s), video.get("tags", {}).get("rotate", 0))
@@ -112,6 +112,130 @@ def probe(path: Path) -> dict:
         "streams": streams, "video_stream_index": video["index"],
         "start_time_ms": round(origin * 1000),
     }
+
+
+_TEXT_SUBTITLE_CODECS = {"ass", "ssa", "subrip", "srt", "webvtt", "mov_text", "text"}
+_BITMAP_SUBTITLE_CODECS = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "xsub"}
+_MAX_SUBTITLE_BYTES = 50 * 1024 * 1024
+
+
+def subtitle_tracks(metadata: dict) -> list[dict]:
+    """List subtitle streams by their global FFmpeg index, including unsupported tracks."""
+    tracks = []
+    for stream in metadata.get("streams", []):
+        if stream.get("codec_type") != "subtitle":
+            continue
+        index = stream.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            continue
+        codec = str(stream.get("codec_name") or "unknown").lower()
+        tags, disposition = stream.get("tags", {}), stream.get("disposition", {})
+        supported = codec in _TEXT_SUBTITLE_CODECS
+        track = {
+            "index": index, "codec": codec, "language": str(tags.get("language") or "und"),
+            "title": str(tags.get("title") or ""), "default": bool(disposition.get("default")),
+            "forced": bool(disposition.get("forced")), "supported": supported,
+        }
+        if not supported:
+            track["reason"] = ("图像字幕轨暂不支持文本提取，请提供外挂字幕；画面 OCR 仅适用于已烧录在画面内的文字。"
+                               if codec in _BITMAP_SUBTITLE_CODECS
+                               else "暂不支持该字幕编码的文本提取，请提供外挂字幕。")
+        tracks.append(track)
+    return tracks
+
+
+def _subtitle_timestamp(value: str, ass: bool) -> str:
+    """Normalize FFmpeg's component-signed negative timestamps without losing time.
+
+    ASS/SRT muxers can write e.g. 0:00:00.-30 / 00:00:00,-300 when
+    a cue starts before playback zero. Use one leading sign for our parser;
+    do not let the muxer shift every cue forward to make this cue positive.
+    """
+    match = re.fullmatch(r"(-?\d+):(-?\d+):(-?\d+)[.,](-?\d+)", value.strip())
+    if not match:
+        raise MediaError("提取的字幕时间戳无效。")
+    parts = match.groups()
+    hour, minute, second, fraction = map(int, parts)
+    if abs(minute) >= 60 or abs(second) >= 60 or abs(fraction) >= (100 if ass else 1000):
+        raise MediaError("提取的字幕时间戳无效。")
+    unit = 10 if ass else 1
+    if parts[0].startswith("-") and all(number >= 0 for number in (minute, second, fraction)):
+        total = -(((abs(hour) * 60 + minute) * 60 + second) * 1000 + fraction * unit)
+    else:
+        total = ((hour * 60 + minute) * 60 + second) * 1000 + fraction * unit
+    hour, remainder = divmod(abs(total), 3600000)
+    minute, remainder = divmod(remainder, 60000)
+    second, ms = divmod(remainder, 1000)
+    sign = "-" if total < 0 else ""
+    if ass:
+        return f"{sign}{hour}:{minute:02}:{second:02}.{ms // 10:02}"
+    return f"{sign}{hour:02}:{minute:02}:{second:02},{ms:03}"
+
+
+def _normalize_subtitle_timestamps(path: Path) -> None:
+    # Only timestamp fields are rewritten: the ASS header, style definitions,
+    # dialogue overrides and text stay intact for provenance/review.
+    text = path.read_text(encoding="utf-8-sig")
+    if path.suffix == ".ass":
+        def event(match: re.Match) -> str:
+            return (match[1] + _subtitle_timestamp(match[2], True) + ","
+                    + _subtitle_timestamp(match[3], True) + ",")
+        in_events, lines = False, []
+        for line in text.splitlines(keepends=True):
+            if line.strip().startswith("["):
+                in_events = line.strip() == "[Events]"
+            if in_events:
+                line = re.sub(r"^((?:Dialogue|Comment):[^,\r\n]*,)([^,\r\n]*),([^,\r\n]*),", event, line)
+            lines.append(line)
+        text = "".join(lines)
+    else:
+        def timing(match: re.Match) -> str:
+            return _subtitle_timestamp(match[1], False) + " --> " + _subtitle_timestamp(match[2], False)
+        stamp = r"-?\d+:-?\d+:-?\d+[.,]-?\d+"
+        text = re.sub(rf"(?m)^({stamp}) --> ({stamp})$", timing, text)
+    path.write_text(text, encoding="utf-8")
+
+
+def extract_subtitle_track(source: Path, stream_index: int, output: Path,
+                           metadata: dict | None = None) -> Path:
+    """Extract one local text track, with times relative to the media presentation origin.
+
+    ASS/SSA keeps its original style/header information; other supported text
+    codecs are converted to SRT. The returned path reflects that actual suffix.
+    Re-probe before extraction so stale client metadata cannot select a different
+    stream or apply an old file's origin. No OCR/model call is involved.
+    """
+    if isinstance(stream_index, bool) or not isinstance(stream_index, int) or stream_index < 0:
+        raise MediaError("字幕轨编号必须是非负整数。")
+    source = _source(source)
+    metadata = probe(source)
+    track = next((track for track in subtitle_tracks(metadata) if track["index"] == stream_index), None)
+    if track is None:
+        raise MediaError("所选字幕轨不存在或不是字幕流。")
+    if not track["supported"]:
+        raise MediaError(track["reason"])
+    ass = track["codec"] in {"ass", "ssa"}
+    output = Path(output).expanduser().with_suffix(".ass" if ass else ".srt").resolve()
+    if source == output:
+        raise MediaError("字幕输出不能覆盖原视频。")
+    temporary = _temp_output(output)
+    try:
+        _run([
+            _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-copyts", "-itsoffset", f"{-metadata['start_time_ms'] / 1000:.3f}", "-i", str(source),
+            "-map", f"0:{stream_index}", "-c:s", "copy" if ass else "srt",
+            "-avoid_negative_ts", "disabled", "-fs", str(_MAX_SUBTITLE_BYTES + 1), str(temporary),
+        ], timeout=300)
+        size = temporary.stat().st_size
+        if not size or size >= _MAX_SUBTITLE_BYTES:
+            raise MediaError("提取的字幕为空或超过 50 MB。")
+        _normalize_subtitle_timestamps(temporary)
+        if temporary.stat().st_size >= _MAX_SUBTITLE_BYTES:
+            raise MediaError("提取的字幕超过 50 MB。")
+        os.replace(temporary, output)
+        return output
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def fingerprint(path: Path) -> str:
