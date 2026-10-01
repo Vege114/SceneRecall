@@ -1,5 +1,22 @@
 export type Capability = 'vision' | 'subtitle' | 'embedding' | 'query' | 'decision' | 'answer';
 export type AssetKind = 'movie' | 'animation' | 'series';
+export type SubtitleMode = 'auto' | 'container' | 'external' | 'embedded';
+export interface SubtitleTrack {
+  index: number;
+  codec: string;
+  language: string;
+  title: string;
+  default: boolean;
+  forced: boolean;
+  supported: boolean;
+  reason?: string;
+}
+export interface SubtitleTracks {
+  tracks: SubtitleTrack[];
+  recommended_stream_index: number | null;
+  duration_ms: number;
+}
+export const SUBTITLE_SOURCE_LABELS = { container: '容器字幕轨', external: '外挂字幕', embedded: '画面烧录字幕 · OCR' };
 export type ProviderType = 'openai_compatible' | 'codex_cli';
 export interface Profile {
   id: string;
@@ -59,7 +76,12 @@ export interface Asset {
   duration_ms: number;
   width: number;
   height: number;
-  subtitle_mode: 'embedded' | 'external';
+  subtitle_mode: Exclude<SubtitleMode, 'auto'>;
+  subtitle_import_mode?: SubtitleMode;
+  subtitle_stream_index?: number | null;
+  subtitle_track?: SubtitleTrack | null;
+  subtitle_offset_ms?: number;
+  subtitle_fallback_reason?: string;
   source_available: boolean;
   source_changed: boolean;
   created_at: string;
@@ -224,7 +246,7 @@ export interface SearchResponse {
 }
 export const CAPABILITIES: { key: Capability; name: string; description: string; data: string }[] = [
   { key: 'vision', name: '画面理解', description: '识别人物、动作、物体与空间关系', data: '发送带时间戳的画面图片' },
-  { key: 'subtitle', name: '内嵌字幕识别', description: '转录画面中实际可见的文字', data: '发送裁剪后的字幕图片' },
+  { key: 'subtitle', name: '画面字幕 OCR', description: '转录烧录在画面中的文字；容器文本字幕无需模型', data: '发送裁剪后的字幕图片' },
   { key: 'embedding', name: '语义向量', description: '让相似表达也能找到同一片段', data: '发送文本记录与搜索词' },
   { key: 'query', name: '查询理解', description: '理解自然语言中的检索条件', data: '发送搜索词' },
   { key: 'decision', name: '匹配决策', description: '评估候选与问题的匹配程度，预留 Jev 接口', data: '发送搜索词与候选记录' },

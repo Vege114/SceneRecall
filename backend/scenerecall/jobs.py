@@ -134,7 +134,7 @@ class JobQueue:
         snapshots = {}
         for stage in request.stages:
             if stage == "subtitle" and asset["subtitle_mode"] != "embedded":
-                raise ValueError("外挂字幕无需调用字幕视觉模型")
+                raise ValueError("容器或外挂文字字幕已在本地解析，无需调用字幕视觉模型")
             profile_id = bindings.get(stage)
             if not profile_id:
                 raise ValueError(f"请先在设置中为 {stage} 绑定模型")
@@ -223,6 +223,9 @@ class JobQueue:
             return self.update(job_id, status="cancelling" if state in ("running", "pausing") else "cancelled", message="正在取消；已提交的结果保留")
         if action in ("resume", "retry") and state in ("paused", "failed", "partial", "cancelled"):
             config = job["config"]
+            if (job["type"] == "analysis" and "subtitle" in config.get("stages", [])
+                    and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
+                raise ValueError("字幕来源已切换为文字字幕，请创建只包含画面理解的新任务")
             if overrides:
                 for key in ("max_requests", "max_cost"):
                     if key in overrides:
@@ -250,6 +253,10 @@ class JobQueue:
             raise StopJob()
         if job["status"] in ("cancelling", "cancelled"):
             self.update(job_id, status="cancelled", message="已取消，已完成资料保留")
+            raise StopJob()
+        if (job["type"] == "analysis" and "subtitle" in job["config"].get("stages", [])
+                and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
+            self.update(job_id, status="paused", message="字幕来源已切换为文字字幕，旧 OCR 任务已暂停；请创建只包含画面理解的新任务")
             raise StopJob()
         return job
 
@@ -385,7 +392,7 @@ class JobQueue:
         from .media import detect_shots, make_windows, sample_times
         from .subtitles import candidate_frames, merge_ocr_frames
 
-        job = self.get(job_id)
+        job = self.checkpoint(job_id)
         config, asset_id, run_id = job["config"], job["asset_id"], job["run_id"]
         source = self.library.require_source(asset_id)
         directory = self.library.asset_dir(asset_id)
@@ -535,6 +542,7 @@ class JobQueue:
             completed += 1
             self.update(job_id, completed=completed, progress=completed/max(total, 1))
         if subtitle_times and all_ocr_ok:
+            self.checkpoint(job_id)
             cues = merge_ocr_frames(canonical_ocr_frames(ocr_frames, start, end, interval), interval)
             self.library.save_subtitles(asset_id, run_id, cues, start, end)
         elif subtitle_times and not all_ocr_ok:

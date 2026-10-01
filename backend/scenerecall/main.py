@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import hmac
 import io
@@ -19,10 +18,10 @@ from . import __version__
 from . import codex_cli
 from .characters import CharacterStore, StaleCharacterRevision
 from .jobs import JobQueue
-from .library import Library, atomic_json, read_json, safe_id, uid
+from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
 from .models import (
     AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput,
-    CharacterMergeInput, CharacterReanalysisInput, SearchInput,
+    CharacterMergeInput, CharacterReanalysisInput, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
 from .providers import ProviderManager
 from .search import SearchEngine
@@ -199,11 +198,27 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     async def assets():
         return [asset_view(a) for a in library.list_assets()]
 
+    @app.post("/api/media/subtitle-tracks")
+    async def media_subtitle_tracks(payload: SubtitleProbeInput):
+        return await asyncio.to_thread(subtitle_track_info, Path(payload.video_path))
+
     @app.post("/api/assets")
     async def asset_register(payload: AssetInput):
         if payload.subtitle_mode == "embedded" and not settings()["bindings"].get("subtitle"):
             raise ValueError("画面内嵌字幕模式请先配置并绑定字幕视觉模型")
         asset = await asyncio.to_thread(library.register, payload)
+        await search.rebuild(library.records())
+        return asset_view(asset)
+
+    @app.get("/api/assets/{asset_id}/subtitle-tracks")
+    async def asset_subtitle_tracks(asset_id: str):
+        source = library.require_source(asset_id)
+        return await asyncio.to_thread(subtitle_track_info, source)
+
+    @app.post("/api/assets/{asset_id}/subtitles/extract")
+    async def asset_subtitle_extract(asset_id: str, payload: SubtitleExtractInput):
+        asset = await asyncio.to_thread(library.extract_subtitles, asset_id,
+                                       payload.subtitle_stream_index, payload.subtitle_offset_ms)
         await search.rebuild(library.records())
         return asset_view(asset)
 
@@ -446,12 +461,24 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
 
 def run():
-    parser = argparse.ArgumentParser(description="SceneRecall 本地影视资料库")
-    parser.add_argument("--data-dir", type=Path, default=Path.home() / "SceneRecallLibrary")
-    parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args()
+    import sys
+    from .service import ServiceError, parser, stop_service
+
+    cli = parser()
+    args = cli.parse_args()
     if not 1024 <= args.port <= 65535:
-        parser.error("端口必须在 1024–65535 之间")
+        cli.error("端口必须在 1024–65535 之间")
+    if args.command == "stop":
+        try:
+            if not args.dry_run:
+                print(f"正在核实 SceneRecall 服务；正常退出最多等待 {args.timeout or 30:g} 秒……", flush=True)
+            print(stop_service(args.data_dir, args.port, args.timeout or 30.0, args.dry_run))
+        except ServiceError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from None
+        return
+    if args.dry_run or args.timeout is not None:
+        cli.error("--dry-run 和 --timeout 仅适用于 stop")
     # Session links are displayed once, and HTTP access logs never retain the token query.
     app = create_app(args.data_dir, allowed_ports={args.port, 5173})
     print(f"\nSceneRecall · {args.data_dir.expanduser().resolve()}")

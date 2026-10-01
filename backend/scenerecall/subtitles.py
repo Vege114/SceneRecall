@@ -81,17 +81,20 @@ def _read(path: Path) -> str:
 _TIME = re.compile(r"(?:(\d+):)?(\d{2}):(\d{2})[,.](\d{3})$")
 
 
-def _time(text: str) -> int:
+def _time(text: str, allow_negative: bool = False) -> int:
+    sign = -1 if allow_negative and text.startswith("-") else 1
+    if sign == -1:
+        text = text[1:]
     match = _TIME.fullmatch(text)
     if not match:
         raise SubtitleError("字幕中存在无法解析的时间戳。")
     hour, minute, second, ms = match.groups()
     if int(minute) >= 60 or int(second) >= 60:
         raise SubtitleError("字幕时间戳的分或秒必须小于 60。")
-    return ((int(hour or 0) * 60 + int(minute)) * 60 + int(second)) * 1000 + int(ms)
+    return sign * (((int(hour or 0) * 60 + int(minute)) * 60 + int(second)) * 1000 + int(ms))
 
 
-def _text_cues(text: str, suffix: str) -> list[tuple[int, int, str]]:
+def _text_cues(text: str, suffix: str, container: bool = False) -> list[tuple[int, int, str]]:
     if suffix == ".vtt":
         lines = text.lstrip("\ufeff").splitlines()
         if not lines or not re.fullmatch(r"WEBVTT(?:[ \t].*)?", lines[0]):
@@ -115,15 +118,42 @@ def _text_cues(text: str, suffix: str) -> list[tuple[int, int, str]]:
         timing = re.fullmatch(r"\s*(\S+)\s+-->\s+(\S+)(?:\s+.*)?", lines[index])
         if not timing:
             raise SubtitleError("字幕时间范围格式无效。")
-        start, end = _time(timing[1]), _time(timing[2])
+        start, end = _time(timing[1], container), _time(timing[2], container)
         content = _plain("\n".join(lines[index + 1:]))
-        if not content:
+        if not content and not container:
             raise SubtitleError("字幕段落没有可显示的文字。")
         cues.append((start, end, content))
     return cues
 
 
 def parse_subtitles(path: Path, duration_ms: int, offset_ms: int = 0) -> list[dict]:
+    """Read external subtitles, strictly rejecting cues outside the asset timeline."""
+    return _parse_subtitles(path, duration_ms, offset_ms, container=False)
+
+
+def parse_container_subtitles(path: Path, duration_ms: int, offset_ms: int = 0) -> list[dict]:
+    """Read an extracted track on the playback timeline.
+
+    Empty/clear-screen and drawing-only events are not dialogue. Visible cues
+    crossing an asset boundary are clipped and flagged for review, preserving
+    their pre-clip times. Completely out-of-range or invalid visible cues fail
+    explicitly, so a wrong track/origin cannot silently produce partial success.
+    """
+    return _parse_subtitles(path, duration_ms, offset_ms, container=True)
+
+
+def _ass_plain(cue: Any, styles: dict) -> str:
+    from pysubs2 import SSAStyle
+    from pysubs2.formats.substation import parse_tags
+
+    # A single ASS event may alternate between vector drawings and dialogue.
+    # is_drawing discards that entire event; keep only the displayed text spans.
+    fragments = parse_tags(cue.text, styles.get(cue.style, SSAStyle.DEFAULT_STYLE), styles)
+    text = "".join(fragment for fragment, style in fragments if not style.drawing)
+    return _plain(text.replace(r"\N", "\n").replace(r"\n", "\n").replace(r"\h", " "))
+
+
+def _parse_subtitles(path: Path, duration_ms: int, offset_ms: int, container: bool) -> list[dict]:
     if path is None or not str(path).strip():
         raise SubtitleError("外挂字幕模式必须提供字幕文件。")
     path = Path(path).expanduser()
@@ -143,29 +173,40 @@ def parse_subtitles(path: Path, duration_ms: int, offset_ms: int = 0) -> list[di
             raise SubtitleError("ASS 字幕缺少有效的 Events/Format 段。")
         try:
             parsed = pysubs2.SSAFile.from_string(text, format_="ass")
-            cues = [(int(cue.start), int(cue.end), _plain(cue.plaintext))
-                    for cue in parsed if not cue.is_comment and not cue.is_drawing]
+            cues = [(int(cue.start), int(cue.end), _ass_plain(cue, parsed.styles))
+                    for cue in parsed if not cue.is_comment and (container or not cue.is_drawing)]
         except Exception as exc:
             raise SubtitleError("ASS 字幕无法解析。") from exc
         dialogue_count = len(re.findall(r"^Dialogue:", text, re.MULTILINE))
         if len(parsed) < dialogue_count:
             raise SubtitleError("ASS 字幕中有损坏的对话段落。")
     else:
-        cues = _text_cues(text, suffix)
+        cues = _text_cues(text, suffix, container)
     records = []
     for index, (start, end, content) in enumerate(cues):
         start, end = start + offset_ms, end + offset_ms
+        if container and not content.strip():
+            # mov_text clear-screen packets and ASS drawing/empty events can
+            # legitimately have zero duration and should not invalidate a track.
+            continue
+        original_start, original_end = start, end
+        if container and end > start and end > 0 and start < duration_ms:
+            start, end = max(0, start), min(duration_ms, end)
         if start < 0 or end <= start or end > duration_ms:
             raise SubtitleError(f"第 {index + 1} 段字幕超出视频范围或结束时间无效，请检查字幕偏移。")
         if not content.strip():
             continue
         for group, (value, language) in enumerate(_groups(content)):
-            records.append({
+            clipped = start != original_start or end != original_end
+            record = {
                 "id": _id(index, group, start, end, value), "start_ms": start, "end_ms": end,
-                "text": value, "language": language, "source": "external",
-                "review_status": "unreviewed", "source_cue_index": index,
+                "text": value, "language": language, "source": "container" if container else "external",
+                "review_status": "needs_review" if clipped else "unreviewed", "source_cue_index": index,
                 "source_file": path.name, "offset_ms": offset_ms, "evidence_frame_ids": [],
-            })
+            }
+            if clipped:
+                record.update(timing_clipped=True, source_start_ms=original_start, source_end_ms=original_end)
+            records.append(record)
     if not records:
         raise SubtitleError("字幕文件不包含可用的字幕文字。")
     return sorted(records, key=lambda cue: (cue["start_ms"], cue["end_ms"], cue["source_cue_index"]))

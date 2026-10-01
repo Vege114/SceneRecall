@@ -6,6 +6,7 @@ import copy
 import os
 import re
 import shutil
+import tempfile
 import threading
 import uuid
 import zipfile
@@ -108,6 +109,37 @@ def source_snapshot(path: Path) -> dict:
     return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
+def recommended_subtitle_track(tracks: list[dict]) -> dict | None:
+    supported = [track for track in tracks if track["supported"]]
+    return min(supported, key=lambda track: (not track["default"], track["forced"], track["index"])) if supported else None
+
+
+def subtitle_track_info(path: Path) -> dict:
+    from .media import probe, subtitle_tracks
+
+    metadata = probe(path)
+    tracks = subtitle_tracks(metadata)
+    recommended = recommended_subtitle_track(tracks)
+    return {"tracks": tracks, "recommended_stream_index": recommended["index"] if recommended else None,
+            "duration_ms": metadata["duration_ms"]}
+
+
+def select_subtitle_track(tracks: list[dict], stream_index: int | None = None) -> dict:
+    if stream_index is not None:
+        track = next((track for track in tracks if track["index"] == stream_index), None)
+        if track is None:
+            raise ValueError("所选字幕轨不存在，请重新检测视频中的字幕轨")
+        if not track["supported"]:
+            raise ValueError("所选字幕轨无法提取文字：" + track.get("reason", "不支持的字幕格式"))
+        return track
+    track = recommended_subtitle_track(tracks)
+    if track is not None:
+        return track
+    if tracks:
+        raise ValueError("容器中只有位图或不支持的字幕轨，请提供外挂文字字幕；画面 OCR 仅适用于已经烧录在视频画面中的文字，不能读取软字幕轨")
+    raise ValueError("容器中没有字幕轨，请提供外挂字幕或使用画面烧录字幕 OCR")
+
+
 class Library:
     def __init__(self, root: Path):
         self.root = root.expanduser().resolve()
@@ -134,6 +166,13 @@ class Library:
         exists = bool(path and path.is_file())
         result["source_changed"] = bool(exists and (not isinstance(location, dict) or source_snapshot(path) != location))
         result["source_available"] = exists and not result["source_changed"]
+        # The atomic active pointer is the source of truth during track switches.
+        # A crash between publishing it and refreshing the manifest is recoverable.
+        container = self._container_pointer(asset_id)
+        if container:
+            result.update(subtitle_mode="container", subtitle_stream_index=container["stream_index"],
+                          subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"])
+            result.pop("subtitle_fallback_reason", None)
         return result
 
     def source_path(self, asset_id: str) -> Path | None:
@@ -150,7 +189,7 @@ class Library:
                       key=lambda a: a["created_at"], reverse=True)
 
     def register(self, payload: AssetInput) -> dict:
-        from .media import fingerprint, probe
+        from .media import fingerprint, probe, subtitle_tracks
         from .subtitles import parse_subtitles
 
         source = Path(payload.video_path).expanduser().resolve(strict=True)
@@ -158,8 +197,22 @@ class Library:
             raise ValueError("视频路径必须指向文件")
         snapshot = source_snapshot(source)
         metadata = probe(source)
+        tracks = subtitle_tracks(metadata)
         cues = []
         sub_path = None
+        container = None
+        mode = payload.subtitle_mode
+        fallback = None
+        if mode in {"auto", "container"}:
+            if mode == "auto" and not tracks and payload.subtitle_stream_index is None:
+                if payload.subtitle_offset_ms:
+                    raise ValueError("未检测到容器字幕轨，无法应用文字轨时间偏移")
+                mode = "embedded"
+                fallback = "未检测到容器字幕轨；仅在画面有烧录字幕时，可绑定字幕视觉模型后运行 OCR。音轨转写暂不支持。"
+            else:
+                track = select_subtitle_track(tracks, payload.subtitle_stream_index)
+                container = self._extract_container(source, metadata, track, payload.subtitle_offset_ms)
+                mode = "container"
         if payload.subtitle_mode == "external":
             sub_path = Path(payload.subtitle_path).expanduser().resolve(strict=True)
             cues = parse_subtitles(sub_path, metadata["duration_ms"], payload.subtitle_offset_ms)
@@ -180,23 +233,103 @@ class Library:
                     "series": payload.series, "season": payload.season, "episode": payload.episode}
             asset = {**work, **metadata, "id": asset_id, "work_id": work_id,
                      "version": payload.version, "fingerprint": checksum, "file_name": source.name,
-                     "subtitle_mode": payload.subtitle_mode, "subtitle_offset_ms": payload.subtitle_offset_ms,
+                     "subtitle_mode": mode, "subtitle_import_mode": payload.subtitle_mode,
+                     "subtitle_offset_ms": payload.subtitle_offset_ms, "subtitle_tracks": tracks,
                      "created_at": now(), "status": "ready"}
-            atomic_json(self.root / "works" / work_id / "work.json", work)
-            directory = self.asset_dir(asset_id)
-            directory.mkdir(parents=True)
-            if sub_path:
-                originals = directory / "subtitles" / "originals"
-                originals.mkdir(parents=True)
-                shutil.copy2(sub_path, originals / ("original" + sub_path.suffix.lower()))
-                cues = [{**c, "schema_version": SCHEMA, "asset_id": asset_id,
-                         "id": "cue_" + digest([asset_id, c["id"]]), "source": "external"} for c in cues]
-                atomic_jsonl(directory / "subtitles" / "external.jsonl", cues)
-            atomic_json(directory / "active-analysis.json", {"schema_version": SCHEMA, "observations": {}, "subtitle_runs": {}})
-            locations = read_json(self.root / "private" / "media-locations.json", {})
-            locations[asset_id] = snapshot
-            atomic_json(self.root / "private" / "media-locations.json", locations)
-            atomic_json(directory / "manifest.json", asset)
+            if fallback:
+                asset["subtitle_fallback_reason"] = fallback
+            # Complete all asset files in staging before the asset becomes
+            # visible; failed extraction/storage must not publish a partial asset.
+            with tempfile.TemporaryDirectory(prefix="import-", dir=self.root / "runtime") as temporary:
+                directory = Path(temporary)
+                if sub_path:
+                    originals = directory / "subtitles" / "originals"
+                    originals.mkdir(parents=True)
+                    shutil.copy2(sub_path, originals / ("original" + sub_path.suffix.lower()))
+                    cues = [{**c, "schema_version": SCHEMA, "asset_id": asset_id,
+                             "id": "cue_" + digest([asset_id, c["id"]]), "source": "external"} for c in cues]
+                    atomic_jsonl(directory / "subtitles" / "external.jsonl", cues)
+                active = {"schema_version": SCHEMA, "observations": {}, "subtitle_runs": {}}
+                if container:
+                    pointer = self._write_container(asset, container, payload.subtitle_offset_ms, directory=directory)
+                    active["container_subtitles"] = pointer
+                    asset.update(subtitle_stream_index=pointer["stream_index"], subtitle_track=pointer["track"])
+                atomic_json(directory / "active-analysis.json", active)
+                atomic_json(directory / "manifest.json", asset)
+                atomic_json(self.root / "works" / work_id / "work.json", work)
+                locations = read_json(self.root / "private" / "media-locations.json", {})
+                locations[asset_id] = snapshot
+                atomic_json(self.root / "private" / "media-locations.json", locations)
+                os.replace(directory, self.asset_dir(asset_id))
+        return self.get_asset(asset_id)
+
+    @staticmethod
+    def _extract_container(source: Path, metadata: dict, track: dict, offset_ms: int) -> dict:
+        from .media import extract_subtitle_track
+        from .subtitles import parse_container_subtitles
+
+        with tempfile.TemporaryDirectory(prefix="scenerecall-subtitles-") as temporary:
+            output = extract_subtitle_track(source, track["index"], Path(temporary) / "track", metadata=metadata)
+            cues = parse_container_subtitles(output, metadata["duration_ms"], offset_ms)
+            if not cues:
+                raise ValueError("所选容器字幕轨没有可用的字幕文字")
+            return {"track": track, "cues": cues, "suffix": output.suffix.lower(), "original": output.read_bytes()}
+
+    def _write_container(self, asset: dict, extracted: dict, offset_ms: int, directory: Path | None = None) -> dict:
+        asset_id, track, run_id = asset["id"], extracted["track"], uid("run")
+        directory = directory or self.asset_dir(asset_id)
+        relative = Path("analyses") / run_id / "subtitles.jsonl"
+        original = Path("subtitles") / "originals" / (run_id + extracted["suffix"])
+        original_path = directory / original
+        original_path.parent.mkdir(parents=True, exist_ok=True)
+        original_path.write_bytes(extracted["original"])
+        cues = [{**cue, "schema_version": SCHEMA, "asset_id": asset_id, "run_id": run_id,
+                 "id": "cue_" + digest([asset_id, "container", track["index"], cue["id"]]),
+                 "source": "container", "source_file": original.name, "source_stream_index": track["index"],
+                 "source_codec": track["codec"], "source_language": track.get("language"),
+                 "source_title": track.get("title"), "offset_ms": offset_ms}
+                for cue in extracted["cues"]]
+        if any(not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"] for cue in cues):
+            raise ValueError("提取字幕超出资产原有时间轴，请检查视频版本")
+        atomic_jsonl(directory / relative, cues)
+        pointer = {"path": str(relative), "original_path": str(original), "run_id": run_id,
+                   "stream_index": track["index"], "track": track, "offset_ms": offset_ms,
+                   "extraction_version": 1}
+        atomic_json(directory / "analyses" / run_id / "run.json", {
+            "schema_version": SCHEMA, "id": run_id, "asset_id": asset_id,
+            "stage": "subtitle", "source": "container", "status": "completed",
+            "created_at": now(), "request_count": 0, "cost": 0,
+            "subtitle_track": track, "subtitle_offset_ms": offset_ms, "subtitle_count": len(cues)})
+        return pointer
+
+    def extract_subtitles(self, asset_id: str, stream_index: int | None = None, offset_ms: int = 0) -> dict:
+        from .media import probe, subtitle_tracks
+
+        asset = self.get_asset(asset_id)
+        if asset["subtitle_mode"] == "external":
+            raise ValueError("外挂字幕资产请保留原字幕来源；提取容器轨适用于画面 OCR 或容器字幕资产")
+        source = self.require_source(asset_id)
+        snapshot = source_snapshot(source)
+        metadata = probe(source)
+        tracks = subtitle_tracks(metadata)
+        track = select_subtitle_track(tracks, stream_index)
+        extracted = self._extract_container(source, metadata, track, offset_ms)
+        with self.lock:
+            self.require_source(asset_id)
+            if source_snapshot(source) != snapshot:
+                raise ValueError("视频在提取期间被修改，请重新定位并校验原片")
+            asset = self.get_asset(asset_id)
+            pointer = self._write_container(asset, extracted, offset_ms)
+            active = self.active(asset_id)
+            # Keep old OCR runs and their annotations as history, but expose one
+            # selected text track. Publish only after extraction has fully passed.
+            active["container_subtitles"] = pointer
+            atomic_json(self.asset_dir(asset_id) / "active-analysis.json", active)
+            manifest = read_json(self.asset_dir(asset_id) / "manifest.json")
+            manifest.update(subtitle_mode="container", subtitle_stream_index=track["index"], subtitle_track=track,
+                            subtitle_tracks=tracks, subtitle_offset_ms=offset_ms)
+            manifest.pop("subtitle_fallback_reason", None)
+            atomic_json(self.asset_dir(asset_id) / "manifest.json", manifest)
         return self.get_asset(asset_id)
 
     def relocate(self, asset_id: str, path: str) -> dict:
@@ -217,6 +350,28 @@ class Library:
     def active(self, asset_id: str) -> dict:
         return read_json(self.asset_dir(asset_id) / "active-analysis.json", {"schema_version": SCHEMA, "observations": {}, "subtitle_runs": {}})
 
+    def _container_pointer(self, asset_id: str) -> dict | None:
+        pointer = self.active(asset_id).get("container_subtitles")
+        if pointer is None:
+            return None
+        required = {"path", "original_path", "run_id", "stream_index", "track", "offset_ms"}
+        if (not isinstance(pointer, dict) or required - pointer.keys()
+                or not isinstance(pointer["run_id"], str)
+                or type(pointer["stream_index"]) is not int or pointer["stream_index"] < 0
+                or type(pointer["offset_ms"]) is not int or not isinstance(pointer["track"], dict)
+                or pointer["track"].get("index") != pointer["stream_index"]):
+            raise ValueError("容器字幕轨来源信息无效")
+        run_id = safe_id(pointer["run_id"])
+        directory = self.asset_dir(asset_id)
+        path = confined_path(directory, pointer["path"])
+        original = confined_path(directory, pointer["original_path"])
+        if (pointer["path"] != f"analyses/{run_id}/subtitles.jsonl"
+                or pointer["original_path"] != f"subtitles/originals/{run_id}{original.suffix}"
+                or original.suffix not in {".ass", ".srt"}
+                or not path.is_file() or not original.is_file()):
+            raise ValueError("容器字幕记录或原始提取文件缺失，或引用无效")
+        return pointer
+
     def observations(self, asset_id: str) -> list[dict]:
         directory = self.asset_dir(asset_id)
         return sorted([read_json(confined_path(directory, p)) for p in self.active(asset_id)["observations"].values()],
@@ -224,6 +379,12 @@ class Library:
 
     def subtitles(self, asset_id: str) -> list[dict]:
         directory = self.asset_dir(asset_id)
+        container = self._container_pointer(asset_id)
+        if container:
+            path = confined_path(directory, container["path"])
+            if not path.is_file():
+                raise ValueError("容器字幕记录文件缺失")
+            return sorted(read_jsonl(path), key=lambda cue: (cue["start_ms"], cue.get("language", "und")))
         result = read_jsonl(directory / "subtitles" / "external.jsonl")
         for value in self.active(asset_id).get("subtitle_runs", {}).values():
             cues = read_jsonl(confined_path(directory, value["path"]))
@@ -276,6 +437,8 @@ class Library:
             if not start_ms <= cue["start_ms"] < cue["end_ms"] <= end_ms:
                 raise ValueError("字幕超出本次替换范围")
         with self.lock:
+            if self.get_asset(asset_id)["subtitle_mode"] != "embedded":
+                raise ValueError("字幕来源已切换为文字字幕，旧画面 OCR 任务不能覆盖当前字幕轨")
             active = self.active(asset_id)
             # Retain unaffected spans from previous OCR runs, including partially overlapped cues.
             previous = [c for c in self.subtitles(asset_id) if c.get("source") != "external"]
@@ -395,6 +558,9 @@ class Library:
                                "end_ms": record["end_ms"], "text": description.strip(), "summary": text,
                                "subtitle_text": text if not is_visual else None, "language": record.get("language"),
                                "thumbnail": frames[0] if frames else None, "evidence_frame_ids": frames,
+                               **{key: record[key] for key in ("source_stream_index", "source_codec", "source_language",
+                                   "source_title", "offset_ms", "timing_clipped", "source_start_ms", "source_end_ms")
+                                  if key in record},
                                "source": record.get("source", "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
                                "entities": entities, "events": record.get("events", []),
                                "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
@@ -498,6 +664,22 @@ class Library:
                 for cue in restored.subtitles(asset_id):
                     if not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"]:
                         raise ValueError("备份字幕时间轴无效")
+                container = restored._container_pointer(asset_id)
+                if container:
+                    cues = restored.subtitles(asset_id)
+                    if not cues or any(cue.get("asset_id") != asset_id or cue.get("source") != "container"
+                                       or cue.get("run_id") != container["run_id"]
+                                       or cue.get("source_stream_index") != container["stream_index"]
+                                       or not isinstance(cue.get("text"), str) or not cue["text"].strip()
+                                       for cue in cues):
+                        raise ValueError("备份容器字幕与所选来源不一致")
+                # Retired OCR pointers remain in the graph after switching to a
+                # text track; they must still be confined before any merge.
+                for value in restored.active(asset_id).get("subtitle_runs", {}).values():
+                    old_path = confined_path(restored.asset_dir(asset_id), value["path"])
+                    for cue in read_jsonl(old_path):
+                        if not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"]:
+                            raise ValueError("备份历史字幕时间轴无效")
                 registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
                 for frame_id in registry:
                     restored.frame_path(asset_id, frame_id)
