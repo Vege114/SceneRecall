@@ -27,9 +27,29 @@ uv run scenerecall --data-dir "$HOME/SceneRecallLibrary" --port 8765
 UV_CACHE_DIR=/tmp/scenerecall-uv-cache uv sync --python 3.12 --extra dev
 ```
 
-打开终端打印的完整链接，例如 `http://127.0.0.1:8765/?token=…`。浏览器用该令牌建立本机会话，随后移除地址中的令牌。**这不是 AI API Key**；重启服务会生成新令牌，需要使用新链接。关闭终端服务可按 `Ctrl+C`。
+打开终端打印的完整链接，例如 `http://127.0.0.1:8765/?token=…`。浏览器用该令牌建立本机会话，随后移除地址中的令牌。**这不是 AI API Key**；重启服务会生成新令牌，需要使用新链接。启动命令也可写成 `uv run scenerecall start --data-dir "$HOME/SceneRecallLibrary" --port 8765`。
 
 默认资料目录是 `~/SceneRecallLibrary`，可用 `--data-dir` 指定其他目录。服务只监听 `127.0.0.1`；前端构建后由同一服务提供，不需要另起网页服务器。不要把本机会话链接分享给他人。
+
+## 停止
+
+在项目根目录新开一个终端执行，无需查找 PID：
+
+```sh
+uv run scenerecall stop
+```
+
+这会停止使用默认资料目录 `~/SceneRecallLibrary`、端口 `8765` 的服务。自定义启动参数时，停止命令使用相同的资料目录和端口：
+
+```sh
+uv run scenerecall stop --data-dir "/path/to/library" --port 8877
+```
+
+可先加 `--dry-run` 只检查目标；`--timeout 60` 将正常退出的等待时间延长至 60 秒（默认 30 秒）。停止命令目前支持 macOS / Linux，通过当前 Python 环境中 `scenerecall` 入口启动的实例；启动终端仍可按 `Ctrl+C` 退出。用 `python -m`、直接调用 Uvicorn 或其他环境启动的实例，请回到对应启动终端操作。
+
+命令每次核对系统用户、当前安装入口、Python 解释器、资料目录和实际监听端口，再发送正常退出信号并等待进程结束；同一项目此前通过上述入口启动的服务也可识别，无需先重启。不会根据旧 PID 文件或仅凭端口杀进程。输出「已停止」或「未运行」时退出码为 0；身份不符、端口被其他程序占用、权限不足、多个匹配实例或等待超时会给出原因并返回非零退出码。超时不会强制终止，请检查启动终端或稍后重试。
+
+停止保留影片资料、索引、任务记录和持久化配置；再次运行启动命令即可继续使用。运行中的任务按现有队列机制保存／恢复，已发送的模型请求可能已产生用量。仅在服务会话中保存的 API Key 与浏览器登录令牌在重启后需要重新填写／获取。
 
 ## 第一次使用
 
