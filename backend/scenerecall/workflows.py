@@ -181,8 +181,7 @@ class WorkflowQueueMixin:
             plan = read_json(path)
             if plan and plan.get("status") == "completed":
                 try:
-                    for frame in plan.get("frames", []):
-                        self.library.frame_path(asset_id, frame["id"])
+                    self.library.frame_paths(asset_id, [frame["id"] for frame in plan.get("frames", [])])
                     return plan
                 except FileNotFoundError:
                     # Missing generated previews can be repaired from the source.
@@ -282,8 +281,21 @@ class WorkflowQueueMixin:
             raise ValueError("同一批分析不能重复选择同一视频")
         estimates = [{"asset_id": item.asset_id, **self.estimate(item, settings)} for item in items]
         known = all(item["cost_estimate"] is not None for item in estimates)
+        stages = {}
+        for item in estimates:
+            for stage, counts in item.get("stage_estimates", {}).items():
+                target = stages.setdefault(stage, {"requests_min": 0, "requests_max": 0})
+                for key in target:
+                    target[key] += counts[key]
         return {"items": estimates, "estimated_frames": sum(item["estimated_frames"] for item in estimates),
                 "estimated_requests": sum(item["estimated_requests"] for item in estimates),
+                "estimated_requests_min": sum(item.get("estimated_requests_min", item["estimated_requests"]) for item in estimates),
+                "estimated_requests_max": sum(item.get("estimated_requests_max", item["estimated_requests"]) for item in estimates),
+                "stage_estimates": stages,
+                "cost_estimate_min": (sum(item.get("cost_estimate_min", item["cost_estimate"]) for item in estimates)
+                                      if known else None),
+                "cost_estimate_max": (sum(item.get("cost_estimate_max", item["cost_estimate"]) for item in estimates)
+                                      if known else None),
                 "cost_estimate": round(sum(item["cost_estimate"] for item in estimates), 6) if known else None,
                 "currency": "USD", "warnings": list(dict.fromkeys(w for item in estimates for w in item["warnings"]))}
 

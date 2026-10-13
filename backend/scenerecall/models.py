@@ -47,6 +47,7 @@ class SubtitleExtractInput(Contract):
 
 class AnalysisInput(Contract):
     asset_id: str
+    analysis_strategy: Literal["scene-chunks-v1", "content-keyframes-v1"] | None = None
     keyframe_plan_id: str | None = None
     stages: list[Literal["vision", "subtitle"]] = Field(default_factory=lambda: ["vision"])
     start_ms: int = Field(default=0, ge=0)
@@ -69,6 +70,11 @@ class AnalysisInput(Contract):
         if min(x, y) < 0 or min(w, h) <= 0 or x + w > 1.000001 or y + h > 1.000001:
             raise ValueError("字幕区域须位于画面内，使用归一化 x/y/宽/高")
         return self
+
+
+class DeepenInput(Contract):
+    max_requests: int = Field(default=1000, ge=1, le=100000, strict=True)
+    max_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class AnnotationInput(Contract):
@@ -187,7 +193,9 @@ class Observation(BaseModel):
                 if event.get(key) and event[key] not in entity_ids:
                     raise ValueError(f"事件引用不存在的实体: {key}")
             a, b = event.get("start_ms", self.start_ms), event.get("end_ms", self.end_ms)
-            if not self.start_ms <= a < b <= self.end_ms:
+            # A single source frame can establish an instantaneous observation.
+            # Preserve its exact timestamp instead of fabricating a duration.
+            if not self.start_ms <= a <= b <= self.end_ms or a >= self.end_ms:
                 raise ValueError("事件超出观察时间范围")
             if not set(event.get("evidence_frame_ids", [])).issubset(self.evidence_frame_ids):
                 raise ValueError("事件引用不存在的证据帧")

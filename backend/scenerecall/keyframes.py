@@ -381,6 +381,19 @@ def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, prog
             "shots": shots, "frames": selected, "batches": batches}
 
 
+def _select_expression(timestamps: list[int]) -> str:
+    """Keep FFmpeg's expression parser depth logarithmic for large batches.
+
+    A flat eq(pts,...)+eq(pts,...)+... sum forms a left-deep parse tree and
+    exceeds FFmpeg's recursion limit before our 128/256-picture batch limits.
+    Parenthesize a balanced tree without rounding or widening the PTS matches.
+    """
+    if len(timestamps) == 1:
+        return f"eq(pts,{timestamps[0]})"
+    middle = len(timestamps) // 2
+    return f"({_select_expression(timestamps[:middle])}+{_select_expression(timestamps[middle:])})"
+
+
 def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None) -> list[dict]:
     source = _source(path)
     if not 1 <= len(frames) <= 256 or len(frames) != len(out_paths):
@@ -414,7 +427,7 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
         checkpoint()
     with tempfile.TemporaryDirectory(prefix="scenerecall-keyframes-") as directory:
         temporary_dir = Path(directory)
-        select = "+".join(f"eq(pts,{frame['source_pts']})" for frame in frames)
+        select = _select_expression([frame["source_pts"] for frame in frames])
         command = [
             _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "info", "-y", "-copyts",
             "-ss", _seconds(max(Fraction(0), targets[0] - origin - 1)), "-i", str(source),

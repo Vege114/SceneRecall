@@ -437,8 +437,7 @@ class Library:
         record = Observation.model_validate(value).model_dump()
         if record["end_ms"] > asset["duration_ms"] or record["asset_id"] != asset_id:
             raise ValueError("记录不属于当前视频时间轴")
-        for frame_id in record["evidence_frame_ids"]:
-            self.frame_path(asset_id, frame_id)
+        self.frame_paths(asset_id, record["evidence_frame_ids"])
         relative = Path("analyses") / safe_id(record["run_id"]) / "observations" / f"{safe_id(record['id'])}.json"
         with self.lock:
             existing = read_json(self.asset_dir(asset_id) / relative)
@@ -512,14 +511,23 @@ class Library:
         return frame
 
     def frame_path(self, asset_id: str, frame_id: str) -> Path:
-        registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
-        value = registry.get(safe_id(frame_id))
-        if not value:
-            raise FileNotFoundError("证据帧不存在")
-        path = confined_path(self.asset_dir(asset_id), value["path"])
-        if not path.is_file():
-            raise FileNotFoundError("证据帧文件不存在")
-        return path
+        return self.frame_paths(asset_id, [frame_id])[frame_id]
+
+    def frame_paths(self, asset_id: str, frame_ids: list[str], *, registry: dict | None = None) -> dict[str, Path]:
+        """Resolve one operation's frames using one registry snapshot, never a persistent cache."""
+        directory = self.asset_dir(asset_id)
+        if registry is None:
+            registry = read_json(directory / "frames" / "registry.json", {})
+        paths = {}
+        for frame_id in frame_ids:
+            value = registry.get(safe_id(frame_id))
+            if not value:
+                raise FileNotFoundError("证据帧不存在")
+            path = confined_path(directory, value["path"])
+            if not path.is_file():
+                raise FileNotFoundError("证据帧文件不存在")
+            paths[frame_id] = path
+        return paths
 
     def validate_keyframe_plan(self, asset_id: str, plan: dict, expected_id: str | None = None) -> dict:
         """Validate saved plans without opening the source video or invoking a model."""
@@ -564,6 +572,7 @@ class Library:
             elif round(origin * 1000) != asset.get("start_time_ms", 0):
                 raise ValueError("关键帧计划与视频的起始时间不一致")
             registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
+            self.frame_paths(asset_id, [frame["id"] for frame in plan["frames"]], registry=registry)
             for frame in plan["frames"]:
                 identity = safe_id(frame["id"])
                 if identity in frames or frame["shot_id"] not in shots:
@@ -582,7 +591,6 @@ class Library:
                         or not shot["start_ms"] <= frame["at_ms"] < shot["end_ms"]
                         or (previous_time is not None and timestamp <= previous_time)):
                     raise ValueError("关键帧时间戳与镜头不一致")
-                self.frame_path(asset_id, identity)
                 if registry[identity].get("at_ms") != frame["at_ms"]:
                     raise ValueError("关键帧计划与已保存证据帧不一致")
                 frames[identity] = frame
@@ -613,16 +621,18 @@ class Library:
             raise ValueError("关键帧计划格式无效") from exc
 
     def annotations(self, asset_id: str) -> list[dict]:
+        from .scenes import SceneStore
         annotations = sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")], key=lambda a: a["updated_at"])
-        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)}
+        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id) + SceneStore(self).list(asset_id)}
         for annotation in annotations:
             record = records.get(annotation["record_id"])
             annotation["needs_reassociation"] = record is None or bool(annotation.get("character_name") and annotation.get("base_run_id") != record.get("run_id"))
         return annotations
 
     def annotate(self, asset_id: str, payload: dict) -> dict:
+        from .scenes import SceneStore
         self.get_asset(asset_id)
-        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)}
+        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id) + SceneStore(self).list(asset_id)}
         if payload["record_id"] not in records:
             historical = next((r for r in self.collections() if r["asset_id"] == asset_id and r["record_id"] == payload["record_id"]), None)
             if not historical or set(payload) - {"record_id", "favorite", "note"}:
@@ -639,17 +649,29 @@ class Library:
             annotation = {**previous, **payload, "schema_version": SCHEMA, "id": annotation_id,
                           "asset_id": asset_id, "updated_at": now(), "base_run_id": record.get("run_id")}
             atomic_json(path, annotation)
+            def semantic(value):
+                return (value.get("summary"), (value.get("entity_id"), value.get("character_name"), value.get("aliases"))
+                        if value.get("character_name") else None)
+            if semantic(previous) != semantic(annotation):
+                SceneStore(self).mark_dependents_stale(asset_id, record["start_ms"], "前序证据的人工解释已变化")
             return annotation
 
     def records(self, asset_id: str | None = None) -> list[dict]:
         from .characters import CharacterStore
+        from .scenes import SceneStore
         characters = CharacterStore(self)
         result = []
         for asset in [self.get_asset(asset_id)] if asset_id else self.list_assets():
             annotations = self.annotations(asset["id"])
             observations = characters.decorate_observations(asset["id"], self.observations(asset["id"]))
-            for record in observations + self.subtitles(asset["id"]):
+            scenes = characters.decorate_observations(asset["id"], SceneStore(self).list(asset["id"]))
+            # Original observations stay immutable and collectible, but are not
+            # duplicated as search hits where a new scene plan replaced them.
+            observations = [row for row in observations if not any(
+                scene["start_ms"] < row["end_ms"] and scene["end_ms"] > row["start_ms"] for scene in scenes)]
+            for record in observations + scenes + self.subtitles(asset["id"]):
                 is_visual = "summary" in record
+                is_scene = "chunk_id" in record
                 related = [a for a in annotations if a["record_id"] == record["id"]]
                 text = record.get("summary", record.get("text", ""))
                 favorite, note, user_confirmed = False, "", False
@@ -672,6 +694,9 @@ class Library:
                                 entity["character_name"] = annotation["character_name"]
                                 entity["aliases"] = annotation.get("aliases") or []
                 description = text
+                if is_scene:
+                    description += " " + " ".join(fact["text"] for field in ("visual_facts", "dialogue_facts", "inferences")
+                                                  for fact in record.get(field, []))
                 # An unreadable cue remains visible for repair but is not searchable content.
                 if not text.strip():
                     continue
@@ -688,17 +713,21 @@ class Library:
                                **{key: asset.get(key) for key in ("project_id", "project_name", "folder_id", "folder_ids", "tags")},
                                "work_id": asset["work_id"], "title": asset["title"], "series": asset.get("series", ""),
                                "season": asset.get("season"), "episode": asset.get("episode"), "version": asset["version"],
-                               "kind": "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
+                               "kind": "scene" if is_scene else "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
                                "end_ms": record["end_ms"], "text": description.strip(), "summary": text,
                                "subtitle_text": text if not is_visual else None, "language": record.get("language"),
                                "thumbnail": frames[0] if frames else None, "evidence_frame_ids": frames,
                                **{key: record[key] for key in ("source_stream_index", "source_codec", "source_language",
                                    "source_title", "offset_ms", "timing_clipped", "source_start_ms", "source_end_ms")
                                   if key in record},
-                               "source": record.get("source", "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
+                               "source": record.get("source", "scene" if is_scene else "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
                                "entities": entities, "events": record.get("events", []),
                                "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
-                               "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", [])})
+                               "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", []),
+                               **({key: record.get(key) for key in ("chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
+                                   "visual_facts", "dialogue_facts", "inferences", "representative_frame_ids",
+                                   "understanding_level", "needs_deep", "reason", "provenance", "dependencies",
+                                   "context_stale", "stale_reasons")} if is_scene else {})})
         return result
 
     def save_run(self, asset_id: str, run_id: str, data: dict):
@@ -725,6 +754,10 @@ class Library:
                     base = self.asset_dir(asset["id"]) / "analyses" / safe_id(run_id)
                     record = read_json(base / "observations" / f"{safe_id(rid)}.json")
                     if record is None:
+                        record = read_json(base / "scenes" / f"{safe_id(rid)}.deep.json")
+                    if record is None:
+                        record = read_json(base / "scenes" / f"{safe_id(rid)}.json")
+                    if record is None:
                         record = next((c for c in read_jsonl(base / "subtitles.jsonl") if c["id"] == rid), None)
                 if record is None:
                     continue
@@ -737,12 +770,15 @@ class Library:
                                **{key: asset.get(key) for key in ("project_id", "project_name", "folder_id", "folder_ids", "tags")},
                                "title": asset["title"], "series": asset.get("series"), "season": asset.get("season"),
                                "episode": asset.get("episode"), "version": asset["version"], "start_ms": record["start_ms"],
-                               "end_ms": record["end_ms"], "kind": "visual" if "summary" in record else "subtitle",
+                               "end_ms": record["end_ms"], "kind": "scene" if "chunk_id" in record else "visual" if "summary" in record else "subtitle",
                                "text": text, "summary": text, "note": annotation.get("note", ""), "favorite": True,
                                "source": record.get("source", "vision"), "review_status": "historical",
                                "is_historical": True, "run_id": run_id, "evidence_frame_ids": frames,
                                "entities": record.get("entities", []), "events": record.get("events", []),
-                               "thumbnail": frames[0] if frames else None})
+                               "thumbnail": frames[0] if frames else None,
+                               **({key: record.get(key) for key in ("chunk_id", "visual_facts", "dialogue_facts", "inferences",
+                                   "subtitle_ids", "frame_ids", "understanding_level", "provenance")}
+                                  if "chunk_id" in record else {})})
         return result
 
     def backup(self, include_media: bool = False) -> dict:
@@ -798,12 +834,13 @@ class Library:
                 asset_id = safe_id(asset["id"])
                 if not (staging / "assets" / asset_id / "manifest.json").is_file():
                     raise ValueError("资产清单 ID 与目录不一致")
+                registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
+                restored.frame_paths(asset_id, list(registry), registry=registry)
                 for observation in restored.observations(asset_id):
                     checked = Observation.model_validate(observation)
                     if checked.asset_id != asset_id or checked.end_ms > asset["duration_ms"]:
                         raise ValueError("备份识别记录时间轴无效")
-                    for frame_id in checked.evidence_frame_ids:
-                        restored.frame_path(asset_id, frame_id)
+                    restored.frame_paths(asset_id, checked.evidence_frame_ids, registry=registry)
                 for cue in restored.subtitles(asset_id):
                     if not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"]:
                         raise ValueError("备份字幕时间轴无效")
@@ -823,11 +860,10 @@ class Library:
                     for cue in read_jsonl(old_path):
                         if not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"]:
                             raise ValueError("备份历史字幕时间轴无效")
-                registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
-                for frame_id in registry:
-                    restored.frame_path(asset_id, frame_id)
                 for path in restored.asset_dir(asset_id).glob("keyframe-plans/*.json"):
                     restored.validate_keyframe_plan(asset_id, read_json(path), path.stem)
+                from .scenes import SceneStore
+                SceneStore(restored).validate_all(asset_id)
             from .characters import CharacterStore
             CharacterStore(restored).validate_all()
             paths = [p for p in staging.rglob("*") if p.is_file() and p.name != "library.json"

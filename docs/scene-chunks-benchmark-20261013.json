@@ -1,0 +1,287 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-13",
+  "scope": "One 28.445-second dialogue/control-room scene; not a full-film benchmark.",
+  "source": {
+    "range_ms": [
+      181306,
+      209751
+    ],
+    "frames": 13,
+    "shots": 8,
+    "subtitle_cues": 26,
+    "scan_reused": true,
+    "scan_ms": 0,
+    "initial_character_memory": "empty",
+    "initial_story_memory": "empty"
+  },
+  "configuration": {
+    "provider_type": "codex_cli",
+    "cli_version": "0.162.1",
+    "model": "",
+    "model_resolution": "unresolved_cli_default",
+    "timeout_s": 90,
+    "same_connection": true,
+    "visual_preparation_prompt": "scene-visual-preparation-v3",
+    "contextual_vision_prompt": "scene-contextual-vision-v4",
+    "codex_deep_batch_size": 12,
+    "embedding_enabled": false
+  },
+  "timing_definition": "Provider-method wall time includes local image preparation, CLI startup and model retries. Strategies ran sequentially; service load and order can affect timings. Source seeding and reused scan are excluded.",
+  "baseline": {
+    "strategy": "content-keyframes-v1",
+    "status": "completed",
+    "model_ms": 331934,
+    "observed_wall_ms": 332758,
+    "wall_timing_complete": false,
+    "workflow_index_ms": null,
+    "workflow_index_observed_lower_bound_ms": 570,
+    "measurement_caveat": "Original runner failed to await final index rebuild; model-call durations and reported token counts are complete, but total wall/index timing is not comparable. Actual total image attachments including identity references were not instrumented.",
+    "request_count": 8,
+    "failed_requests": 0,
+    "usage": {
+      "input_tokens": 92528,
+      "output_tokens": 9905,
+      "total_tokens": 102433
+    },
+    "record_counts": {
+      "visual": 8,
+      "subtitle": 26
+    },
+    "frames_preserved": 13,
+    "actual_image_attachments": null,
+    "cost": null
+  },
+  "candidate": {
+    "strategy": "scene-chunks-v1",
+    "status": "completed",
+    "model_ms": 147874,
+    "wall_ms": 148246,
+    "workflow_index_ms": 240,
+    "request_count": 3,
+    "failed_requests": 0,
+    "usage": {
+      "input_tokens": 43292,
+      "output_tokens": 4706,
+      "total_tokens": 47998
+    },
+    "record_counts": {
+      "scene": 1,
+      "visual": 0,
+      "subtitle": 26
+    },
+    "frames_preserved": 13,
+    "deep_frames": 10,
+    "cost": null,
+    "calls": [
+      {
+        "method": "prepare_subtitles",
+        "elapsed_ms": 21334,
+        "request_count": 1,
+        "usage": {
+          "input_tokens": 4281,
+          "output_tokens": 622,
+          "total_tokens": 4903
+        },
+        "image_count_per_attempt": 0,
+        "prompt_text_bytes": 3892
+      },
+      {
+        "method": "prepare_visual",
+        "elapsed_ms": 46729,
+        "request_count": 1,
+        "usage": {
+          "input_tokens": 7427,
+          "output_tokens": 1682,
+          "total_tokens": 9109
+        },
+        "image_count_per_attempt": 1,
+        "prompt_text_bytes": 9448
+      },
+      {
+        "method": "analyze",
+        "elapsed_ms": 79811,
+        "request_count": 1,
+        "usage": {
+          "input_tokens": 31584,
+          "output_tokens": 2402,
+          "total_tokens": 33986
+        },
+        "image_count_per_attempt": 10,
+        "prompt_text_bytes": 11981
+      }
+    ]
+  },
+  "model_time_reduction_percent": 55.450782384449916,
+  "quality": {
+    "method": "Frozen eight local lexical queries, top 3 temporal overlap plus manual inspection of original frames and source-grounded output; no paid search model calls. Two probes per category. Scene results have coarser ranges than shot results.",
+    "probes": [
+      {
+        "probe_id": "plot_alert",
+        "category": "plot",
+        "expected_range_ms": [
+          199990,
+          208700
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      },
+      {
+        "probe_id": "plot_departure",
+        "category": "plot",
+        "expected_range_ms": [
+          195400,
+          197800
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      },
+      {
+        "probe_id": "dialogue_heat",
+        "category": "dialogue",
+        "expected_range_ms": [
+          184810,
+          186000
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      },
+      {
+        "probe_id": "dialogue_alert",
+        "category": "dialogue",
+        "expected_range_ms": [
+          204410,
+          208700
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      },
+      {
+        "probe_id": "person_beard",
+        "category": "character",
+        "expected_range_ms": [
+          196863,
+          209751
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      },
+      {
+        "probe_id": "person_headset",
+        "category": "character",
+        "expected_range_ms": [
+          183141,
+          196863
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      },
+      {
+        "probe_id": "visual_clock_fan",
+        "category": "visual",
+        "expected_range_ms": [
+          181306,
+          183141
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      },
+      {
+        "probe_id": "visual_cables",
+        "category": "visual",
+        "expected_range_ms": [
+          181306,
+          183141
+        ],
+        "baseline_top3_temporal_hit": true,
+        "candidate_top3_temporal_hit": true
+      }
+    ],
+    "evidence_review": "Visual facts and equipment checked against original frames. Dialogue mentions remain dialogue facts; uncertain setting and unseen events remain tentative.",
+    "limitations": "No full-film recall estimate, no named-character identity accuracy estimate, no vector/reranking evaluation, no rapid-action/no-dialogue real-model sample."
+  },
+  "fresh_database_index_check": {
+    "content-keyframes-v1": {
+      "record_counts": {
+        "visual": 8,
+        "subtitle": 26
+      },
+      "rebuild_ms": [
+        293.402,
+        13.329,
+        13.02,
+        13.314,
+        13.577
+      ],
+      "median_ms": 13.329,
+      "provider_calls": 0
+    },
+    "scene-chunks-v1": {
+      "record_counts": {
+        "scene": 1,
+        "subtitle": 26
+      },
+      "rebuild_ms": [
+        6.991,
+        6.895,
+        6.634,
+        6.867,
+        6.757
+      ],
+      "median_ms": 6.867,
+      "provider_calls": 0
+    }
+  },
+  "fresh_database_index_caveat": "Five fresh database rebuilds per strategy in one process, baseline first. First baseline includes lazy tokenizer initialization; all raw times retained. This is a separate local check, not workflow timing or model acceleration.",
+  "prior_tuning_trials": [
+    {
+      "label": "initial_all_frames_timeout",
+      "status": "failed",
+      "model_ms": 155528,
+      "request_count": 3,
+      "reported_usage": {
+        "input_tokens": 11511,
+        "output_tokens": 1988,
+        "total_tokens": 13499
+      }
+    },
+    {
+      "label": "eight_frame_subbatches_below_target",
+      "status": "completed",
+      "model_ms": 184661,
+      "request_count": 4,
+      "reported_usage": {
+        "input_tokens": 51367,
+        "output_tokens": 6091,
+        "total_tokens": 57458
+      }
+    },
+    {
+      "label": "instantaneous_event_validation_failure",
+      "status": "failed",
+      "model_ms": 138686,
+      "request_count": 3,
+      "reported_usage": {
+        "input_tokens": 38166,
+        "output_tokens": 4582,
+        "total_tokens": 42748
+      }
+    }
+  ],
+  "excluded_environment_attempt": "An initial sandbox-only CLI invocation could not connect and produced no model result; excluded from performance comparison.",
+  "acceptance": "The final short sample meets the >=50% model-stage target with 8/8 temporal retrieval probes. Earlier tuning calls consumed additional quota and are not hidden in the final-run cost. Subscription cost remains unknown; full-film performance is unverified.",
+  "full_plan_local_smoke": {
+    "frames": 9056,
+    "duration_ms": 6456896,
+    "estimate_http_ms": 770,
+    "previous_estimate_http_timeout_ms": 30000,
+    "transcript_requests": 31,
+    "preparation_requests": 162,
+    "deep_requests": "determined after partitioning",
+    "provider_calls": 0,
+    "new_scan_jobs": 0,
+    "new_analysis_jobs": 0,
+    "existing_jobs_preserved": 3,
+    "registry_fix": "One registry snapshot per operation; path, file and timestamp validation preserved."
+  }
+}

@@ -9,6 +9,7 @@ from .models import AnalysisInput
 from .providers import (CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, MAX_OUTPUT_TOKENS,
                         PROMPT_VERSION, SUBTITLE_PROMPT_VERSION, ProviderManager)
 from .workflows import WorkflowQueueMixin
+from .scene_jobs import SceneJobMixin
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -62,7 +63,7 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
     return result
 
 
-class JobQueue(WorkflowQueueMixin):
+class JobQueue(SceneJobMixin, WorkflowQueueMixin):
     def __init__(self, library: Library, providers, search):
         from .characters import CharacterStore
 
@@ -76,6 +77,7 @@ class JobQueue(WorkflowQueueMixin):
         self.init_workflows()
         for job in self.list():
             if job["status"] in ("running", "pausing", "cancelling"):
+                job = self.recover_scene_receipt(job)
                 state = {"running": "queued", "pausing": "paused", "cancelling": "cancelled"}[job["status"]]
                 reservation = job.get("inflight_attempts", 0)
                 updates = {}
@@ -136,7 +138,7 @@ class JobQueue(WorkflowQueueMixin):
             db.execute("INSERT INTO jobs VALUES (?,?)", (job["id"], json.dumps(job, ensure_ascii=False)))
         return job
 
-    def validate(self, request: AnalysisInput, settings: dict) -> tuple[dict, dict]:
+    def validate(self, request: AnalysisInput, settings: dict, *, scene_deepening: bool = False) -> tuple[dict, dict]:
         asset = self.library.get_asset(request.asset_id)
         if not asset["source_available"]:
             raise ValueError("原视频离线，请先重新定位")
@@ -144,8 +146,21 @@ class JobQueue(WorkflowQueueMixin):
         if not request.start_ms < end <= asset["duration_ms"]:
             raise ValueError("分析时间超出视频范围")
         bindings = settings.get("bindings", {})
+        strategy = request.analysis_strategy or ("scene-chunks-v1" if bindings.get("preparation") else "content-keyframes-v1")
+        if "vision" in request.stages and strategy == "scene-chunks-v1":
+            from .scenes import SceneStore
+            overlap = [row for row in SceneStore(self.library).list(request.asset_id)
+                       if row["start_ms"] < end and row["end_ms"] > request.start_ms
+                       and not request.start_ms <= row["start_ms"] < row["end_ms"] <= end]
+            if overlap:
+                a = min(request.start_ms, *(row["start_ms"] for row in overlap))
+                b = max(end, *(row["end_ms"] for row in overlap))
+                raise ValueError(f"重分块范围需包含相交片段的完整边界，请选择 {a / 1000:g}–{b / 1000:g} 秒；单片段可使用深入分析")
         snapshots = {}
-        for stage in request.stages:
+        required = list(request.stages)
+        if "vision" in required and strategy == "scene-chunks-v1" and not scene_deepening:
+            required.append("preparation")
+        for stage in required:
             if stage == "subtitle" and asset["subtitle_mode"] != "embedded":
                 raise ValueError("容器或外挂文字字幕已在本地解析，无需调用字幕视觉模型")
             profile_id = bindings.get(stage)
@@ -159,11 +174,12 @@ class JobQueue(WorkflowQueueMixin):
             if request.max_cost is not None and (profile.get("input_price_per_million") is None or profile.get("output_price_per_million") is None):
                 raise ValueError("设置费用预算前，请填写所用模型的输入与输出单价")
             snapshots[stage] = profile
-        config = {**request.model_dump(), "end_ms": end, "bindings": dict(bindings), "profile_snapshots": snapshots}
+        config = {**request.model_dump(), "analysis_strategy": strategy, "end_ms": end,
+                  "bindings": dict(bindings), "profile_snapshots": snapshots}
         if "vision" in request.stages:
-            context = self.character_context(request.asset_id)
+            context = self.character_context(request.asset_id, scene=strategy == "scene-chunks-v1")
             config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}
-            config["sampling_strategy"] = "content-keyframes-v1"
+            config["sampling_strategy"] = strategy
             if request.model_fields_set & {"window_ms", "frames_per_window"}:
                 config["warnings"] = ["window_ms / frames_per_window 已弃用；新画面任务统一使用内容关键帧。"]
             if request.keyframe_plan_id:
@@ -178,6 +194,8 @@ class JobQueue(WorkflowQueueMixin):
             if not request.keyframe_plan_id:
                 raise ValueError("请先扫描内容关键帧，再按实际选帧数量估算用量")
             plan = self.validated_plan(request.asset_id, request.start_ms, config["end_ms"], request.keyframe_plan_id)
+        if config.get("analysis_strategy") == "scene-chunks-v1" and plan:
+            return self.estimate_scenes(config, plan)
         vision = len(plan["batches"]) if plan else 0
         subtitle_frames = math.ceil(duration / 1000 * request.subtitle_fps) if "subtitle" in request.stages else 0
         subtitle_requests = math.ceil(subtitle_frames / 8)
@@ -217,12 +235,14 @@ class JobQueue(WorkflowQueueMixin):
             return None
         return ((2048 * text_count + 4096 * frames + context_tokens) * a + MAX_OUTPUT_TOKENS * b) / 1_000_000
 
-    def character_context(self, asset_id: str, expected: dict | None = None) -> dict:
+    def character_context(self, asset_id: str, expected: dict | None = None, *, scene: bool = False) -> dict:
         context = self.characters.context(asset_id)
         context["membership_revision"] = self.library.get_asset(asset_id).get("membership_revision", 0)
         keys = ("scope_id", "revision", "membership_revision") if expected and "membership_revision" in expected else ("scope_id", "revision")
         if expected is not None and any(context[key] != expected.get(key) for key in keys):
             raise CharacterContextChanged("角色档案已修改，此任务使用的是旧版档案。已完成结果保留；请在角色档案中按新版档案重新识别")
+        if scene:
+            context = self._bounded_scene_profiles(context)
         ProviderManager.character_context_text(context)
         references = []
         # All dossiers remain available as text. Bound expensive image context and
@@ -319,6 +339,10 @@ class JobQueue(WorkflowQueueMixin):
                 self.update(job_id, status="paused", message="供应商未返回完整费用用量；当前费用未知，请核对账单或移除费用预算后继续")
                 raise StopJob()
             reserve = self.estimated_call_cost(current_profile, frames, text_count, context_tokens)
+            if reserve is not None and job.get("stage") in {"transcript", "preparation", "context_refresh"}:
+                from .scene_preparation import MAX_PREPARATION_OUTPUT_TOKENS
+                reserve += ((MAX_PREPARATION_OUTPUT_TOKENS - MAX_OUTPUT_TOKENS)
+                            * current_profile["output_price_per_million"] / 1_000_000)
             if reserve is None or (job["cost"] or 0) + reserve * 3 > max_cost:
                 self.update(job_id, status="paused", message="费用预算不足以预留下一批请求；请提高预算后继续")
                 raise StopJob()
@@ -413,7 +437,7 @@ class JobQueue(WorkflowQueueMixin):
             if job.get("asset_id") and job["type"] == "analysis":
                 self.library.save_run(job["asset_id"], job["run_id"], {k: job[k] for k in
                     ("config", "status", "usage", "request_count", "cost", "known_cost", "cost_incomplete",
-                     "created_at", "updated_at", "failures")})
+                     "created_at", "updated_at", "failures", "stage_metrics") if k in job})
 
     async def frame(self, asset_id, source, at_ms, crop=None):
         return (await self.frames(asset_id, source, [at_ms], crop))[0]
@@ -441,12 +465,21 @@ class JobQueue(WorkflowQueueMixin):
         return [frames[at] for at in times_ms]
 
     async def analyze(self, job_id: str):
+        config = self.get(job_id)["config"]
+        if config.get("analysis_strategy") == "scene-chunks-v1" and "vision" in config["stages"]:
+            await self.analyze_scenes(job_id)
+        else:
+            await self.analyze_legacy(job_id)
+
+    async def analyze_legacy(self, job_id: str, config_override=None, skip_reindex=False):
         from .characters import StaleCharacterRevision
         from .media import detect_shots, make_windows, sample_times
         from .subtitles import candidate_frames, merge_ocr_frames
 
         job = self.checkpoint(job_id)
         config, asset_id, run_id = job["config"], job["asset_id"], job["run_id"]
+        if config_override is not None:
+            config = config_override
         source = self.library.require_source(asset_id)
         directory = self.library.asset_dir(asset_id)
         for snapshot in config["profile_snapshots"].values():
@@ -625,7 +658,8 @@ class JobQueue(WorkflowQueueMixin):
         self.checkpoint(job_id)
         if "vision" in config["stages"]:
             self.character_context(asset_id, config["character_snapshot"])
-        await self.reindex(job_id, embedding_profile_id=config.get("bindings", {}).get("embedding"))
+        if not skip_reindex:
+            await self.reindex(job_id, embedding_profile_id=config.get("bindings", {}).get("embedding"))
 
     async def reindex(self, job_id: str, embedding_profile_id=None):
         job = self.checkpoint(job_id)

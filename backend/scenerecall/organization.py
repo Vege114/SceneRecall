@@ -320,7 +320,9 @@ class OrganizationStore:
                 target = registries[target_scope]
                 imports = target.setdefault("imports", {})
                 bindings = {}
-                for path in self.library.asset_dir(asset_id).glob("analyses/*/observations/*.json"):
+                evidence_dir = self.library.asset_dir(asset_id)
+                for path in [*evidence_dir.glob("analyses/*/observations/*.json"),
+                             *evidence_dir.glob("analyses/*/scenes/*.json")]:
                     record = read_json(path)
                     original_scope = record.get("character_scope_id") or old["legacy_character_scope_id"]
                     for entity in record.get("entities", []):

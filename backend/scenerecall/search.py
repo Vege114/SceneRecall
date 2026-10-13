@@ -132,7 +132,7 @@ class SearchEngine:
         for record in records:
             if not isinstance(record.get("id"), str) or not record["id"] or record["id"] in seen:
                 raise ValueError("搜索记录 ID 缺失或重复")
-            if not record.get("asset_id") or record.get("kind") not in {"visual", "subtitle"}:
+            if not record.get("asset_id") or record.get("kind") not in {"visual", "subtitle", "scene"}:
                 raise ValueError("搜索记录缺少媒体或证据类型")
             if not isinstance(record.get("text"), str):
                 raise ValueError("搜索记录正文无效")  # noqa: TRY004 - API exposes validation errors consistently
@@ -187,6 +187,50 @@ class SearchEngine:
                 db.execute("DELETE FROM evidence_fts WHERE id IN (SELECT id FROM records WHERE asset_id=?)", (asset_id,))
                 db.execute("DELETE FROM records WHERE asset_id=?", (asset_id,))
             self._generation += 1
+
+    def sync_asset(self, records: list[dict], asset_id: str | None = None) -> dict:
+        """Publish one asset projection, touching only changed rows and contexts.
+
+        Unlike upsert this removes records retired by resegmentation. The optional
+        asset ID permits publishing an empty projection without guessing ownership.
+        """
+        self._validate_records(records)
+        assets = {record["asset_id"] for record in records}
+        if asset_id is not None:
+            assets.add(asset_id)
+        if len(assets) != 1:
+            raise ValueError("增量同步必须指定单个视频资产")
+        owner = next(iter(assets))
+        incoming = {record["id"]: record for record in records}
+        changed_count = removed_count = context_count = 0
+        with self._lock, self._db() as db:
+            previous = {row["id"]: json.loads(row["data"]) for row in db.execute(
+                "SELECT id,data FROM records WHERE asset_id=? AND is_context=0", (owner,))}
+            for identity in previous.keys() - incoming.keys():
+                db.execute("DELETE FROM evidence_fts WHERE id=?", (identity,))
+                db.execute("DELETE FROM records WHERE id=?", (identity,))
+                removed_count += 1
+            for identity, record in incoming.items():
+                if previous.get(identity) != record:
+                    self._write_record(db, record)
+                    changed_count += 1
+            old_subtitles = {identity: row for identity, row in previous.items() if row["kind"] == "subtitle"}
+            new_subtitles = {identity: row for identity, row in incoming.items() if row["kind"] == "subtitle"}
+            if old_subtitles != new_subtitles:
+                old_contexts = {row["id"]: json.loads(row["data"]) for row in db.execute(
+                    "SELECT id,data FROM records WHERE asset_id=? AND is_context=1", (owner,))}
+                new_contexts = {row["id"]: row for row in _context_records(list(new_subtitles.values()))}
+                for identity in old_contexts.keys() - new_contexts.keys():
+                    db.execute("DELETE FROM evidence_fts WHERE id=?", (identity,))
+                    db.execute("DELETE FROM records WHERE id=?", (identity,))
+                    context_count += 1
+                for identity, row in new_contexts.items():
+                    if old_contexts.get(identity) != row:
+                        self._write_record(db, row)
+                        context_count += 1
+            if changed_count or removed_count or context_count:
+                self._generation += 1
+        return {"upserted": changed_count, "removed": removed_count, "contexts_changed": context_count}
 
     def _signature(self, profile_id: str) -> str:
         profile = self.providers.get(profile_id)
@@ -422,9 +466,13 @@ class SearchEngine:
                 for judgment in judgments:
                     if judgment["id"] not in by_id or judgment["match_type"] == "none":
                         continue
-                    reranked.append({**by_id[judgment["id"]], "score": judgment["score"],
-                                     "match_type": judgment["match_type"],
-                                     "match_reason": "依据记录核对全部条件" if judgment["match_type"] == "full"
+                    candidate = by_id[judgment["id"]]
+                    match_type = judgment["match_type"]
+                    if candidate.get("context_stale") and match_type == "full":
+                        match_type = "partial"
+                    reranked.append({**candidate, "score": judgment["score"],
+                                     "match_type": match_type,
+                                     "match_reason": "依据记录核对全部条件" if match_type == "full"
                                      else "记录仅支持部分查询条件"})
                 candidates = sorted(reranked, key=lambda row: row["score"], reverse=True)
             except ProviderError as exc:

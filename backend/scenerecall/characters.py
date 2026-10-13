@@ -177,7 +177,21 @@ class CharacterStore:
             for profile in profiles.values():
                 profile["appearances"] = []
             for asset in assets:
-                for record in self.library.observations(asset["id"]):
+                from .scenes import SceneStore
+                scenes = SceneStore(self.library).list(asset["id"])
+                deep_coverage = []
+                for scene in sorted(scenes, key=lambda row: (row["start_ms"], row["end_ms"])):
+                    if scene.get("understanding_level") != "deep":
+                        continue
+                    start, end = scene["start_ms"], scene["end_ms"]
+                    if deep_coverage and start <= deep_coverage[-1][1]:
+                        deep_coverage[-1][1] = max(deep_coverage[-1][1], end)
+                    else:
+                        deep_coverage.append([start, end])
+                observations = [row for row in self.library.observations(asset["id"])
+                                if not any(start <= row["start_ms"] and row["end_ms"] <= end
+                                           for start, end in deep_coverage)]
+                for record in sorted(observations + scenes, key=lambda row: (row["start_ms"], row["end_ms"], row["id"])):
                     for entity in record.get("entities", []):
                         resolved = self.library.organization.resolve_reference(
                             asset["id"], record, entity.get("character_id"), registry)
@@ -480,7 +494,9 @@ class CharacterStore:
             scope = scope_id(asset)
             registry = registries.get(scope, {"profiles": {}, "redirects": {}})
             # Historical immutable records also need valid cross-work references.
-            for path in self.library.asset_dir(asset["id"]).glob("analyses/*/observations/*.json"):
+            evidence_dir = self.library.asset_dir(asset["id"])
+            for path in [*evidence_dir.glob("analyses/*/observations/*.json"),
+                         *evidence_dir.glob("analyses/*/scenes/*.json")]:
                 record = read_json(path)
                 source_scope = record.get("character_scope_id") or organization["assets"][asset["id"]]["legacy_character_scope_id"]
                 source_registry = registries.get(source_scope, {"profiles": {}, "redirects": {}})

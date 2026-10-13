@@ -1,4 +1,4 @@
-export type Capability = 'vision' | 'subtitle' | 'embedding' | 'query' | 'decision' | 'answer';
+export type Capability = 'preparation' | 'vision' | 'subtitle' | 'embedding' | 'query' | 'decision' | 'answer';
 export type AssetKind = 'movie' | 'animation' | 'series';
 export type SubtitleMode = 'auto' | 'container' | 'external' | 'embedded';
 export interface SubtitleTrack {
@@ -185,6 +185,35 @@ export interface Subtitle {
   source: string;
   review_status: string;
 }
+export interface SceneFact {
+  text: string;
+  frame_ids?: string[];
+  cue_ids?: string[];
+}
+export interface SceneEvidence {
+  chunk_id?: string;
+  scene_key?: string;
+  related_chunk_ids?: string[];
+  understanding_level?: 'initial' | 'deep';
+  context_stale?: boolean;
+  stale_reasons?: string[];
+  needs_deep?: boolean;
+  visual_facts?: SceneFact[];
+  dialogue_facts?: SceneFact[];
+  inferences?: SceneFact[];
+}
+export interface SceneChunk extends Omit<Observation, 'window_id' | 'shot_id' | 'entities' | 'events' | 'uncertainties' | 'run_id'>, SceneEvidence {
+  chunk_id: string;
+  kind?: 'scene';
+  shot_ids?: string[];
+  frame_ids?: string[];
+  entities?: Entity[];
+  events?: Observation['events'];
+  uncertainties?: string[];
+  evidence_cue_ids?: string[];
+  representative_frame_ids?: string[];
+  version?: number;
+}
 export interface Annotation {
   record_id: string;
   summary?: string;
@@ -207,6 +236,7 @@ export interface Run {
 export interface AssetDetail {
   asset: Asset;
   observations: Observation[];
+  scenes?: SceneChunk[];
   subtitles: Subtitle[];
   annotations: Annotation[];
   runs: Run[];
@@ -214,6 +244,8 @@ export interface AssetDetail {
 export interface Job {
   batch_id?: string;
   sampling_strategy?: string;
+  analysis_strategy?: string;
+  chunk_id?: string;
   items?: ImportItem[];
   id: string;
   type: string;
@@ -231,11 +263,14 @@ export interface Job {
   budget?: { max_requests?: number; max_cost?: number | null };
   uncertain_request_count?: number;
   cost_incomplete?: boolean;
+  stage_metrics?: Record<string, { request_count?: number; elapsed_ms?: number; cache_hits?: number; usage?: Record<string, number>; completed?: number; total?: number }>;
+  stage_progress?: Record<string, { completed: number; total?: number | null; status: 'pending' | 'running' | 'completed' }>;
   created_at: string;
 }
 export interface JobPayload extends Omit<Defaults, 'window_ms' | 'frames_per_window'> {
   keyframe_plan_id?: string;
   sampling_strategy?: string;
+  analysis_strategy?: 'scene-chunks-v1';
   asset_id: string;
   stages: ('vision' | 'subtitle')[];
   start_ms: number;
@@ -246,10 +281,15 @@ export interface Estimate {
   duration_ms: number;
   estimated_frames: number;
   estimated_requests: number;
+  estimated_requests_min?: number;
+  estimated_requests_max?: number;
+  stage_estimates?: Record<string, { requests_min: number; requests_max: number }>;
   cost_estimate: number | null;
+  cost_estimate_min?: number | null;
+  cost_estimate_max?: number | null;
   warnings: string[];
 }
-export interface SearchResult {
+export interface SearchResult extends SceneEvidence {
   id: string;
   asset_id: string;
   work_id: string;
@@ -258,7 +298,7 @@ export interface SearchResult {
   season?: number | null;
   episode?: number | null;
   version?: string;
-  kind: 'visual' | 'subtitle';
+  kind: 'visual' | 'subtitle' | 'scene';
   start_ms: number;
   end_ms: number;
   text: string;
@@ -283,6 +323,7 @@ export interface SearchResponse {
   explanation?: string;
 }
 export const CAPABILITIES: { key: Capability; name: string; description: string; data: string }[] = [
+  { key: 'preparation', name: '分块与简要索引', description: '先整理台词，再结合全部关键帧建立场景与剧情索引', data: '发送台词与编号预览拼图；可与画面理解共用连接' },
   { key: 'vision', name: '画面理解', description: '识别人物、动作、物体与空间关系', data: '发送带时间戳的画面图片' },
   { key: 'subtitle', name: '画面字幕 OCR', description: '转录烧录在画面中的文字；容器文本字幕无需模型', data: '发送裁剪后的字幕图片' },
   { key: 'embedding', name: '语义向量', description: '让相似表达也能找到同一片段', data: '发送文本记录与搜索词' },
@@ -294,3 +335,18 @@ export const DEFAULTS: Defaults = { window_ms: 6000, frames_per_window: 4, subti
 export const KIND_LABELS: Record<AssetKind, string> = { movie: '电影', animation: '动画', series: '剧集' };
 
 export function keyframeReason(reason?: string): string { return ({ stable_pose: '稳定姿态', representative_pose: '代表姿态', content_change: '画面内容变化', shot_representative: '镜头代表帧' } as Record<string, string>)[reason || ''] || '内容代表帧'; }
+
+export function stageLabel(stage?: string): string {
+  return ({ transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
+}
+
+export function estimatedRequests(estimate: Estimate): string {
+  const min = estimate.estimated_requests_min ?? estimate.estimated_requests;
+  const max = estimate.estimated_requests_max ?? estimate.estimated_requests;
+  return min === max ? min.toLocaleString() : `${min.toLocaleString()}–${max.toLocaleString()}`;
+}
+
+export function estimatedCost(estimate: Estimate): string {
+  if (estimate.cost_estimate_min != null && estimate.cost_estimate_max != null && estimate.cost_estimate_min !== estimate.cost_estimate_max) return `$${estimate.cost_estimate_min.toFixed(3)}–$${estimate.cost_estimate_max.toFixed(3)}`;
+  return estimate.cost_estimate == null ? '未知' : `$${estimate.cost_estimate.toFixed(3)}`;
+}

@@ -112,6 +112,52 @@ def test_precise_pts_survives_fractional_millisecond_rounding_and_offset(tmp_pat
     assert_plan(plan)
 
 
+@pytest.mark.parametrize("batch_size", [128, 256])
+def test_large_extraction_batches_keep_every_exact_selected_picture(tmp_path, batch_size):
+    # Production preview preparation uses 128 pictures; the media API allows 256.
+    # An unbalanced sum of eq(pts,...) terms exceeds FFmpeg's expression parser
+    # depth limit at these sizes even though each individual timestamp is valid.
+    colors = [Image.new("RGB", (128, 72), color) for color in ("red", "blue")]
+    pictures = [colors[index % 2] for index in range(batch_size) for _ in range(2)]
+    path = video(tmp_path / "many-cuts.mp4", pictures, rate="30000/1001")
+    plan = scan(path)
+    assert len(plan["frames"]) == batch_size
+    outputs = [tmp_path / f"batch-{index}.jpg" for index in range(batch_size)]
+
+    extracted = media.extract_keyframes(path, plan["frames"], outputs)
+
+    assert len(extracted) == batch_size
+    for index, (frame, expected, output) in enumerate(zip(extracted, plan["frames"], outputs, strict=True)):
+        assert frame["source_pts"] == expected["source_pts"]
+        assert frame["source_time_base"] == expected["source_time_base"]
+        assert frame["at_ms"] == expected["at_ms"]
+        with Image.open(output) as picture:
+            actual_color = np.array(picture).astype(float).mean(axis=(0, 1))
+        expected_color = np.array(colors[index % 2]).mean(axis=(0, 1))
+        assert np.abs(actual_color - expected_color).max() < 8
+
+
+def test_large_batch_with_missing_exact_pts_never_publishes_images(tmp_path):
+    colors = [Image.new("RGB", (128, 72), color) for color in ("red", "blue")]
+    pictures = [colors[index % 2] for index in range(128) for _ in range(2)]
+    path = video(tmp_path / "missing-picture.mp4", pictures, rate="30000/1001")
+    plan = scan(path)
+    assert len(plan["frames"]) == 128
+    # Move one target by a source tick while keeping its plan metadata consistent.
+    # This timestamp is between real pictures, so substituting a neighbor would
+    # break the evidence contract even though its displayed millisecond may match.
+    missing = plan["frames"][64]
+    missing["source_pts"] += 1
+    relative = missing["source_pts"] * Fraction(*missing["source_time_base"])
+    missing.update(pts=relative.numerator, time_base=[1, relative.denominator], at_ms=round(relative * 1000))
+    outputs = [tmp_path / f"missing-{index}.jpg" for index in range(128)]
+
+    with pytest.raises(media.MediaError, match="精确画面"):
+        media.extract_keyframes(path, plan["frames"], outputs)
+
+    assert not any(output.exists() for output in outputs)
+
+
 def test_scan_reports_progress_and_cancellation_reaps_decoder(tmp_path, monkeypatch):
     path = video(tmp_path / "cancel.mp4", [picture(at % 80) for at in range(1000)])
     processes = []

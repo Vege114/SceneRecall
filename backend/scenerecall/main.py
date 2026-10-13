@@ -21,12 +21,13 @@ from .jobs import JobQueue
 from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
 from .models import (
     AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput,
-    CharacterMergeInput, CharacterReanalysisInput, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
+    CharacterMergeInput, CharacterReanalysisInput, DeepenInput, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
 from .providers import ProviderManager
 from .search import SearchEngine
+from .scenes import SceneStore
 
-DEFAULTS = {"bindings": {k: None for k in ("vision", "subtitle", "embedding", "query", "decision", "answer")},
+DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", "embedding", "query", "decision", "answer")},
             "defaults": {"window_ms": 6000, "frames_per_window": 4, "subtitle_fps": 2,
                          "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None}}
 
@@ -112,14 +113,18 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return record
 
     def public_job(job):
-        return {**{key: value for key, value in job.items() if key not in {"config", "checkpoints"}},
+        return {**{key: value for key, value in job.items() if key not in {
+                    "config", "checkpoints", "pending_scene_receipt", "scene_receipts"}},
                 **({"sampling_strategy": job["config"].get("sampling_strategy", "uniform-v1")}
                    if job["type"] == "analysis" and "vision" in job["config"].get("stages", []) else {}),
+                **({"chunk_id": job["config"]["deepen_chunk_id"]} if job["config"].get("deepen_chunk_id") else {}),
                 "budget": {"max_requests": job["config"].get("max_requests", 1000), "max_cost": job["config"].get("max_cost")}}
 
     def asset_view(asset):
         asset = dict(asset)
         observations = library.observations(asset["id"])
+        scenes = SceneStore(library).list(asset["id"])
+        observations = scenes or observations
         if observations and observations[0].get("evidence_frame_ids"):
             asset["thumbnail_url"] = f"/api/assets/{asset['id']}/frames/{observations[0]['evidence_frame_ids'][0]}"
         asset["observation_count"] = len(observations)
@@ -235,9 +240,26 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         projection = {r["id"]: r for r in library.records(asset_id)}
         observations = [{**r, "model_summary": r["summary"],
                          **{k: projection[r["id"]][k] for k in ("summary", "entities", "review_status", "note", "favorite") if r["id"] in projection},
-                         "asset_id": asset_id} for r in library.observations(asset_id)]
+                         "asset_id": asset_id} for r in library.observations(asset_id) if r["id"] in projection]
         return {"asset": asset, "observations": [enrich(r) for r in observations], "subtitles": library.subtitles(asset_id),
+                "scenes": [enrich(r) for r in projection.values() if r.get("kind") == "scene"],
                 "annotations": library.annotations(asset_id), "runs": library.runs(asset_id)}
+
+    @app.post("/api/assets/{asset_id}/chunks/{chunk_id}/deepen/estimate")
+    async def scene_deepen_estimate(asset_id: str, chunk_id: str, payload: DeepenInput):
+        config, chunk = queue.deepen_config(asset_id, chunk_id, payload, settings())
+        return queue.estimate_deepen(config, chunk)
+
+    @app.post("/api/assets/{asset_id}/chunks/{chunk_id}/deepen")
+    async def scene_deepen(asset_id: str, chunk_id: str, payload: DeepenInput):
+        with library.lock:
+            config, _ = queue.deepen_config(asset_id, chunk_id, payload, settings())
+            # A double click reuses the queued/running operation for this revision.
+            existing = next((job for job in queue.list() if job.get("asset_id") == asset_id
+                and job["status"] in {"queued", "running", "pausing"}
+                and job["config"].get("deepen_chunk_id") == chunk_id
+                and job["config"].get("deepen_revision") == config["deepen_revision"]), None)
+            return public_job(existing or queue.add("analysis", config, asset_id))
 
     @app.post("/api/assets/{asset_id}/relocate")
     async def relocate(asset_id: str, payload: dict = Body(...)):
@@ -378,6 +400,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 canonical = actual_records[record["id"]]
                 changed |= canonical["text"] != record.get("text")
                 ranking = {k: record[k] for k in ("score", "match_type", "match_reason", "evidence_ids") if k in record}
+                if canonical.get("context_stale") and ranking.get("match_type") == "full":
+                    ranking.update(match_type="partial", match_reason="前序理解已更新，当前片段的上下文待刷新")
+                    changed = True
                 results.append(enrich({**canonical, **ranking}))
             elif record.get("source_ids") and all(rid in actual_records for rid in record["source_ids"]):
                 sources = [actual_records[rid] for rid in record["source_ids"]]

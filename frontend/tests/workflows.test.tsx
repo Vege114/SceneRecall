@@ -246,7 +246,7 @@ describe('Codex CLI connections', () => {
     const estimate = { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] };
     const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [], frame_count: 3, batch_count: 1 } : url.endsWith('/estimate') ? estimate : { id: 'codex-job' });
     const onClose = vi.fn();
-    renderApp(<JobModal asset={asset} onClose={onClose} />, appContext({ bootstrap: { ...bootstrap, provider_profiles: [codex], settings: { bindings: { vision: codex.id }, defaults: { ...DEFAULTS, max_cost: 10 } } } }));
+    renderApp(<JobModal asset={asset} onClose={onClose} />, appContext({ bootstrap: { ...bootstrap, provider_profiles: [codex], settings: { bindings: { vision: codex.id, preparation: codex.id }, defaults: { ...DEFAULTS, max_cost: 10 } } } }));
     expect(screen.getByText(/Codex 默认模型 · 仅发送内容关键帧/)).toBeTruthy();
     expect(screen.queryByText(/尚未分配模型/)).toBeNull();
     expect((screen.getByLabelText(/费用上限（USD/) as HTMLInputElement).disabled).toBe(true);
@@ -280,7 +280,7 @@ describe('Analysis budgeting and independent stages', () => {
     const user = userEvent.setup();
     const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [] } : url.endsWith('/estimate') ? estimate : { id: 'synthetic-job', status: 'queued' });
     const onClose = vi.fn();
-    const context = appContext({ bootstrap: { ...bootstrap, provider_profiles: [profile], settings: { ...bootstrap.settings, bindings: { vision: profile.id } } } });
+    const context = appContext({ bootstrap: { ...bootstrap, provider_profiles: [profile], settings: { ...bootstrap.settings, bindings: { vision: profile.id, preparation: profile.id } } } });
     renderApp(<JobModal asset={asset} onClose={onClose} />, context);
     const startButton = screen.getByRole('button', { name: /开始分析/ }) as HTMLButtonElement;
     expect(startButton.disabled).toBe(true);

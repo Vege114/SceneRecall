@@ -164,7 +164,8 @@ class DeletionStore:
 
     def _evidence_digest(self, asset_ids):
         return digest({asset_id: {str(path.relative_to(self.library.asset_dir(asset_id))): read_json(path)
-                                 for path in sorted(self.library.asset_dir(asset_id).glob("analyses/*/observations/*.json"))}
+                                 for path in sorted([*self.library.asset_dir(asset_id).glob("analyses/*/observations/*.json"),
+                                                     *self.library.asset_dir(asset_id).glob("analyses/*/scenes/*.json")])}
                        for asset_id in asset_ids})
 
     def delete(self, *, expected_token=None, **request):
