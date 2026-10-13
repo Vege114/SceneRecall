@@ -5,7 +5,7 @@ import { useApp } from '../context';
 import { DEFAULTS, executionDefaults, taskModelLabel, type Asset, type CharacterLibrary, type CharacterProfile, type Estimate, type Job, type KeyframePlan, type TaskModelRole } from '../types';
 import { Alert, Empty, Field, Modal, Spinner } from './ui';
 import TaskModels, { useTaskModels } from './TaskModels';
-import TaskExecution from './TaskExecution';
+import TaskExecution, { saveExecutionDefaults } from './TaskExecution';
 
 const characterPath = (assetId: string, characterId?: string) => `/assets/${encodeURIComponent(assetId)}/characters${characterId ? `/${encodeURIComponent(characterId)}` : ''}`;
 const frameUrl = (assetId: string, frameId: string) => `/api/assets/${encodeURIComponent(assetId)}/frames/${encodeURIComponent(frameId)}`;
@@ -81,6 +81,7 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   const [requestLimit, setRequestLimit] = useState(defaults.max_requests);
   const [costLimit, setCostLimit] = useState(defaults.max_cost?.toString() || '');
   const [execution, setExecution] = useState(() => executionDefaults(defaults.execution));
+  const [saveDefault, setSaveDefault] = useState(false);
   const [estimates, setEstimates] = useState<Estimate[] | null>(null);
   const [estimateKey, setEstimateKey] = useState('');
   const [busy, setBusy] = useState<'estimate' | 'start' | null>(null);
@@ -90,6 +91,7 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   const [scanningPlan, setScanningPlan] = useState<KeyframePlan | null>(null);
   const [cancellingScan, setCancellingScan] = useState(false);
   const alive = useRef(true);
+  const submitted = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const assets = scope === 'series' ? library.assets : [library.assets.find((candidate) => candidate.id === asset.id) || asset];
   const unavailable = assets.filter((candidate) => !candidate.source_available);
@@ -126,12 +128,22 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
     } catch (caught) { setError(message(caught)); } finally { setBusy(null); setScanningPlan(null); }
   };
   const start = async () => {
-    if (busy || blocked || !validEstimate) return;
+    if (busy || submitted.current || blocked || !validEstimate) return;
     setBusy('start'); setError('');
+    let defaultsSaved = false;
     try {
+      if (saveDefault && usesPreparation) { await saveExecutionDefaults(execution, ['transcript', 'preparation']); defaultsSaved = true; }
       const result = await post<{ jobs: Job[]; revision: number }>(`${characterPath(asset.id)}/reanalyze`, { ...modelOptions, execution: { ...execution }, scope, max_requests: requestLimit, max_cost: maxCost, expected_revision: library.revision, keyframe_plan_ids: Object.fromEntries(assets.map((candidate) => [candidate.id, plans[candidate.id].plan_id || plans[candidate.id].id])) });
-      await refresh(); notify(`已按新版角色档案创建 ${result.jobs.length} 个重新识别任务`); onClose();
-    } catch (caught) { setError(message(caught)); if (caught instanceof ApiError && caught.status === 409) setStale(true); } finally { setBusy(null); }
+      submitted.current = true;
+      let refreshError = '';
+      try { await refresh(); } catch (error) { refreshError = message(error); }
+      notify(`已按新版角色档案创建 ${result.jobs.length} 个重新识别任务`); onClose();
+      if (refreshError) notify(`任务已创建，但列表刷新失败：${refreshError}。请在任务队列刷新。`, 'error');
+    } catch (caught) {
+      if (defaultsSaved) { try { await refresh(); } catch { /* Keep the creation error visible. */ } }
+      setError(defaultsSaved ? `默认执行方式已保存，但任务创建失败：${message(caught)}。请重试创建任务。` : message(caught));
+      if (caught instanceof ApiError && caught.status === 409) setStale(true);
+    } finally { setBusy(null); }
   };
   const totalRequests = estimates?.reduce((sum, item) => sum + item.estimated_requests, 0) || 0;
   const totalCost = estimates?.every((item) => item.cost_estimate != null) ? estimates.reduce((sum, item) => sum + (item.cost_estimate || 0), 0) : null;
@@ -140,7 +152,7 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
     <Field label="重新识别范围"><select value={scope} onChange={(event) => setScope(event.target.value as 'asset' | 'series')} disabled={Boolean(busy)}><option value="asset">当前作品 · {asset.title}</option>{library.assets.length > 1 && <option value="series">同一作品全部 {library.assets.length} 个视频</option>}</select></Field>
     <p className="helper character-scope-summary">{assets.length} 个视频 · 共 {duration(assets.reduce((sum, candidate) => sum + candidate.duration_ms, 0))} · {taskModelLabel(model, taskModels.overrides?.vision)}</p>
     <TaskModels roles={modelRoles} value={taskModels.overrides} onChange={taskModels.change} disabled={!!busy} />
-    {usesPreparation ? <TaskExecution stages={['transcript', 'preparation']} value={execution} onChange={setExecution} disabled={!!busy} connectionLimits={{ transcript: preparation?.max_concurrency ?? 2, preparation: preparation?.max_concurrency ?? 2 }} /> : <p className="helper">当前使用逐镜头画面分析，依赖连续人物记忆，始终串行。使用场景分块策略可分别选择台词整理与视觉分块的执行方式。</p>}
+    {usesPreparation ? <TaskExecution stages={['transcript', 'preparation']} value={execution} onChange={setExecution} disabled={!!busy} connectionLimits={{ transcript: preparation?.max_concurrency ?? 4, preparation: preparation?.max_concurrency ?? 4 }} saveDefault={saveDefault} onSaveDefaultChange={setSaveDefault} /> : <p className="helper">当前使用逐镜头画面分析，依赖连续人物记忆，始终串行。使用场景分块策略可分别选择台词整理与视觉分块的执行方式。</p>}
     {usesPreparation && !preparation && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配分块与简要索引模型。</Alert>}
     {!model && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配画面理解模型。</Alert>}{unavailable.length > 0 && <Alert>这些视频的原文件暂不可用：{unavailable.map((candidate) => candidate.title).join('、')}。请先在各自详情页定位原文件。</Alert>}{active && <Alert>所选作品仍有任务正在进行。请等待任务结束后重新识别。</Alert>}
     <div className="form-grid"><Field label="每个视频最多模型请求数" hint="每个视频独立计数；达到上限后停止，可在任务队列重试。"><input type="number" min={1} max={100000} step={1} value={requestLimit} onChange={(event) => setRequestLimit(Number(event.target.value))} required disabled={Boolean(busy)} /></Field><Field label="每个视频费用上限（USD）" hint={usesCodex ? 'Codex 订阅费用未知，金额上限已停用。' : '留空不限制；费用取决于模型连接的定价。'}><input type="number" min={0.01} step={0.01} value={usesCodex ? '' : costLimit} onChange={(event) => setCostLimit(event.target.value)} placeholder="不限制" disabled={Boolean(busy) || usesCodex} /></Field></div>

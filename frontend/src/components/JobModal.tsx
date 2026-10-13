@@ -6,7 +6,7 @@ import { DEFAULTS, CAPABILITIES, executionDefaults, estimatedCost, estimatedRequ
 import { Alert, Field, Modal, Spinner, Status } from './ui';
 import { StageEstimates } from './SceneAnalysis';
 import TaskModels, { taskModelOptions, useTaskModels } from './TaskModels';
-import TaskExecution from './TaskExecution';
+import TaskExecution, { saveExecutionDefaults } from './TaskExecution';
 
 export default function JobModal({ asset, assets: selection, onClose }: { asset?: Asset; assets?: Asset[]; onClose: () => void }) {
   const { bootstrap, refresh, notify } = useApp();
@@ -22,6 +22,7 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
   const [costLimit, setCostLimit] = useState(defaults.max_cost?.toString() || '');
   const [force, setForce] = useState(false);
   const [execution, setExecution] = useState(() => executionDefaults(defaults.execution));
+  const [saveDefault, setSaveDefault] = useState(false);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [estimateKey, setEstimateKey] = useState('');
   const [estimates, setEstimates] = useState<(Estimate & { asset_id: string })[]>([]);
@@ -33,13 +34,14 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
   const [busy, setBusy] = useState<'estimate' | 'start' | 'scan' | null>(null);
   const [error, setError] = useState('');
   const request = useRef({ key: '', id: '' });
+  const submitted = useRef(false);
   const live = useRef(true);
   useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   const getProfile = (role: 'preparation' | 'vision' | 'subtitle') => bootstrap.provider_profiles.find((profile) => profile.id === bootstrap.settings.bindings[role]);
   const modelRoles = useMemo<TaskModelRole[]>(() => [...(vision ? ['preparation' as const, 'vision' as const] : []), ...(subtitle && assets.some((item) => item.subtitle_mode === 'embedded') ? ['subtitle' as const] : [])], [vision, subtitle, assets]);
   const taskModels = useTaskModels(modelRoles);
   const executionStages: ExecutionStage[] = [...(vision ? ['transcript' as const, 'preparation' as const] : []), ...(subtitle && assets.some((item) => item.subtitle_mode === 'embedded') ? ['subtitle' as const] : [])];
-  const connectionLimits = Object.fromEntries(executionStages.map((stage) => [stage, getProfile(stage === 'transcript' ? 'preparation' : stage)?.max_concurrency ?? 2]));
+  const connectionLimits = Object.fromEntries(executionStages.map((stage) => [stage, getProfile(stage === 'transcript' ? 'preparation' : stage)?.max_concurrency ?? 4]));
   const usesCodex = (vision && (getProfile('vision')?.provider_type === 'codex_cli' || getProfile('preparation')?.provider_type === 'codex_cli')) || (subtitle && assets.some((item) => item.subtitle_mode === 'embedded') && getProfile('subtitle')?.provider_type === 'codex_cli');
   const ranges = useMemo(() => assets.map((item) => ({ asset_id: item.id, start_ms: Math.round(start * 1000), end_ms: end ? Math.min(Math.round(Number(end) * 1000), item.duration_ms) : null })), [assets, start, end]);
   const rangeKey = JSON.stringify(ranges);
@@ -81,13 +83,23 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
     } catch (error) { setError(message(error)); } finally { setBusy(null); }
   };
   const startJob = async () => {
+    if (busy || submitted.current || !estimateValid) return;
     setBusy('start'); setError('');
+    let defaultsSaved = false;
     try {
+      if (saveDefault) { await saveExecutionDefaults(execution, executionStages); defaultsSaved = true; }
       if (request.current.key !== currentKey) request.current = { key: currentKey, id: crypto.randomUUID() };
       if (payloads.length === 1) await post('/jobs', payloads[0]);
       else await post('/jobs/batch', { request_id: request.current.id, items: payloads });
-      await refresh(); notify(`${payloads.length} 个分析任务已加入队列`); onClose(); window.location.hash = '/jobs';
-    } catch (error) { setError(message(error)); } finally { setBusy(null); }
+      submitted.current = true;
+      let refreshError = '';
+      try { await refresh(); } catch (error) { refreshError = message(error); }
+      notify(`${payloads.length} 个分析任务已加入队列`); onClose(); window.location.hash = '/jobs';
+      if (refreshError) notify(`任务已创建，但列表刷新失败：${refreshError}。请在任务队列刷新。`, 'error');
+    } catch (error) {
+      if (defaultsSaved) { try { await refresh(); } catch { /* Keep the creation error visible. */ } }
+      setError(defaultsSaved ? `默认执行方式已保存，但任务创建失败：${message(error)}。请重试创建任务。` : message(error));
+    } finally { setBusy(null); }
   };
   const subtitleCount = assets.filter((item) => item.subtitle_mode === 'embedded').length;
   const offline = assets.filter((item) => !item.source_available);
@@ -97,7 +109,7 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
         <div className="choice-grid"><label className={`choice selectable ${vision ? 'selected' : ''}`}><input type="checkbox" checked={vision} onChange={(event) => setVision(event.target.checked)} /><ScanLine size={21} /><strong>画面理解</strong><span>{taskModelLabel(getProfile('vision'), taskModels.overrides?.vision)} · 仅发送内容关键帧</span></label><label className={`choice selectable ${subtitle ? 'selected' : ''} ${!subtitleCount ? 'disabled' : ''}`}><input type="checkbox" checked={subtitle} disabled={!subtitleCount} onChange={(event) => setSubtitle(event.target.checked)} /><Subtitles size={21} /><strong>画面字幕 OCR</strong><span>{subtitleCount ? `${taskModelLabel(getProfile('subtitle'), taskModels.overrides?.subtitle)} · 仅处理 ${subtitleCount} 集烧录字幕` : assets.length === 1 && assets[0].subtitle_mode === 'container' ? '容器文本字幕已在本地提取，无需发送字幕图片' : '外挂字幕已在导入时解析'}</span></label></div>
         {vision && <p className="helper scene-strategy">台词整理 → 视觉分块（{taskModelLabel(getProfile('preparation'), taskModels.overrides?.preparation)}）→ 复杂片段深入理解。全部关键帧保留，连续记忆在同项目内沿用。</p>}
         <TaskModels roles={modelRoles} value={taskModels.overrides} onChange={taskModels.change} disabled={!!busy || scanning} />
-        <TaskExecution stages={executionStages} value={execution} onChange={setExecution} disabled={!!busy || scanning} connectionLimits={connectionLimits} />
+        <TaskExecution stages={executionStages} value={execution} onChange={setExecution} disabled={!!busy || scanning} connectionLimits={connectionLimits} saveDefault={saveDefault} onSaveDefaultChange={setSaveDefault} />
         {missing.length > 0 && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中为{missing.map((role) => CAPABILITIES.find((item) => item.key === role)?.name).join('、')}分配模型。关键帧预扫描无需模型。</Alert>}
         {offline.length > 0 && <Alert tone="error">{offline.map((item) => item.title).join('、')}：原视频离线或已变化，请先定位原文件。</Alert>}
         <div className="section-row"><h3>分析范围</h3><button type="button" className="text-button" onClick={() => { setStart(0); setEnd('60'); }}>先试运行前 60 秒</button></div>

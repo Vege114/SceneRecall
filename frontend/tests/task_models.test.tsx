@@ -268,6 +268,7 @@ describe('All analysis entry points keep task selections', () => {
     expect(screen.queryByLabelText('台词整理执行方式')).toBeNull();
     expect(screen.queryByLabelText('视觉分块执行方式')).toBeNull();
     expect(screen.queryByLabelText('并发请求上限')).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: '设为默认值' })).toBeNull();
     expect((screen.getByLabelText(/^每个视频费用上限/) as HTMLInputElement).disabled).toBe(false);
     await user.click(screen.getByRole('button', { name: '估算重新识别用量' }));
     await waitFor(() => expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false));

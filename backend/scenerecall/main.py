@@ -31,7 +31,7 @@ DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", 
             "defaults": {"window_ms": 6000, "frames_per_window": 4, "subtitle_fps": 2,
                          "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None,
                          "execution": {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel",
-                                       "max_concurrency": 3}}}
+                                       "max_concurrency": 4}}}
 
 
 def create_app(data_dir: Path | None = None, start_worker=True, providers=None, token=None, allowed_ports=None):

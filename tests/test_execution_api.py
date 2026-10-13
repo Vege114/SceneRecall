@@ -9,7 +9,7 @@ from scenerecall.models import AnalysisInput, ExecutionOptions
 from test_character_api import CharacterAPIProvider, seed_episode
 
 
-PARALLEL = {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel", "max_concurrency": 3}
+PARALLEL = {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel", "max_concurrency": 4}
 SERIAL = ExecutionOptions().model_dump()
 
 
@@ -46,6 +46,28 @@ def test_partial_execution_settings_preserve_other_defaults_and_invalid_choices_
     bad = client.put("/api/settings", json={"defaults": {"execution": {"max_concurrency": 0}}})
     assert bad.status_code == 400, bad.text
     assert client.get("/api/settings").json()["defaults"]["execution"] == expected
+
+
+def test_execution_default_patch_preserves_hidden_modes_and_unrelated_settings_on_restart(execution_api):
+    app, client = execution_api
+    existing = {**PARALLEL, "transcript": "serial", "preparation": "serial", "max_concurrency": 3}
+    client.put("/api/settings", json={"defaults": {
+        "execution": existing, "subtitle_fps": 1.5, "max_requests": 77, "max_cost": .5}})
+    before = client.get("/api/settings").json()
+    response = client.put("/api/settings", json={"defaults": {
+        "execution": {"subtitle": "parallel", "max_concurrency": 6}}})
+    assert response.status_code == 200, response.text
+    expected = {**before, "defaults": {**before["defaults"], "execution": {
+        **existing, "subtitle": "parallel", "max_concurrency": 6}}}
+    assert response.json() == expected
+    restarted = create_app(app.state.library.root, providers=CharacterAPIProvider(),
+                           start_worker=False, token="restarted-defaults")
+    with TestClient(restarted) as other:
+        other.post("/api/session", json={"token": "restarted-defaults"})
+        assert other.get("/api/settings").json() == expected
+    job = client.post("/api/jobs", json={"asset_id": "first", "execution": expected["defaults"]["execution"]}).json()
+    client.put("/api/settings", json={"defaults": {"execution": {"max_concurrency": 8}}})
+    assert client.get(f"/api/jobs/{job['id']}").json()["execution"]["max_concurrency"] == 6
 
 
 @pytest.mark.parametrize("choice", [
@@ -108,7 +130,7 @@ def test_batch_idempotency_and_independent_execution_snapshots(execution_api):
     assert by_asset["first"]["execution"] == PARALLEL
     assert by_asset["second"]["execution"] == SERIAL
     changed = deepcopy(payload)
-    changed["items"][0]["execution"]["max_concurrency"] = 4
+    changed["items"][0]["execution"]["max_concurrency"] = 5
     assert client.post("/api/jobs/batch", json=changed).status_code == 409
     assert len(app.state.jobs.list()) == 2
 

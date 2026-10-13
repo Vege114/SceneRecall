@@ -18,6 +18,35 @@ def connection(provider_type="openai_compatible", **changes):
             "secret_mode": "none", **changes}
 
 
+@pytest.mark.parametrize("provider_type", ["openai_compatible", "codex_cli"])
+def test_fresh_connector_defaults_to_four_and_legacy_serial_requests_stay_compatible(tmp_path, provider_type):
+    task = ExecutionOptions()
+    profile = Profile(**connection(provider_type))
+    assert task.max_concurrency == 3 and profile.max_concurrency == 4
+    assert execution_width({"execution": task.model_dump()}, "transcript", profile.model_dump()) == 1
+    assert execution_width({"execution": {"transcript": "parallel"}}, "transcript") == 4
+    # Missing execution in old queued jobs still means serial scheduling.
+    assert execution_width({}, "transcript", profile.model_dump()) == 1
+    providers = ProviderManager(tmp_path)
+    saved = providers.upsert(connection(provider_type))
+    assert saved["max_concurrency"] == 4
+    assert ProviderManager(tmp_path).get("manual")["max_concurrency"] == 4
+
+
+@pytest.mark.parametrize("width", [2, 3])
+@pytest.mark.parametrize("provider_type", ["openai_compatible", "codex_cli"])
+def test_existing_task_and_connector_values_survive_factory_default_change(tmp_path, width, provider_type):
+    task = ExecutionOptions(transcript="parallel", max_concurrency=width)
+    assert ExecutionOptions.model_validate(task.model_dump()).max_concurrency == width
+    assert execution_width({"execution": task.model_dump()}, "transcript", {"max_concurrency": 4}) == width
+    providers = ProviderManager(tmp_path)
+    saved = providers.upsert(connection(provider_type, max_concurrency=width))
+    assert saved["max_concurrency"] == width
+    renamed = providers.upsert({"id": "manual", "name": "renamed fixture"})
+    assert renamed["max_concurrency"] == width
+    assert ProviderManager(tmp_path).get("manual")["max_concurrency"] == width
+
+
 @pytest.mark.parametrize("width", [9, 32, 64, 128])
 @pytest.mark.parametrize("provider_type", ["openai_compatible", "codex_cli"])
 def test_positive_manual_values_above_previous_caps_are_preserved(width, provider_type):

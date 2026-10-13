@@ -14,7 +14,7 @@ from test_scene_jobs import scene_worker as scene_worker
 
 def options(**changes):
     return {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel",
-            "max_concurrency": 3, **changes}
+            "max_concurrency": 4, **changes}
 
 
 def dense_dialogue(worker, count=205):
@@ -53,7 +53,7 @@ async def test_transcript_overlaps_and_merges_in_chronological_order(scene_worke
     monkeypatch.setattr(worker.provider, "prepare_subtitles", delayed)
     completed = await execute(worker, enqueue(worker, execution=options(preparation="serial")))
     assert completed["status"] == "completed", completed
-    assert peak == 2  # Live profile cap, although the task requested three.
+    assert peak == 2  # Live profile cap, although the task requested four.
     visual = next(call for call in worker.provider.calls if call["stage"] == "preparation")
     assert [segment["summary"] for segment in visual["subtitle_context"]["segments"]] == [
         "本组摘要 0", "本组摘要 1", "本组摘要 2"]
@@ -397,6 +397,41 @@ async def test_manual_concurrency_above_eight_reaches_requested_overlap(scene_wo
     assert peak == 9 and entered == 11
     assert completed["config"]["execution"]["max_concurrency"] == 9
     assert completed["request_count"] == 13
+
+
+@pytest.mark.parametrize("saved_width", [4, 2, 3])
+@pytest.mark.asyncio
+async def test_factory_four_and_saved_widths_schedule_the_selected_number(scene_worker, monkeypatch, saved_width):
+    fixture = scene_worker(22)
+    dense_dialogue(fixture, 405)
+    get = fixture.provider.get
+    monkeypatch.setattr(fixture.provider, "get", lambda identity: {**get(identity), "max_concurrency": 4})
+    original = fixture.provider.prepare_subtitles
+    expected = saved_width
+    wave_started = asyncio.Event()
+    active, peak, entered = 0, 0, 0
+
+    async def overlap(*args):
+        nonlocal active, peak, entered
+        active += 1
+        entered += 1
+        peak = max(peak, active)
+        if entered == expected:
+            wave_started.set()
+        await asyncio.wait_for(wave_started.wait(), 2)
+        result = await original(*args)
+        active -= 1
+        return result
+
+    monkeypatch.setattr(fixture.provider, "prepare_subtitles", overlap)
+    execution = {"transcript": "parallel", "max_concurrency": saved_width}
+    job = enqueue(fixture, execution=execution)
+    fixture.queue = JobQueue(fixture.library, fixture.provider, fixture.queue.search)
+    assert fixture.queue.get(job["id"])["config"]["execution"]["max_concurrency"] == expected
+    completed = await execute(fixture, job)
+    assert completed["status"] == "completed", completed
+    assert peak == expected and entered == 5
+    assert completed["request_count"] == 6
 
 
 @pytest.mark.asyncio
