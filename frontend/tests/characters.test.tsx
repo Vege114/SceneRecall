@@ -193,7 +193,7 @@ describe('Reinterpret video with revised dossiers', () => {
     await user.click(start);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const call = fetch.mock.calls.find((entry) => entry[0].endsWith('/reanalyze'))!;
-    expect(JSON.parse(call[1]!.body as string)).toEqual({ scope: 'series', max_requests: 50, max_cost: null, expected_revision: 7, keyframe_plan_ids: { [asset.id]: 'plan-test', [episodeTwo.id]: 'plan-test' } });
+    expect(JSON.parse(call[1]!.body as string)).toEqual({ execution: DEFAULTS.execution, scope: 'series', max_requests: 50, max_cost: null, expected_revision: 7, keyframe_plan_ids: { [asset.id]: 'plan-test', [episodeTwo.id]: 'plan-test' } });
     expect(app.refresh).toHaveBeenCalledOnce();
   });
 

@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowRight, Calculator, ScanLine, Subtitles } from 'lucide-react';
 import { api, duration, formatTime, message, post } from '../api';
 import { useApp } from '../context';
-import { DEFAULTS, CAPABILITIES, estimatedCost, estimatedRequests, taskModelLabel, keyframeReason, type Asset, type Estimate, type JobPayload, type KeyframePlan, type TaskModelRole } from '../types';
+import { DEFAULTS, CAPABILITIES, executionDefaults, estimatedCost, estimatedRequests, taskModelLabel, keyframeReason, type Asset, type Estimate, type ExecutionStage, type JobPayload, type KeyframePlan, type TaskModelRole } from '../types';
 import { Alert, Field, Modal, Spinner, Status } from './ui';
 import { StageEstimates } from './SceneAnalysis';
 import TaskModels, { taskModelOptions, useTaskModels } from './TaskModels';
+import TaskExecution from './TaskExecution';
 
 export default function JobModal({ asset, assets: selection, onClose }: { asset?: Asset; assets?: Asset[]; onClose: () => void }) {
   const { bootstrap, refresh, notify } = useApp();
@@ -20,6 +21,7 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
   const [requestLimit, setRequestLimit] = useState(defaults.max_requests);
   const [costLimit, setCostLimit] = useState(defaults.max_cost?.toString() || '');
   const [force, setForce] = useState(false);
+  const [execution, setExecution] = useState(() => executionDefaults(defaults.execution));
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [estimateKey, setEstimateKey] = useState('');
   const [estimates, setEstimates] = useState<(Estimate & { asset_id: string })[]>([]);
@@ -36,6 +38,8 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
   const getProfile = (role: 'preparation' | 'vision' | 'subtitle') => bootstrap.provider_profiles.find((profile) => profile.id === bootstrap.settings.bindings[role]);
   const modelRoles = useMemo<TaskModelRole[]>(() => [...(vision ? ['preparation' as const, 'vision' as const] : []), ...(subtitle && assets.some((item) => item.subtitle_mode === 'embedded') ? ['subtitle' as const] : [])], [vision, subtitle, assets]);
   const taskModels = useTaskModels(modelRoles);
+  const executionStages: ExecutionStage[] = [...(vision ? ['transcript' as const, 'preparation' as const] : []), ...(subtitle && assets.some((item) => item.subtitle_mode === 'embedded') ? ['subtitle' as const] : [])];
+  const connectionLimits = Object.fromEntries(executionStages.map((stage) => [stage, getProfile(stage === 'transcript' ? 'preparation' : stage)?.max_concurrency ?? 2]));
   const usesCodex = (vision && (getProfile('vision')?.provider_type === 'codex_cli' || getProfile('preparation')?.provider_type === 'codex_cli')) || (subtitle && assets.some((item) => item.subtitle_mode === 'embedded') && getProfile('subtitle')?.provider_type === 'codex_cli');
   const ranges = useMemo(() => assets.map((item) => ({ asset_id: item.id, start_ms: Math.round(start * 1000), end_ms: end ? Math.min(Math.round(Number(end) * 1000), item.duration_ms) : null })), [assets, start, end]);
   const rangeKey = JSON.stringify(ranges);
@@ -54,8 +58,8 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
     const timer = window.setInterval(() => void poll(), 1500);
     return () => { active = false; window.clearInterval(timer); };
   }, [scanning, plans]);
-  const payloads = useMemo<JobPayload[]>(() => assets.map((item, index) => ({ ...ranges[index], asset_id: item.id, ...taskModelOptions(taskModels.overrides, item.subtitle_mode === 'embedded'), ...(vision ? { analysis_strategy: 'scene-chunks-v1' as const } : {}), stages: [...(vision ? ['vision' as const] : []), ...(subtitle && item.subtitle_mode === 'embedded' ? ['subtitle' as const] : [])], ...(vision && scansReady ? { keyframe_plan_id: plans[item.id].plan_id || plans[item.id].id } : {}), subtitle_fps: fps, subtitle_crop: crop, max_requests: requestLimit, max_cost: !usesCodex && costLimit ? Number(costLimit) : null, force })).filter((item) => item.stages.length), [assets, ranges, vision, subtitle, scansReady, plans, fps, crop, requestLimit, costLimit, usesCodex, force, taskModels.overrides]);
-  const currentKey = JSON.stringify([payloads, taskModels.sourceKey]);
+  const payloads = useMemo<JobPayload[]>(() => assets.map((item, index) => ({ ...ranges[index], asset_id: item.id, execution: { ...execution }, ...taskModelOptions(taskModels.overrides, item.subtitle_mode === 'embedded'), ...(vision ? { analysis_strategy: 'scene-chunks-v1' as const } : {}), stages: [...(vision ? ['vision' as const] : []), ...(subtitle && item.subtitle_mode === 'embedded' ? ['subtitle' as const] : [])], ...(vision && scansReady ? { keyframe_plan_id: plans[item.id].plan_id || plans[item.id].id } : {}), subtitle_fps: fps, subtitle_crop: crop, max_requests: requestLimit, max_cost: !usesCodex && costLimit ? Number(costLimit) : null, force })).filter((item) => item.stages.length), [assets, ranges, vision, subtitle, scansReady, plans, fps, crop, requestLimit, costLimit, usesCodex, force, taskModels.overrides, execution]);
+  const currentKey = JSON.stringify([payloads, taskModels.sourceKey, connectionLimits]);
   const estimateValid = estimate && currentKey === estimateKey && (!vision || scansReady);
   const missing = [...new Set([...payloads.flatMap((item) => item.stages), ...(vision ? ['preparation' as const] : [])])].filter((role) => !bootstrap.settings.bindings[role]);
   const scan = async () => {
@@ -93,6 +97,7 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
         <div className="choice-grid"><label className={`choice selectable ${vision ? 'selected' : ''}`}><input type="checkbox" checked={vision} onChange={(event) => setVision(event.target.checked)} /><ScanLine size={21} /><strong>画面理解</strong><span>{taskModelLabel(getProfile('vision'), taskModels.overrides?.vision)} · 仅发送内容关键帧</span></label><label className={`choice selectable ${subtitle ? 'selected' : ''} ${!subtitleCount ? 'disabled' : ''}`}><input type="checkbox" checked={subtitle} disabled={!subtitleCount} onChange={(event) => setSubtitle(event.target.checked)} /><Subtitles size={21} /><strong>画面字幕 OCR</strong><span>{subtitleCount ? `${taskModelLabel(getProfile('subtitle'), taskModels.overrides?.subtitle)} · 仅处理 ${subtitleCount} 集烧录字幕` : assets.length === 1 && assets[0].subtitle_mode === 'container' ? '容器文本字幕已在本地提取，无需发送字幕图片' : '外挂字幕已在导入时解析'}</span></label></div>
         {vision && <p className="helper scene-strategy">台词整理 → 视觉分块（{taskModelLabel(getProfile('preparation'), taskModels.overrides?.preparation)}）→ 复杂片段深入理解。全部关键帧保留，连续记忆在同项目内沿用。</p>}
         <TaskModels roles={modelRoles} value={taskModels.overrides} onChange={taskModels.change} disabled={!!busy || scanning} />
+        <TaskExecution stages={executionStages} value={execution} onChange={setExecution} disabled={!!busy || scanning} connectionLimits={connectionLimits} />
         {missing.length > 0 && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中为{missing.map((role) => CAPABILITIES.find((item) => item.key === role)?.name).join('、')}分配模型。关键帧预扫描无需模型。</Alert>}
         {offline.length > 0 && <Alert tone="error">{offline.map((item) => item.title).join('、')}：原视频离线或已变化，请先定位原文件。</Alert>}
         <div className="section-row"><h3>分析范围</h3><button type="button" className="text-button" onClick={() => { setStart(0); setEnd('60'); }}>先试运行前 60 秒</button></div>

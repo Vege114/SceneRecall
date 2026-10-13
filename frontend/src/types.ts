@@ -19,6 +19,17 @@ export interface SubtitleTracks {
 export const SUBTITLE_SOURCE_LABELS = { container: '容器字幕轨', external: '外挂字幕', embedded: '画面烧录字幕 · OCR' };
 export type ProviderType = 'openai_compatible' | 'codex_cli';
 export type TaskModelRole = 'preparation' | 'vision' | 'subtitle';
+export type ExecutionStage = 'transcript' | 'preparation' | 'subtitle';
+export type ExecutionMode = 'serial' | 'parallel';
+export interface ExecutionOptions {
+  transcript: ExecutionMode;
+  preparation: ExecutionMode;
+  subtitle: ExecutionMode;
+  max_concurrency: number;
+}
+export const DEFAULT_EXECUTION: ExecutionOptions = { transcript: 'parallel', preparation: 'parallel', subtitle: 'parallel', max_concurrency: 3 };
+export const SERIAL_EXECUTION: ExecutionOptions = { transcript: 'serial', preparation: 'serial', subtitle: 'serial', max_concurrency: 1 };
+export function executionDefaults(value?: Partial<ExecutionOptions>): ExecutionOptions { return { ...DEFAULT_EXECUTION, ...value }; }
 export interface TaskModelOverride {
   provider_type: 'codex_cli';
   profile_id: string;
@@ -64,6 +75,7 @@ export function taskModelLabel(profile?: Profile, selection?: TaskModelOverride)
   return profileModelLabel(profile);
 }
 export interface Defaults {
+  execution?: ExecutionOptions;
   analysis_strategy?: 'scene-chunks-v1' | 'content-keyframes-v1';
   window_ms: number;
   frames_per_window: number;
@@ -262,6 +274,8 @@ export interface AssetDetail {
   runs: Run[];
 }
 export interface Job {
+  execution?: ExecutionOptions;
+  stages?: ('vision' | 'subtitle')[];
   task_models?: Partial<Record<TaskModelRole, { provider_type: ProviderType; profile_id: string; model: string; reasoning_effort?: string | null }>>;
   batch_id?: string;
   sampling_strategy?: string;
@@ -284,7 +298,7 @@ export interface Job {
   budget?: { max_requests?: number; max_cost?: number | null };
   uncertain_request_count?: number;
   cost_incomplete?: boolean;
-  stage_metrics?: Record<string, { request_count?: number; elapsed_ms?: number; cache_hits?: number; usage?: Record<string, number>; completed?: number; total?: number }>;
+  stage_metrics?: Record<string, { request_count?: number; elapsed_ms?: number; wall_elapsed_ms?: number; cache_hits?: number; usage?: Record<string, number>; completed?: number; total?: number }>;
   stage_progress?: Record<string, { completed: number; total?: number | null; status: 'pending' | 'running' | 'completed' }>;
   created_at: string;
 }
@@ -353,7 +367,7 @@ export const CAPABILITIES: { key: Capability; name: string; description: string;
   { key: 'decision', name: '匹配决策', description: '评估候选与问题的匹配程度，预留 Jev 接口', data: '发送搜索词与候选记录' },
   { key: 'answer', name: '结果解释', description: '基于已找到的证据组织回答（可选）', data: '发送搜索词与候选记录' },
 ];
-export const DEFAULTS: Defaults = { window_ms: 6000, frames_per_window: 4, subtitle_fps: 2, subtitle_crop: [0, 0.65, 1, 0.35], max_requests: 1000, max_cost: null };
+export const DEFAULTS: Defaults = { execution: DEFAULT_EXECUTION, window_ms: 6000, frames_per_window: 4, subtitle_fps: 2, subtitle_crop: [0, 0.65, 1, 0.35], max_requests: 1000, max_cost: null };
 export const KIND_LABELS: Record<AssetKind, string> = { movie: '电影', animation: '动画', series: '剧集' };
 
 export function keyframeReason(reason?: string): string { return ({ stable_pose: '稳定姿态', representative_pose: '代表姿态', content_change: '画面内容变化', shot_representative: '镜头代表帧' } as Record<string, string>)[reason || ''] || '内容代表帧'; }

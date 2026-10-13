@@ -4,6 +4,7 @@ import asyncio
 import copy
 import math
 import sqlite3
+import time
 from contextlib import nullcontext
 
 from . import codex_cli
@@ -13,6 +14,7 @@ from .providers import (CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, 
                         PROMPT_VERSION, SUBTITLE_PROMPT_VERSION, ProviderManager)
 from .workflows import WorkflowQueueMixin
 from .scene_jobs import SceneJobMixin
+from .execution import ReservationBusy, bounded_map, execution_width, finish_on_cancel
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -77,6 +79,8 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         self.path = library.root / "runtime" / "jobs.sqlite"
         self.task = None
         self.closed = False
+        self._reservation_events = {}
+        self._executing_jobs = set()
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
         self.init_workflows()
@@ -84,12 +88,12 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             if job["status"] in ("running", "pausing", "cancelling"):
                 job = self.recover_scene_receipt(job)
                 state = {"running": "queued", "pausing": "paused", "cancelling": "cancelled"}[job["status"]]
-                reservation = job.get("inflight_attempts", 0)
+                reservation = sum(call["attempts"] for call in job.get("inflight_calls", {}).values()) if "inflight_calls" in job else job.get("inflight_attempts", 0)
                 updates = {}
                 if reservation:
                     updates = {"request_count": job["request_count"] + reservation,
                                "uncertain_request_count": job.get("uncertain_request_count", 0) + reservation,
-                               "cost": None, "cost_incomplete": True, "inflight_attempts": 0}
+                               "cost": None, "cost_incomplete": True, "inflight_attempts": 0, "inflight_calls": {}}
                 self.update(job["id"], status=state, **updates,
                             message="已恢复中断的任务；在途请求按最多三次保守计入，实际费用待核对" if reservation else "已恢复中断的任务；复用已完成产物")
 
@@ -299,7 +303,7 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         if action == "pause" and state in ("queued", "running"):
             return self.update(job_id, status="paused" if state == "queued" else "pausing", message="将在当前步骤结束后暂停")
         if action == "cancel" and state not in ("completed", "cancelled"):
-            return self.update(job_id, status="cancelling" if state in ("running", "pausing") else "cancelled", message="正在取消；已提交的结果保留")
+            return self.update(job_id, status="cancelling" if state in ("running", "pausing", "cancelling") or job_id in self._executing_jobs else "cancelled", message="正在取消；已提交的结果保留")
         if action in ("resume", "retry") and state in ("paused", "failed", "partial", "cancelled"):
             self._check_deletion(job)
             config = job["config"]
@@ -332,17 +336,23 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             return self.update(job_id, status="queued", config=config, error=None, failures=[], message="等待恢复，复用成功结果")
         raise ValueError("当前任务状态不支持此操作")
 
+    def _pause_job(self, job_id, message):
+        draining = job_id in self._executing_jobs
+        self.update(job_id, status="pausing" if draining else "paused", message=message)
+
     def checkpoint(self, job_id: str) -> dict:
         job = self.get(job_id)
         if job["status"] in ("pausing", "paused"):
-            self.update(job_id, status="paused", message="已暂停，可继续处理")
+            if job_id not in self._executing_jobs:
+                self.update(job_id, status="paused", message="已暂停，可继续处理")
             raise StopJob()
         if job["status"] in ("cancelling", "cancelled"):
-            self.update(job_id, status="cancelled", message="已取消，已完成资料保留")
+            if job_id not in self._executing_jobs:
+                self.update(job_id, status="cancelled", message="已取消，已完成资料保留")
             raise StopJob()
         if (job["type"] == "analysis" and "subtitle" in job["config"].get("stages", [])
                 and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
-            self.update(job_id, status="paused", message="字幕来源已切换为文字字幕，旧 OCR 任务已暂停；请创建只包含画面理解的新任务")
+            self._pause_job(job_id, "字幕来源已切换为文字字幕，旧 OCR 任务已暂停；请创建只包含画面理解的新任务")
             raise StopJob()
         return job
 
@@ -351,64 +361,128 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                          if snapshot["id"] == profile["id"]), profile)
         return model_identity(self.providers.get(profile["id"])) == model_identity(original)
 
-    def before_call(self, job_id: str, profile: dict, frames=0, text_count=1, context_tokens=0):
-        job = self.checkpoint(job_id)
-        current_profile = self.providers.get(profile["id"])
-        if not self.profile_source_unchanged(job["config"], profile):
-            self.update(job_id, status="paused", message="任务所用连接类型、模型地址或名称已变化，请还原配置后继续或创建新任务")
-            raise StopJob()
-        count_budget = job["config"].get("max_requests", 1000)
-        if job["request_count"] + 3 > count_budget:
-            self.update(job_id, status="paused", message="剩余请求预算不足以预留最多三次尝试；请提高预算或创建新任务复用结果")
-            raise StopJob()
-        max_cost = job["config"].get("max_cost")
-        if max_cost:
-            if current_profile.get("provider_type") == "codex_cli":
-                self.update(job_id, status="paused", message=CODEX_COST_BUDGET_MESSAGE)
+    def before_call(self, job_id: str, profile: dict, frames=0, text_count=1, context_tokens=0,
+                    *, call_id=None, receipt_path=None, stage=None, wait_for_budget=False):
+        # Reserve retries and cost together with sibling calls in one transaction.
+        with self.library.lock:
+            job = self.checkpoint(job_id)
+            current_profile = self.providers.get(profile["id"])
+            if not self.profile_source_unchanged(job["config"], profile):
+                self._pause_job(job_id, message="任务所用连接类型、模型地址或名称已变化，请还原配置后继续或创建新任务")
                 raise StopJob()
-            if job.get("cost_incomplete"):
-                self.update(job_id, status="paused", message="供应商未返回完整费用用量；当前费用未知，请核对账单或移除费用预算后继续")
+            active = dict(job.get("inflight_calls", {}))
+            legacy = job.get("inflight_attempts", 0) if "inflight_calls" not in job else 0
+            reserved_attempts = sum(call["attempts"] for call in active.values()) + legacy
+            count_budget = job["config"].get("max_requests", 1000)
+            if job["request_count"] + reserved_attempts + 3 > count_budget:
+                if wait_for_budget and reserved_attempts and job["request_count"] + 3 <= count_budget:
+                    raise ReservationBusy()
+                self._pause_job(job_id, message="剩余请求预算不足以预留最多三次尝试；请提高预算或创建新任务复用结果")
                 raise StopJob()
-            reserve = self.estimated_call_cost(current_profile, frames, text_count, context_tokens)
-            if reserve is not None and job.get("stage") in {"transcript", "preparation", "context_refresh"}:
-                from .scene_preparation import MAX_PREPARATION_OUTPUT_TOKENS
-                reserve += ((MAX_PREPARATION_OUTPUT_TOKENS - MAX_OUTPUT_TOKENS)
-                            * current_profile["output_price_per_million"] / 1_000_000)
-            if reserve is None or (job["cost"] or 0) + reserve * 3 > max_cost:
-                self.update(job_id, status="paused", message="费用预算不足以预留下一批请求；请提高预算后继续")
-                raise StopJob()
-        self.update(job_id, inflight_attempts=3)
+            max_cost = job["config"].get("max_cost")
+            reserve = 0
+            if max_cost:
+                if current_profile.get("provider_type") == "codex_cli":
+                    self._pause_job(job_id, message=CODEX_COST_BUDGET_MESSAGE)
+                    raise StopJob()
+                if job.get("cost_incomplete"):
+                    self._pause_job(job_id, message="供应商未返回完整费用用量；当前费用未知，请核对账单或移除费用预算后继续")
+                    raise StopJob()
+                estimate = self.estimated_call_cost(current_profile, frames, text_count, context_tokens)
+                if estimate is not None and (stage or job.get("stage")) in {"transcript", "preparation", "context_refresh"}:
+                    from .scene_preparation import MAX_PREPARATION_OUTPUT_TOKENS
+                    estimate += ((MAX_PREPARATION_OUTPUT_TOKENS - MAX_OUTPUT_TOKENS)
+                                 * current_profile["output_price_per_million"] / 1_000_000)
+                reserve = (estimate or 0) * 3
+                spent = job.get("known_cost", job["cost"] or 0)
+                reserved_cost = sum(call.get("cost", 0) for call in active.values())
+                if estimate is None or spent + reserved_cost + reserve > max_cost:
+                    if wait_for_budget and active and estimate is not None and spent + reserve <= max_cost:
+                        raise ReservationBusy()
+                    self._pause_job(job_id, message="费用预算不足以预留下一批请求；请提高预算后继续")
+                    raise StopJob()
+            call_id = call_id or uid("call")
+            active[call_id] = {"attempts": 3, "cost": reserve, "receipt_path": receipt_path,
+                               "stage": stage or job.get("stage")}
+            self.update(job_id, inflight_calls=active, inflight_attempts=reserved_attempts + 3)
+            return call_id
 
-    def account(self, job_id: str, result):
-        job = self.get(job_id)
-        usage = dict(job["usage"])
-        for key, value in getattr(result, "usage", {}).items():
-            if isinstance(value, (int, float)):
-                usage[key] = usage.get(key, 0) + value
-        cost = getattr(result, "cost", None)
-        attempts = getattr(result, "request_count", 0)
-        incomplete = job.get("cost_incomplete", job["request_count"] > 0 and job["cost"] is None)
-        incomplete |= attempts > 0 and cost is None
-        known = job.get("known_cost", job["cost"] or 0) + (cost or 0)
-        total_attempts = job["request_count"] + attempts
-        self.update(job_id, usage=usage, request_count=total_attempts,
-                    cost=known if total_attempts and not incomplete else None,
-                    known_cost=known, cost_incomplete=incomplete, inflight_attempts=0)
+    async def reserve_call(self, job_id, profile, **options):
+        event = self._reservation_events.setdefault(job_id, asyncio.Event())
+        while True:
+            if self.closed:
+                raise StopJob()
+            event.clear()
+            try:
+                return self.before_call(job_id, profile, wait_for_budget=True, **options)
+            except ReservationBusy:
+                await event.wait()
+
+    def _release_reservation(self, job, call_id=None):
+        active = dict(job.get("inflight_calls", {}))
+        if call_id is None and active:
+            call_id = next(iter(active))
+        active.pop(call_id, None)
+        return {"inflight_calls": active,
+                "inflight_attempts": sum(call["attempts"] for call in active.values())}
+
+    def _wake_reservations(self, job_id):
+        event = self._reservation_events.get(job_id)
+        if event:
+            event.set()
+
+    def account(self, job_id: str, result, call_id=None):
+        with self.library.lock:
+            job = self.get(job_id)
+            usage = dict(job["usage"])
+            for key, value in getattr(result, "usage", {}).items():
+                if isinstance(value, (int, float)):
+                    usage[key] = usage.get(key, 0) + value
+            cost = getattr(result, "cost", None)
+            attempts = getattr(result, "request_count", 0)
+            incomplete = job.get("cost_incomplete", job["request_count"] > 0 and job["cost"] is None)
+            incomplete |= attempts > 0 and cost is None
+            known = job.get("known_cost", job["cost"] or 0) + (cost or 0)
+            total_attempts = job["request_count"] + attempts
+            self.update(job_id, usage=usage, request_count=total_attempts,
+                        cost=known if total_attempts and not incomplete else None,
+                        known_cost=known, cost_incomplete=incomplete,
+                        **self._release_reservation(job, call_id))
+        self._wake_reservations(job_id)
 
     async def invoke_profile(self, profile: dict, method, *args):
         scope = getattr(self.providers, "use_profile", None)
         with scope(profile) if scope else nullcontext():
             return await method(profile["id"], *args)
 
-    async def call(self, job_id: str, profile: dict, method, *args, frames=0, context_tokens=0):
-        self.before_call(job_id, profile, frames, context_tokens=context_tokens)
-        try:
-            result = await self.invoke_profile(profile, method, *args)
-        except Exception as exc:
-            self.account(job_id, exc)
-            raise
-        self.account(job_id, result)
-        return result.data
+    async def call(self, job_id: str, profile: dict, method, *args, frames=0, context_tokens=0,
+                   receipt_path=None, receipt_key=None):
+        job = self.checkpoint(job_id)
+        call_id = uid("call")
+        receipt_key = receipt_key or call_id
+        receipt_path = receipt_path or (self.library.root / "runtime" / "call-receipts" / job_id / f"{receipt_key}.json")
+        cached = read_json(receipt_path)
+        if cached is not None:
+            self._account_scene_receipt(job_id, cached)
+            return copy.deepcopy(cached["data"])
+        await self.reserve_call(job_id, profile, call_id=call_id,
+            receipt_path=str(receipt_path.relative_to(self.library.root)), frames=frames,
+            context_tokens=context_tokens)
+        async def perform():
+            started = time.monotonic()
+            try:
+                result = await self.invoke_profile(profile, method, *args)
+            except Exception as exc:
+                self.account(job_id, exc, call_id)
+                raise
+            receipt = {"receipt_id": receipt_key, "call_id": call_id, "job_id": job_id,
+                       "stage": job.get("stage", "unknown"), "data": result.data,
+                       "usage": result.usage, "request_count": result.request_count, "cost": result.cost,
+                       "elapsed_ms": round((time.monotonic() - started) * 1000)}
+            atomic_json(receipt_path, receipt)
+            self._account_scene_receipt(job_id, receipt)
+            return copy.deepcopy(result.data)
+        return await finish_on_cancel(perform())
 
     async def start(self):
         self.closed = False
@@ -416,6 +490,8 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
 
     async def stop(self):
         self.closed = True
+        for event in self._reservation_events.values():
+            event.set()
         if self.task:
             self.task.cancel()
             try:
@@ -442,6 +518,7 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                 self.update(job_id, status="cancelled", stale_deletion=True, message=str(exc))
                 return
             job = self.update(job_id, status="running", error=None)
+            self._executing_jobs.add(job_id)
         try:
             if job["type"] == "analysis":
                 await self.analyze(job_id)
@@ -461,7 +538,13 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             self.update(job_id, status="partial" if failures else "completed", progress=1,
                         message=f"完成，{len(failures)} 个单元失败，可重试" if failures else "处理完成")
         except StopJob:
-            pass
+            stopped = self.get(job_id)
+            if stopped["status"] in {"pausing", "paused"}:
+                # All owned units have drained before terminal status permits
+                # resume, move or deletion through the public API.
+                self.update(job_id, status="paused")
+            elif stopped["status"] in {"cancelling", "cancelled"}:
+                self.update(job_id, status="cancelled", message="已取消，已完成资料保留")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -469,6 +552,7 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             message = error_message(exc)
             self.update(job_id, status="failed", error=message, message=message)
         finally:
+            self._executing_jobs.discard(job_id)
             job = self.get(job_id)
             if job.get("asset_id") and job["type"] == "analysis":
                 self.library.save_run(job["asset_id"], job["run_id"], {k: job[k] for k in
@@ -591,7 +675,9 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                     # also consume the normal image reserve.
                     data = await self.call(job_id, profile, self.providers.analyze, frames, window["start_ms"], window["end_ms"],
                                            context, frames=len(frames) + len(context["reference_frames"]),
-                                           context_tokens=len(context_text.encode("utf-8")) + CHARACTER_INSTRUCTION_TOKENS)
+                                           context_tokens=len(context_text.encode("utf-8")) + CHARACTER_INSTRUCTION_TOKENS,
+                                           receipt_path=directory / "analyses" / run_id / "vision-receipts" / f"{cache_key}.json",
+                                           receipt_key="vision:" + cache_key)
                     allowed = {f["id"] for f in frames}
                     if not set(data.get("evidence_frame_ids", [])).issubset(allowed):
                         raise ValueError("模型引用了不存在的证据帧")
@@ -628,11 +714,10 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                 self.update(job_id, failures=self.get(job_id)["failures"] + [{"unit": window["id"], "message": error_message(exc)}])
             completed += 1
             self.update(job_id, completed=completed, progress=completed/max(total, 1))
-        ocr_frames = []
-        all_ocr_ok = True
-        for batch_start in range(0, len(subtitle_times), 8):
+        ocr_started = time.monotonic()
+        async def ocr_batch(index, times):
             self.checkpoint(job_id)
-            times = subtitle_times[batch_start:batch_start+8]
+
             profile = config["profile_snapshots"]["subtitle"]
             cache_key = digest([self.library.get_asset(asset_id)["fingerprint"], times, min(end, times[-1] + interval),
                                 config["subtitle_crop"], model_identity(profile), SUBTITLE_PROMPT_VERSION, "subtitle"])
@@ -660,7 +745,10 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                         raise ValueError("字幕批次没有落在分析范围内的实际视频帧")
                     frame_metadata = {frame["id"]: frame for frame in frames}
                     candidates = candidate_frames(frames)
-                    data = await self.call(job_id, profile, self.providers.recognize_subtitles, candidates, frames=len(candidates))
+                    data = await self.call(job_id, profile, self.providers.recognize_subtitles, candidates,
+                                           frames=len(candidates),
+                                           receipt_path=directory / "analyses" / run_id / "subtitle-receipts" / f"{cache_key}.json",
+                                           receipt_key="subtitle:" + cache_key)
                     by_id = {r["frame_id"]: r for r in data}
                     if set(by_id) != {f["id"] for f in candidates}:
                         raise ValueError("字幕模型未逐帧返回结果；空字幕也须返回空行列表")
@@ -674,17 +762,27 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                                            "end_ms": original.get("end_ms", min(end, original["at_ms"] + interval)),
                                            "lines": result["lines"]})
                     atomic_json(cache_path, cached)
-                ocr_frames.extend(cached)
                 checkpoints = self.get(job_id)["checkpoints"]
                 if checkpoint_key not in checkpoints:
                     self.update(job_id, checkpoints=checkpoints + [checkpoint_key])
             except StopJob:
                 raise
             except Exception as exc:
-                all_ocr_ok = False
                 self.update(job_id, failures=self.get(job_id)["failures"] + [{"unit": checkpoint_key, "message": error_message(exc)}])
+                return None
+            return cached
+        batches = [subtitle_times[offset:offset + 8] for offset in range(0, len(subtitle_times), 8)]
+        def ocr_done(index, result):
+            nonlocal completed
             completed += 1
-            self.update(job_id, completed=completed, progress=completed/max(total, 1))
+            self.update(job_id, completed=completed, progress=completed / max(total, 1))
+        results = await bounded_map(batches, ocr_batch,
+            execution_width(config, "subtitle", self.providers.get(config["profile_snapshots"]["subtitle"]["id"])) if batches else 1,
+            lambda: self.checkpoint(job_id), ocr_done)
+        ocr_frames = [frame for result in results if result is not None for frame in result]
+        all_ocr_ok = all(result is not None for result in results)
+        if batches:
+            self._scene_metric(job_id, "subtitle", wall_elapsed=time.monotonic() - ocr_started)
         if subtitle_times and all_ocr_ok:
             self.checkpoint(job_id)
             cues = merge_ocr_frames(canonical_ocr_frames(ocr_frames, start, end, interval), interval)

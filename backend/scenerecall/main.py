@@ -21,7 +21,7 @@ from .jobs import JobQueue
 from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
 from .models import (
     AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput,
-    CharacterMergeInput, CharacterReanalysisInput, DeepenInput, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
+    CharacterMergeInput, CharacterReanalysisInput, DeepenInput, ExecutionOptions, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
 from .providers import ProviderManager
 from .search import SearchEngine
@@ -29,7 +29,9 @@ from .scenes import SceneStore
 
 DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", "embedding", "query", "decision", "answer")},
             "defaults": {"window_ms": 6000, "frames_per_window": 4, "subtitle_fps": 2,
-                         "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None}}
+                         "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None,
+                         "execution": {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel",
+                                       "max_concurrency": 3}}}
 
 
 def create_app(data_dir: Path | None = None, start_worker=True, providers=None, token=None, allowed_ports=None):
@@ -100,8 +102,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     def settings():
         value = read_json(library.root / "private" / "settings.json", {})
+        defaults = {**DEFAULTS["defaults"], **value.get("defaults", {})}
+        defaults["execution"] = ExecutionOptions.model_validate({
+            **DEFAULTS["defaults"]["execution"], **defaults.get("execution", {})}).model_dump()
         return {"bindings": {**DEFAULTS["bindings"], **value.get("bindings", {})},
-                "defaults": {**DEFAULTS["defaults"], **value.get("defaults", {})}}
+                "defaults": defaults}
 
     def enrich(record):
         record = dict(record)
@@ -114,7 +119,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     def public_job(job):
         return {**{key: value for key, value in job.items() if key not in {
-                    "config", "checkpoints", "pending_scene_receipt", "scene_receipts"}},
+                    "config", "checkpoints", "pending_scene_receipt", "scene_receipts", "inflight_calls", "inflight_attempts"}},
                 **({"sampling_strategy": job["config"].get("sampling_strategy", "uniform-v1")}
                    if job["type"] == "analysis" and "vision" in job["config"].get("stages", []) else {}),
                 **({"chunk_id": job["config"]["deepen_chunk_id"]} if job["config"].get("deepen_chunk_id") else {}),
@@ -122,6 +127,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     "profile_id": profile["id"], "model": profile.get("model", ""),
                     "reasoning_effort": profile.get("reasoning_effort")}
                     for stage, profile in job["config"].get("profile_snapshots", {}).items()},
+                **({"execution": ExecutionOptions.model_validate(job["config"].get("execution", {})).model_dump(),
+                    "stages": job["config"].get("stages", []),
+                    "analysis_strategy": job["config"].get("analysis_strategy", "content-keyframes-v1")}
+                   if job["type"] == "analysis" else {}),
                 "budget": {"max_requests": job["config"].get("max_requests", 1000), "max_cost": job["config"].get("max_cost")}}
 
     def asset_view(asset):
@@ -172,6 +181,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 raise ValueError(f"所选模型未声明 {capability} 能力")
         defaults = {**current["defaults"], **payload.get("defaults", {})}
         AnalysisInput(asset_id="validation", **defaults)
+        defaults["execution"] = ExecutionOptions.model_validate({
+            **current["defaults"]["execution"], **defaults["execution"]}).model_dump()
         result = {"bindings": bindings, "defaults": defaults}
         atomic_json(library.root / "private" / "settings.json", result)
         return result
@@ -354,6 +365,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     "stages": ["vision"], "start_ms": 0, "end_ms": asset["duration_ms"], "force": True,
                     "keyframe_plan_id": payload.keyframe_plan_ids.get(asset["id"]),
                     "model_overrides": payload.model_overrides,
+                    "execution": (payload.execution.model_dump() if payload.execution is not None
+                                  else current["defaults"]["execution"]),
                     "max_requests": payload.max_requests, "max_cost": payload.max_cost})
                 _, config = queue.validate(request, current)
                 config["character_reanalysis"] = True

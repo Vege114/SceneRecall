@@ -302,6 +302,11 @@ class WorkflowQueueMixin:
     def add_batch(self, request, settings):
         payload = request.model_dump()
         for item, request_item in zip(payload["items"], request.items, strict=True):
+            # The default serial schedule adds no new behavior to older requests.
+            # Keep their durable idempotency fingerprints valid after upgrading.
+            from .models import ExecutionOptions
+            if item.get("execution") == ExecutionOptions().model_dump():
+                item.pop("execution", None)
             # Empty selections keep pre-selection request fingerprints reusable.
             if not item.get("model_overrides"):
                 item.pop("model_overrides", None)

@@ -1,4 +1,4 @@
-"""Sequential, evidence-bound scene preparation and selective deep analysis.
+"""Evidence-bound scene preparation and selective deep analysis.
 
 Provider receipts are durable before accounting/publication. A retry replays the
 same bounded input memory, never a later automatically enriched character state.
@@ -9,7 +9,8 @@ import copy
 import math
 import time
 
-from .library import atomic_json, digest, read_json
+from .library import atomic_json, digest, read_json, uid
+from .execution import bounded_map, execution_width, finish_on_cancel
 
 STRATEGY = "scene-chunks-v1"
 CORE_FRAMES = 56
@@ -193,10 +194,12 @@ class SceneJobMixin:
         self.search.sync_asset(self.library.records(asset_id), asset_id=asset_id)
         self._scene_metric(job_id, "index", elapsed=time.monotonic() - started)
 
-    def _scene_metric(self, job_id, stage, *, elapsed=0, requests=0, cache=0, usage=None):
+    def _scene_metric(self, job_id, stage, *, elapsed=0, requests=0, cache=0, usage=None, wall_elapsed=None):
         metrics = copy.deepcopy(self.get(job_id).get("stage_metrics", {}))
         item = metrics.setdefault(stage, {"request_count": 0, "elapsed_ms": 0, "cache_hits": 0, "usage": {}})
         item["elapsed_ms"] += round(elapsed * 1000)
+        if wall_elapsed is not None:
+            item["wall_elapsed_ms"] = round(wall_elapsed * 1000)
         item["request_count"] += requests
         item["cache_hits"] += cache
         for key, value in (usage or {}).items():
@@ -205,37 +208,47 @@ class SceneJobMixin:
         self.update(job_id, stage_metrics=metrics)
 
     def _account_scene_receipt(self, job_id, receipt):
-        job = self.get(job_id)
-        if receipt.get("job_id") != job_id or receipt["receipt_id"] in job.get("scene_receipts", []):
-            return
-        usage = dict(job.get("usage", {}))
-        for key, value in receipt["usage"].items():
-            if isinstance(value, (int, float)):
-                usage[key] = usage.get(key, 0) + value
-        count, cost = receipt["request_count"], receipt["cost"]
-        incomplete = job.get("cost_incomplete", False) or (count > 0 and cost is None)
-        known = job.get("known_cost", 0) + (cost or 0)
-        metrics = copy.deepcopy(job.get("stage_metrics", {}))
-        item = metrics.setdefault(receipt["stage"], {"request_count": 0, "elapsed_ms": 0, "cache_hits": 0, "usage": {}})
-        item["request_count"] += count
-        item["elapsed_ms"] += receipt["elapsed_ms"]
-        for key, value in receipt["usage"].items():
-            if isinstance(value, (int, float)):
-                item["usage"][key] = item["usage"].get(key, 0) + value
-        self.update(job_id, usage=usage, request_count=job["request_count"] + count,
-                    known_cost=known, cost=None if incomplete else known, cost_incomplete=incomplete,
-                    inflight_attempts=0, pending_scene_receipt=None, stage_metrics=metrics,
-                    scene_receipts=job.get("scene_receipts", []) + [receipt["receipt_id"]])
+        with self.library.lock:
+            job = self.get(job_id)
+            if receipt.get("job_id") != job_id or receipt["receipt_id"] in job.get("scene_receipts", []):
+                return
+            usage = dict(job.get("usage", {}))
+            for key, value in receipt["usage"].items():
+                if isinstance(value, (int, float)):
+                    usage[key] = usage.get(key, 0) + value
+            count, cost = receipt["request_count"], receipt["cost"]
+            incomplete = job.get("cost_incomplete", False) or (count > 0 and cost is None)
+            known = job.get("known_cost", 0) + (cost or 0)
+            metrics = copy.deepcopy(job.get("stage_metrics", {}))
+            item = metrics.setdefault(receipt["stage"], {"request_count": 0, "elapsed_ms": 0, "cache_hits": 0, "usage": {}})
+            item["request_count"] += count
+            item["elapsed_ms"] += receipt["elapsed_ms"]
+            for key, value in receipt["usage"].items():
+                if isinstance(value, (int, float)):
+                    item["usage"][key] = item["usage"].get(key, 0) + value
+            released = self._release_reservation(job, receipt.get("call_id"))
+            self.update(job_id, usage=usage, request_count=job["request_count"] + count,
+                        known_cost=known, cost=None if incomplete else known, cost_incomplete=incomplete,
+                        pending_scene_receipt=None, stage_metrics=metrics, **released,
+                        scene_receipts=job.get("scene_receipts", []) + [receipt["receipt_id"]])
+        self._wake_reservations(job_id)
 
     def recover_scene_receipt(self, job):
+        from .library import confined_path
+        # Each parallel call owns its receipt path. Recover durable successes
+        # before conservatively accounting only genuinely unresolved calls.
+        for reservation in list(job.get("inflight_calls", {}).values()):
+            pending = reservation.get("receipt_path")
+            if pending:
+                receipt = read_json(confined_path(self.library.root, pending))
+                if receipt and receipt.get("job_id") == job["id"]:
+                    self._account_scene_receipt(job["id"], receipt)
         pending = job.get("pending_scene_receipt")
-        if pending:
-            from .library import confined_path
+        if pending and job.get("asset_id"):
             receipt = read_json(confined_path(self.library.asset_dir(job["asset_id"]), pending))
             if receipt and receipt.get("job_id") == job["id"]:
                 self._account_scene_receipt(job["id"], receipt)
-                return self.get(job["id"])
-        return job
+        return self.get(job["id"])
 
     async def _scene_call(self, job_id, stage, unit, profile, method, args, *, images=0):
         from .jobs import model_identity
@@ -270,21 +283,26 @@ class SceneJobMixin:
             self._scene_metric(job_id, stage, cache=1)
             return copy.deepcopy(receipt["data"])
         self.update(job_id, stage=stage, pending_scene_receipt=str(output.relative_to(root)))
-        self.before_call(job_id, profile, frames=images, context_tokens=encoded_size(canonical(args)))
-        started = time.monotonic()
-        try:
-            result = await self.invoke_profile(profile, method, *args)
-        except Exception as exc:
-            self.account(job_id, exc)
-            self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
-                               requests=getattr(exc, "request_count", 0), usage=getattr(exc, "usage", {}))
-            raise
-        receipt = {"receipt_id": key, "job_id": job_id, "stage": stage, "data": result.data,
-                   "usage": result.usage, "request_count": result.request_count, "cost": result.cost,
-                   "elapsed_ms": round((time.monotonic() - started) * 1000)}
-        atomic_json(output, receipt)
-        self._account_scene_receipt(job_id, receipt)
-        return copy.deepcopy(result.data)
+        call_id = uid("call")
+        await self.reserve_call(job_id, profile, call_id=call_id, stage=stage, frames=images,
+                                receipt_path=str(output.relative_to(self.library.root)),
+                                context_tokens=encoded_size(canonical(args)))
+        async def perform():
+            started = time.monotonic()
+            try:
+                result = await self.invoke_profile(profile, method, *args)
+            except Exception as exc:
+                self.account(job_id, exc, call_id)
+                self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
+                                   requests=getattr(exc, "request_count", 0), usage=getattr(exc, "usage", {}))
+                raise
+            receipt = {"receipt_id": key, "call_id": call_id, "job_id": job_id, "stage": stage, "data": result.data,
+                       "usage": result.usage, "request_count": result.request_count, "cost": result.cost,
+                       "elapsed_ms": round((time.monotonic() - started) * 1000)}
+            atomic_json(output, receipt)
+            self._account_scene_receipt(job_id, receipt)
+            return copy.deepcopy(result.data)
+        return await finish_on_cancel(perform())
 
     def estimate_scenes(self, config, plan):
         from .scenes import SceneStore
@@ -478,20 +496,77 @@ class SceneJobMixin:
             total = math.ceil(len(frames) / CORE_FRAMES)
             self._scene_progress(job_id, "transcript", total=len(batches))
             self._scene_progress(job_id, "preparation", total=total)
+            transcript_started = time.monotonic()
             segments, unresolved = [], []
-            for index, batch in enumerate(batches):
+            transcript_width = execution_width(config, "transcript", self.providers.get(prep_profile["id"]))
+            if (config.get("execution") or {}).get("transcript") == "parallel":
+                frozen_prior = bounded_memory(prior, [])
+                async def prepare_transcript(index, batch):
+                    previous = batches[index - 1][-20:] if index else []
+                    previous = copy.deepcopy(previous)
+                    while previous and encoded_size(previous) > 6000:
+                        previous.pop(0)
+                    story = {"prior": copy.deepcopy(frozen_prior), "previous_cues": previous,
+                             "execution_mode": "parallel", "previous_segments": [], "unresolved": [],
+                             "notice": "并行批次只共享已冻结的前序记忆与原始相邻台词；本组之外的台词仅作上下文，不应写入本组证据。"}
+                    self.update(job_id, message=f"并行台词预理解：第 {index + 1}/{len(batches)} 组")
+                    return await self._scene_call(job_id, "transcript", str(index), prep_profile,
+                        self.providers.prepare_subtitles, [batch, story])
                 self._scene_progress(job_id, "transcript", status="running")
-                self.update(job_id, message=f"台词预理解：第 {index + 1} 组")
-                story = {"prior": bounded_memory(prior, []), "previous_segments": segments[-6:], "unresolved": unresolved[-8:]}
-                result = await self._scene_call(job_id, "transcript", str(index), prep_profile,
-                    self.providers.prepare_subtitles, [batch, story])
-                segments.extend(result["segments"])
-                unresolved = result.get("unresolved", [])
-                self._scene_progress(job_id, "transcript", completed=index + 1)
+                finished = 0
+                def transcript_done(index, result):
+                    nonlocal finished
+                    finished += 1
+                    self._scene_progress(job_id, "transcript", completed=finished)
+                results = await bounded_map(batches, prepare_transcript, transcript_width,
+                    lambda: self.checkpoint(job_id), transcript_done)
+                for result in results:
+                    segments.extend(result["segments"])
+                    unresolved.extend(result.get("unresolved", []))
+            else:
+                for index, batch in enumerate(batches):
+                    self._scene_progress(job_id, "transcript", status="running")
+                    self.update(job_id, message=f"台词预理解：第 {index + 1} 组")
+                    story = {"prior": bounded_memory(prior, []), "previous_segments": segments[-6:], "unresolved": unresolved[-8:]}
+                    result = await self._scene_call(job_id, "transcript", str(index), prep_profile,
+                        self.providers.prepare_subtitles, [batch, story])
+                    segments.extend(result["segments"])
+                    unresolved = result.get("unresolved", [])
+                    self._scene_progress(job_id, "transcript", completed=index + 1)
+            self._scene_metric(job_id, "transcript", wall_elapsed=time.monotonic() - transcript_started)
             chunks = []
             self.update(job_id, total=total, completed=0)
             frame_lookup = {f["id"]: f for f in frames}
-            for index, offset in enumerate(range(0, len(frames), CORE_FRAMES)):
+            preparation_started = time.monotonic()
+            offsets = list(range(0, len(frames), CORE_FRAMES))
+            prepared = None
+            parallel_preparation = (config.get("execution") or {}).get("preparation") == "parallel"
+            if parallel_preparation:
+                frozen_memory = {**bounded_memory(prior, []), "execution_mode": "parallel",
+                    "notice": "并行分块只共享已冻结的前序记忆；边界参考帧属于之前的时间范围，不能写成当前片段的事实。"}
+                frozen_characters = self._scene_context(asset_id, config)
+                async def prepare_batch(index, offset):
+                    core = frames[offset:offset + CORE_FRAMES]
+                    context_frames = frames[max(0, offset - CONTEXT_FRAMES):offset]
+                    a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
+                    b = frames[offset + CORE_FRAMES]["at_ms"] if offset + CORE_FRAMES < len(frames) else config["end_ms"]
+                    self.update(job_id, message=f"并行视觉分块与简要索引：第 {index + 1}/{total} 组")
+                    return await self._scene_call(job_id, "preparation", str(index), prep_profile,
+                        self.providers.prepare_visual, [core, context_frames, subtitle_context(cues, segments, a, b),
+                            copy.deepcopy(frozen_memory), copy.deepcopy(frozen_characters)],
+                        images=math.ceil((len(core) + len(context_frames)) / 16))
+                finished = 0
+                def preparation_done(index, result):
+                    nonlocal finished
+                    finished += 1
+                    self._scene_progress(job_id, "preparation", completed=finished)
+                    self.update(job_id, completed=finished, progress=finished / max(total, 1) * .5)
+                self._scene_progress(job_id, "preparation", status="running")
+                prepared = await bounded_map(offsets, prepare_batch,
+                    execution_width(config, "preparation", self.providers.get(prep_profile["id"])),
+                    lambda: self.checkpoint(job_id), preparation_done)
+
+            for index, offset in enumerate(offsets):
                 self.checkpoint(job_id)
                 self._scene_context(asset_id, config)
                 core, context_frames = frames[offset:offset + CORE_FRAMES], frames[max(0, offset - CONTEXT_FRAMES):offset]
@@ -499,12 +574,16 @@ class SceneJobMixin:
                 b = frames[offset + CORE_FRAMES]["at_ms"] if offset + CORE_FRAMES < len(frames) else config["end_ms"]
                 local_cues = [c for c in cues if c["end_ms"] > a and c["start_ms"] < b]
                 sub_context = subtitle_context(cues, segments, a, b)
-                self._scene_progress(job_id, "preparation", status="running")
-                self.update(job_id, message=f"视觉分块与简要索引：{index + 1}/{total}")
-                result = await self._scene_call(job_id, "preparation", str(index), prep_profile,
-                    self.providers.prepare_visual, [core, context_frames, sub_context, memory_for(chunks),
-                                                   self._scene_context(asset_id, config)],
-                    images=math.ceil((len(core) + len(context_frames)) / 16))
+                if prepared is not None:
+                    self.update(job_id, message=f"整理已完成的视觉分块：{index + 1}/{total}")
+                    result = prepared[index]
+                else:
+                    self._scene_progress(job_id, "preparation", status="running")
+                    self.update(job_id, message=f"视觉分块与简要索引：{index + 1}/{total}")
+                    result = await self._scene_call(job_id, "preparation", str(index), prep_profile,
+                        self.providers.prepare_visual, [core, context_frames, sub_context, memory_for(chunks),
+                                                       self._scene_context(asset_id, config)],
+                        images=math.ceil((len(core) + len(context_frames)) / 16))
                 for number, raw in enumerate(result["chunks"]):
                     chosen = [frame_lookup[fid] for fid in raw["frame_ids"]]
                     start = a if number == 0 else chosen[0]["at_ms"]
@@ -519,7 +598,8 @@ class SceneJobMixin:
                              "understanding_level": "initial", "dependencies": dependencies,
                              "provenance": {"strategy": STRATEGY, "keyframe_plan_id": plan["id"],
                                             "profile_id": prep_profile["id"], "model": prep_profile.get("model", "")},
-                             "uncertainties": result.get("unresolved", []), "memory_before": memory_for(chunks)}
+                             "uncertainties": result.get("unresolved", []),
+                             "memory_before": copy.deepcopy(frozen_memory) if parallel_preparation else memory_for(chunks)}
                     # Keep transcript-only semantic coverage even when sparse frames
                     # required a bounded cue sample for the visual model.
                     own_cues = set(chunk["subtitle_ids"])
@@ -546,8 +626,10 @@ class SceneJobMixin:
                         chunk["representative_frame_ids"] = reps if len(reps) <= 8 else reps[:7] + [reps[-1]]
                     chunk["memory_after"] = memory_for(chunks + [chunk])
                     chunks.append(chunk)
-                self._scene_progress(job_id, "preparation", completed=index + 1)
-                self.update(job_id, completed=index + 1, progress=(index + 1) / max(total, 1) * .5)
+                if prepared is None:
+                    self._scene_progress(job_id, "preparation", completed=index + 1)
+                    self.update(job_id, completed=index + 1, progress=(index + 1) / max(total, 1) * .5)
+            self._scene_metric(job_id, "preparation", wall_elapsed=time.monotonic() - preparation_started)
             if not chunks:
                 raise ValueError("此范围没有可分析的关键帧")
             link_similar_scenes(chunks)

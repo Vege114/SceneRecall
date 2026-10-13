@@ -71,8 +71,18 @@ class TaskModelSelection(Contract):
     model_overrides: dict[Literal["preparation", "vision", "subtitle"], TaskModelOverride] = Field(default_factory=dict)
 
 
+class ExecutionOptions(Contract):
+    """Per-stage scheduling; old requests and persisted jobs retain serial semantics."""
+
+    transcript: Literal["serial", "parallel"] = "serial"
+    preparation: Literal["serial", "parallel"] = "serial"
+    subtitle: Literal["serial", "parallel"] = "serial"
+    max_concurrency: int = Field(default=3, ge=1, le=8, strict=True)
+
+
 class AnalysisInput(TaskModelSelection):
     asset_id: str
+    execution: ExecutionOptions = Field(default_factory=ExecutionOptions)
     analysis_strategy: Literal["scene-chunks-v1", "content-keyframes-v1"] | None = None
     keyframe_plan_id: str | None = None
     stages: list[Literal["vision", "subtitle"]] = Field(default_factory=lambda: ["vision"])
@@ -146,6 +156,7 @@ class CharacterMergeInput(Contract):
 
 class CharacterReanalysisInput(TaskModelSelection):
     scope: Literal["asset", "series"] = "asset"
+    execution: ExecutionOptions | None = None
     max_requests: int = Field(default=1000, ge=1, le=100000, strict=True)
     max_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     expected_revision: int | None = Field(default=None, ge=0, strict=True)

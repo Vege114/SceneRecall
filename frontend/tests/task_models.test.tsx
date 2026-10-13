@@ -247,7 +247,7 @@ describe('All analysis entry points keep task selections', () => {
     await user.click(screen.getByText('任务创建时的模型与思考等级'));
     expect(screen.getByText('深入理解 · Codex CLI · test-deep · 思考等级：high')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '重试' }));
-    expect(screen.getByText('继续使用各任务创建时的模型与思考等级。')).toBeTruthy();
+    expect(screen.getByText('继续使用各任务创建时的模型、思考等级与执行方式。')).toBeTruthy();
     expect(within(screen.getByRole('dialog')).queryByRole('combobox')).toBeNull();
     await user.click(screen.getByRole('button', { name: '继续任务' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -265,6 +265,9 @@ describe('All analysis entry points keep task selections', () => {
     mount(<CharacterProfiles asset={asset} onSeek={vi.fn()} onSaved={vi.fn().mockResolvedValue(undefined)} />, app);
     await user.click(await screen.findByRole('button', { name: '按新版档案重新识别' }));
     expect(screen.queryByLabelText('分块与简要索引模型设置')).toBeNull();
+    expect(screen.queryByLabelText('台词整理执行方式')).toBeNull();
+    expect(screen.queryByLabelText('视觉分块执行方式')).toBeNull();
+    expect(screen.queryByLabelText('并发请求上限')).toBeNull();
     expect((screen.getByLabelText(/^每个视频费用上限/) as HTMLInputElement).disabled).toBe(false);
     await user.click(screen.getByRole('button', { name: '估算重新识别用量' }));
     await waitFor(() => expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false));
