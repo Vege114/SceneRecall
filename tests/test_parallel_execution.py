@@ -369,6 +369,37 @@ async def test_parallel_context_is_frozen_even_when_live_cap_is_one(scene_worker
 
 
 @pytest.mark.asyncio
+async def test_manual_concurrency_above_eight_reaches_requested_overlap(scene_worker, monkeypatch):
+    fixture = scene_worker(110)
+    dense_dialogue(fixture, 1100)
+    original = fixture.provider.prepare_subtitles
+    get = fixture.provider.get
+    monkeypatch.setattr(fixture.provider, "get", lambda identity: {**get(identity), "max_concurrency": 32})
+    entered, active, peak = 0, 0, 0
+    nine_started = asyncio.Event()
+
+    async def concurrent(*args):
+        nonlocal entered, active, peak
+        entered += 1
+        active += 1
+        peak = max(peak, active)
+        if entered == 9:
+            nine_started.set()
+        await asyncio.wait_for(nine_started.wait(), 2)
+        result = await original(*args)
+        active -= 1
+        return result
+
+    monkeypatch.setattr(fixture.provider, "prepare_subtitles", concurrent)
+    completed = await execute(fixture, enqueue(fixture, execution=options(
+        preparation="serial", max_concurrency=9)))
+    assert completed["status"] == "completed", completed
+    assert peak == 9 and entered == 11
+    assert completed["config"]["execution"]["max_concurrency"] == 9
+    assert completed["request_count"] == 13
+
+
+@pytest.mark.asyncio
 async def test_controlled_latency_parallel_benchmark_reports_wall_time(scene_worker):
     serial, parallel = scene_worker(170), scene_worker(170)
     for fixture in (serial, parallel):

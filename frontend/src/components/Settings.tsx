@@ -4,7 +4,7 @@ import { api, message, post } from '../api';
 import { useApp } from '../context';
 import { CAPABILITIES, DEFAULTS, executionDefaults, profileModelLabel, type Capability, type CodexStatus, type Profile, type ProviderType, type Settings as SettingsType } from '../types';
 import { Alert, Empty, Field, Modal, PageHeader, Spinner } from './ui';
-import TaskExecution from './TaskExecution';
+import TaskExecution, { ConcurrencyInput } from './TaskExecution';
 
 function CodexConnectionStatus() {
   const [status, setStatus] = useState<CodexStatus | null>(null);
@@ -83,7 +83,7 @@ function ProfileModal({ profile, onClose }: { profile?: Profile; onClose: () => 
       })}</div>
       {isCodex && <p className="helper">Codex CLI 不提供语义向量能力；可另建 API 连接用于向量检索。</p>}
       {bindingConflict && <Alert>{bindingConflict}</Alert>}
-      <details className="advanced"><summary>{isCodex ? '连接参数' : '连接参数与费用单价'}</summary><div className="form-grid"><Field label="超时（秒）"><input type="number" min="5" max="600" value={timeout} onChange={(e) => setTimeout(Number(e.target.value))} /></Field><Field label="最大并发"><input type="number" min="1" max="16" value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))} /></Field>{!isCodex && <><Field label="输入单价（USD / 百万 token）"><input type="number" min="0" step="0.001" value={inputPrice} onChange={(e) => setInputPrice(e.target.value)} placeholder="未知" /></Field><Field label="输出单价（USD / 百万 token）"><input type="number" min="0" step="0.001" value={outputPrice} onChange={(e) => setOutputPrice(e.target.value)} placeholder="未知" /></Field></>}</div></details>
+      <details className="advanced"><summary>{isCodex ? '连接参数' : '连接参数与费用单价'}</summary><div className="form-grid"><Field label="超时（秒）"><input type="number" min="5" max="600" value={timeout} onChange={(e) => setTimeout(Number(e.target.value))} /></Field><Field label="最大并发" hint="自行设置此连接的并发请求上限；实际并发同时受任务设置、待处理批次与服务响应限制。"><ConcurrencyInput label="最大并发" value={concurrency} onChange={setConcurrency} disabled={busy} /></Field>{!isCodex && <><Field label="输入单价（USD / 百万 token）"><input type="number" min="0" step="0.001" value={inputPrice} onChange={(e) => setInputPrice(e.target.value)} placeholder="未知" /></Field><Field label="输出单价（USD / 百万 token）"><input type="number" min="0" step="0.001" value={outputPrice} onChange={(e) => setOutputPrice(e.target.value)} placeholder="未知" /></Field></>}</div></details>
       {!isCodex && <Alert tone="info">只有执行对应能力时，本机后端才会向这个地址发送必要的画面或文本。模型支持情况可在保存后按能力测试。</Alert>}
       {error && <Alert tone="error">{error}</Alert>}
     </div><footer className="modal-footer"><span><ShieldCheck size={14} />{isCodex ? '登录状态由本机 Codex CLI 管理' : '凭据仅交由本机后端使用'}</span><button type="submit" className="button primary" disabled={busy || !!bindingConflict}>{busy ? <Spinner label="保存中" /> : <><Save size={16} />保存连接</>}</button></footer></form>

@@ -80,13 +80,57 @@ describe('Stage execution selection', () => {
     expect(items.map((item: { execution: ExecutionOptions; stages: string[] }) => ({ execution: item.execution, stages: item.stages }))).toEqual(selected.map(() => ({ execution: { ...DEFAULT_EXECUTION, subtitle: 'serial' }, stages: ['subtitle'] })));
   });
 
-  it('rejects concurrency outside 1–8 before estimating', async () => {
+  it.each(['0', '0.5', '9007199254740992'])('rejects invalid browser concurrency %s before estimating', async (value) => {
     const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
-    await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), '9');
+    await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), value);
     await user.click(screen.getByRole('button', { name: '估算用量' }));
     expect(fetch).not.toHaveBeenCalled();
-    expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).validity.rangeOverflow).toBe(true);
+    expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).validity.customError).toBe(true);
+  });
+
+  it.each([32, 64])('accepts user-selected task concurrency %i and shows the lower connection ceiling', async (value) => {
+    const app = context(); app.bootstrap.provider_profiles = [{ ...model, max_concurrency: 32 }];
+    const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />, app);
+    await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
+    const input = screen.getByLabelText('并发请求上限') as HTMLInputElement;
+    expect(input.hasAttribute('max')).toBe(false);
+    await user.clear(input); await user.type(input, String(value));
+    expect(input.validity.valid).toBe(true);
+    expect(screen.getByText('连接并发上限 32；本次最多同时 32 个请求')).toBeTruthy();
+    await runEstimate(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs').execution.max_concurrency).toBe(value);
+    expect(body(fetch, '/api/jobs/estimate').execution.max_concurrency).toBe(value);
+  });
+
+  it('saves connection concurrency above 16 without applying an operational cap', async () => {
+    const fetch = mockFetch(); const user = userEvent.setup(); const app = context(); mount(<Settings />, app);
+    await user.click(screen.getByRole('button', { name: `编辑 ${model.name}` }));
+    const dialog = within(screen.getByRole('dialog', { name: '编辑模型连接' }));
+    await user.click(dialog.getByText('连接参数与费用单价'));
+    const input = dialog.getByLabelText('最大并发') as HTMLInputElement;
+    expect(input.hasAttribute('max')).toBe(false);
+    await user.clear(input); await user.type(input, '64');
+    await user.click(dialog.getByRole('button', { name: '保存连接' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(body(fetch, '/api/profiles').max_concurrency).toBe(64);
+    expect(app.refresh).toHaveBeenCalledOnce();
+  });
+
+  it('keeps an invalid ceiling correctable when the last parallel stage is changed to serial', async () => {
+    const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />);
+    await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
+    const input = screen.getByLabelText('并发请求上限') as HTMLInputElement;
+    await user.clear(input); await user.type(input, '0');
+    await user.selectOptions(screen.getByLabelText('字幕识别执行方式'), 'serial');
+    expect(input.disabled).toBe(false);
+    await user.click(screen.getByRole('button', { name: '估算用量' }));
+    expect(fetch).not.toHaveBeenCalled();
+    await user.clear(input); await user.type(input, '3');
+    expect(input.disabled).toBe(true);
+    await runEstimate(user);
+    expect(body(fetch, '/api/jobs/estimate').execution.max_concurrency).toBe(3);
   });
 
   it('persists defaults and applies them when a new modal opens', async () => {

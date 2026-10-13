@@ -77,7 +77,7 @@ class ExecutionOptions(Contract):
     transcript: Literal["serial", "parallel"] = "serial"
     preparation: Literal["serial", "parallel"] = "serial"
     subtitle: Literal["serial", "parallel"] = "serial"
-    max_concurrency: int = Field(default=3, ge=1, le=8, strict=True)
+    max_concurrency: int = Field(default=3, ge=1, strict=True)
 
 
 class AnalysisInput(TaskModelSelection):

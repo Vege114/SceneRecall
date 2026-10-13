@@ -43,13 +43,13 @@ def test_partial_execution_settings_preserve_other_defaults_and_invalid_choices_
     assert changed.status_code == 200, changed.text
     expected = {**PARALLEL, "transcript": "serial"}
     assert changed.json()["defaults"]["execution"] == expected
-    bad = client.put("/api/settings", json={"defaults": {"execution": {"max_concurrency": 20}}})
+    bad = client.put("/api/settings", json={"defaults": {"execution": {"max_concurrency": 0}}})
     assert bad.status_code == 400, bad.text
     assert client.get("/api/settings").json()["defaults"]["execution"] == expected
 
 
 @pytest.mark.parametrize("choice", [
-    {"max_concurrency": 0}, {"max_concurrency": 9}, {"max_concurrency": True},
+    {"max_concurrency": 0}, {"max_concurrency": -1}, {"max_concurrency": True},
     {"max_concurrency": 2.5}, {"max_concurrency": "3"}, {"transcript": "automatic"},
     {"deep_analysis": "parallel"}, {"subtitle": False}, None,
 ])
@@ -58,6 +58,21 @@ def test_invalid_execution_rejected_before_enqueueing(execution_api, choice):
     response = client.post("/api/jobs", json={"asset_id": "first", "execution": choice})
     assert response.status_code == 422, response.text
     assert app.state.jobs.list() == []
+
+
+@pytest.mark.parametrize("concurrency", [9, 17, 32, 128, 100000])
+def test_user_defined_concurrency_above_old_caps_is_saved_without_clamping(execution_api, concurrency):
+    app, client = execution_api
+    choices = {**PARALLEL, "max_concurrency": concurrency}
+    saved = client.put("/api/settings", json={"defaults": {"execution": choices}})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["defaults"]["execution"] == choices
+    response = client.post("/api/jobs", json={"asset_id": "first", "execution": choices})
+    assert response.status_code == 200, response.text
+    job = response.json()
+    assert job["execution"] == choices
+    assert app.state.jobs.get(job["id"])["config"]["execution"] == choices
+    assert job["request_count"] == 0
 
 
 def test_job_snapshot_resume_and_public_projection(execution_api):

@@ -1,5 +1,15 @@
 # SceneRecall 验证记录
 
+## 手动并发与 Codex 官方限制核查（2026-10-13）
+
+- 查阅 [OpenAI 官方配置说明](https://learn.chatgpt.com/docs/config-file/config-reference)、[子代理说明](https://learn.chatgpt.com/docs/agent-configuration/subagents)与[用量说明](https://learn.chatgpt.com/docs/pricing)，并只读核对本机 Codex CLI **0.162.1** 的帮助及本项目调用参数。官方的单会话子代理数量设置不等于独立 CLI 调用的最大数量；本项目通过隔离的 `codex exec` 请求运行，`agents.enabled=false`。没有找到独立调用固定最高并发数的公开承诺，未把默认值当作最高值，也未据此宣称服务无限容量。
+- 移除任务 8 路、连接 16 路及调度器 8 路的固定上限，任务与连接均可手动输入正整数。默认任务 3／连接 2 路保留；实际按任务与连接较小值、待处理批次和累计预算派发。界面拒绝零、小数及不能被浏览器精确表示的整数，后端严格拒绝布尔值、字符串、小数和非有限值；设置值不会悄悄截断为旧上限。
+- 最终后端 **684/684 项通过**、前端 **125/125 项通过**；Ruff、TypeScript、Vite 生产构建及 `git diff --check` 通过。本轮新增 27 项后端与 6 项前端测试，依赖和锁文件未变更；仍仅有既有测试依赖的两条弃用提示。
+- API／Codex 连接配置保留 9、32、64、128；任务和默认值同时验证到 100,000 的手动配置。真实 `ProviderManager` 使用 HTTP／Codex 推理替身，对 40 个独立调用验证 **32 个同时在途**及信号量正确释放；场景台词测试验证超过原上限的 9／12 路重叠。12 路场景每个请求预留三次重试，逐次确认已完成次数与全部在途预留不超过 36；返回顺序、缓存和串行语义保持兼容。测试仅为受控并发验证，未进行真实服务压力测试。
+- 在独立临时资料库、合成视频和关闭执行器的生产界面中，实际将测试连接切换为 Codex CLI、填写并保存连接并发 **64**，保存默认任务并发 **64**，刷新后在分析窗口确认两项持久化并正确显示有效上限。未提交模型请求或修改用户现有连接／影片；没有读取认证文件。检查窗口滚动和输入控件；完整响应式矩阵及真实高并发服务行为仍未验收。
+
+复现：`.venv/bin/pytest -q`；`npm test --prefix frontend`；`npm run typecheck --prefix frontend`；`npm run build --prefix frontend`；`.venv/bin/ruff check backend tests scripts`。服务测试需要允许本机临时端口。新增连接专项位于 `test_provider_concurrency.py`，任务与界面覆盖追加于现有并行测试文件。
+
 ## 按阶段选择并行／串行（2026-10-13）
 
 - 最终后端 **657/657 项通过**，前端 **119/119 项通过**；Ruff（`backend tests scripts`）、TypeScript、Vite 生产构建与 `git diff --check` 通过。新增 38 项后端和 7 项前端测试，依赖与锁文件未变更。后端仍只有现有 Starlette 测试依赖的两条弃用提示。首次受限环境全量运行因禁止绑定本机端口而失败 3 项；允许临时本机端口后最终全量通过。

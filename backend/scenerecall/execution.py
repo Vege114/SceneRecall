@@ -25,7 +25,7 @@ def execution_width(config, stage, profile=None):
     options = config.get("execution") or {}
     if options.get(stage, "serial") != "parallel":
         return 1
-    width = max(1, min(8, options.get("max_concurrency", 3)))
+    width = max(1, options.get("max_concurrency", 3))
     return min(width, max(1, (profile or {}).get("max_concurrency", width)))
 
 

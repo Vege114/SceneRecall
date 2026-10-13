@@ -261,3 +261,58 @@ async def test_budget_pause_keeps_asset_busy_while_sibling_frames_are_extracted(
     assert final["status"] == "paused"
     assert final["request_count"] == 0
     assert not worker.provider.calls
+
+
+@pytest.mark.asyncio
+async def test_twelve_parallel_calls_keep_all_retry_reservations_inside_request_budget(scene_worker, monkeypatch):
+    worker = scene_worker(24)
+    dense_dialogue(worker, 2001)
+    original_profile = worker.provider.get
+    original_prepare = worker.provider.prepare_subtitles
+    original_before = worker.queue.before_call
+    all_started, release = asyncio.Event(), asyncio.Event()
+    active, peak = 0, 0
+    reservation_totals = []
+    monkeypatch.setattr(worker.provider, "get", lambda identity: {
+        **original_profile(identity), "max_concurrency": 20})
+    job = enqueue(worker, max_requests=36, execution={"transcript": "parallel", "max_concurrency": 12})
+
+    def checked_before(*args, **kwargs):
+        result = original_before(*args, **kwargs)
+        state = worker.queue.get(job["id"])
+        total = state["request_count"] + state["inflight_attempts"]
+        assert total <= 36
+        reservation_totals.append(total)
+        return result
+
+    async def blocked_prepare(*args):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == 12:
+            all_started.set()
+        await release.wait()
+        try:
+            return await original_prepare(*args)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(worker.queue, "before_call", checked_before)
+    monkeypatch.setattr(worker.provider, "prepare_subtitles", blocked_prepare)
+    running = asyncio.create_task(worker.queue.execute(job["id"]))
+    try:
+        await asyncio.wait_for(all_started.wait(), 2)
+        state = worker.queue.get(job["id"])
+        assert state["request_count"] == 0
+        assert state["inflight_attempts"] == 36
+        assert len(state["inflight_calls"]) == 12
+    finally:
+        release.set()
+        await asyncio.wait_for(running, 5)
+    final = worker.queue.get(job["id"])
+    assert final["status"] == "completed", final
+    assert peak == 12
+    assert max(reservation_totals) == 36
+    assert final["inflight_attempts"] == 0 and final["inflight_calls"] == {}
+    assert final["request_count"] == 22
+    assert counts(worker) == {"transcript": 21, "preparation": 1}

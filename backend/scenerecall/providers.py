@@ -76,7 +76,7 @@ class Profile(BaseModel):
     secret_mode: Literal["session", "keyring", "env", "none"] = "session"
     env_var: str | None = None
     timeout_s: float = Field(default=90, ge=1, le=600)
-    max_concurrency: int = Field(default=2, ge=1, le=16)
+    max_concurrency: int = Field(default=2, ge=1, strict=True)
     input_price_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     output_price_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
