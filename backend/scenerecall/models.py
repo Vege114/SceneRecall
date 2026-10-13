@@ -11,6 +11,7 @@ class Contract(BaseModel):
 
 class AssetInput(Contract):
     video_path: str
+    project_id: str | None = None
     title: str = ""
     kind: Literal["movie", "animation", "series"] = "movie"
     series: str = ""
@@ -46,6 +47,7 @@ class SubtitleExtractInput(Contract):
 
 class AnalysisInput(Contract):
     asset_id: str
+    keyframe_plan_id: str | None = None
     stages: list[Literal["vision", "subtitle"]] = Field(default_factory=lambda: ["vision"])
     start_ms: int = Field(default=0, ge=0)
     end_ms: int | None = Field(default=None, gt=0)
@@ -115,6 +117,42 @@ class CharacterReanalysisInput(Contract):
     max_requests: int = Field(default=1000, ge=1, le=100000, strict=True)
     max_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     expected_revision: int | None = Field(default=None, ge=0, strict=True)
+    keyframe_plan_ids: dict[str, str] = Field(default_factory=dict)
+
+
+class KeyframePlanInput(Contract):
+    asset_id: str
+    start_ms: int = Field(default=0, ge=0)
+    end_ms: int | None = Field(default=None, gt=0)
+
+
+class ImportItemInput(AssetInput):
+    item_id: str = Field(min_length=1, max_length=180)
+
+
+class ImportInput(Contract):
+    request_id: str = Field(min_length=1, max_length=180)
+    project_id: str | None = None
+    items: list[ImportItemInput] = Field(min_length=1, max_length=1000)
+
+
+class ImportRetryInput(Contract):
+    items: list[ImportItemInput] = Field(min_length=1, max_length=1000)
+
+
+class BatchEstimateInput(Contract):
+    items: list[AnalysisInput] = Field(min_length=1, max_length=1000)
+
+
+class BatchAnalysisInput(BatchEstimateInput):
+    request_id: str = Field(min_length=1, max_length=180)
+
+
+class LocalFilesInput(Contract):
+    path: str | None = None
+    kind: Literal["video", "subtitle"] = "video"
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=200, ge=1, le=1000)
 
 
 class Observation(BaseModel):

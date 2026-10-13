@@ -18,6 +18,12 @@ from .models import AssetInput, Observation
 SCHEMA = "1.0"
 
 
+class DuplicateAssetError(ValueError):
+    def __init__(self, asset_id):
+        super().__init__("该视频已在资料库中，可重新定位原文件或重跑识别")
+        self.asset_id = asset_id
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -31,7 +37,7 @@ def digest(value) -> str:
 
 
 def safe_id(value: str) -> str:
-    if not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,180}", value) or value in {".", ".."}:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,180}", value) or value in {".", ".."}:
         raise ValueError("无效的记录 ID")
     return value
 
@@ -150,6 +156,8 @@ class Library:
         if not (self.root / "library.json").exists():
             atomic_json(self.root / "library.json", {"schema_version": SCHEMA, "id": uid("library"), "created_at": now()})
         read_json(self.root / "library.json")
+        from .organization import OrganizationStore
+        self.organization = OrganizationStore(self)
 
     def asset_dir(self, asset_id: str) -> Path:
         return self.root / "assets" / safe_id(asset_id)
@@ -173,7 +181,7 @@ class Library:
             result.update(subtitle_mode="container", subtitle_stream_index=container["stream_index"],
                           subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"])
             result.pop("subtitle_fallback_reason", None)
-        return result
+        return self.organization.project_asset(result)
 
     def source_path(self, asset_id: str) -> Path | None:
         item = read_json(self.root / "private" / "media-locations.json", {}).get(safe_id(asset_id))
@@ -188,10 +196,18 @@ class Library:
         return sorted([self.get_asset(p.parent.name) for p in (self.root / "assets").glob("*/manifest.json")],
                       key=lambda a: a["created_at"], reverse=True)
 
-    def register(self, payload: AssetInput) -> dict:
+    def register(self, payload: AssetInput, *, import_item_key: str | None = None) -> dict:
         from .media import fingerprint, probe, subtitle_tracks
         from .subtitles import parse_subtitles
 
+        if import_item_key:
+            for asset in self.list_assets():
+                if asset.get("import_item_key") == import_item_key:
+                    return asset
+        explicit_project = "project_id" in payload.model_fields_set
+        if explicit_project and payload.project_id is not None:
+            if not any(project["id"] == payload.project_id for project in self.organization.projects()):
+                raise ValueError("项目不存在")
         source = Path(payload.video_path).expanduser().resolve(strict=True)
         if not source.is_file():
             raise ValueError("视频路径必须指向文件")
@@ -222,9 +238,13 @@ class Library:
         if source_snapshot(source) != snapshot:
             raise ValueError("视频在导入期间被修改，请重新导入")
         with self.lock:
+            if explicit_project and payload.project_id is not None:
+                self.organization.get_project(payload.project_id)
             for asset in self.list_assets():
+                if import_item_key and asset.get("import_item_key") == import_item_key:
+                    return asset
                 if asset["fingerprint"] == checksum:
-                    raise ValueError("该视频已在资料库中，可重新定位原文件或重跑识别")
+                    raise DuplicateAssetError(asset["id"])
             asset_id = uid("asset")
             title = payload.title.strip() or source.stem
             identity = [title, payload.kind, payload.series, payload.season, payload.episode]
@@ -236,6 +256,12 @@ class Library:
                      "subtitle_mode": mode, "subtitle_import_mode": payload.subtitle_mode,
                      "subtitle_offset_ms": payload.subtitle_offset_ms, "subtitle_tracks": tracks,
                      "created_at": now(), "status": "ready"}
+            if explicit_project:
+                asset["project_id"] = payload.project_id
+                if payload.project_id is None:
+                    asset["character_scope_id"] = "cast_" + asset_id
+            if import_item_key:
+                asset["import_item_key"] = import_item_key
             if fallback:
                 asset["subtitle_fallback_reason"] = fallback
             # Complete all asset files in staging before the asset becomes
@@ -480,6 +506,97 @@ class Library:
             raise FileNotFoundError("证据帧文件不存在")
         return path
 
+    def validate_keyframe_plan(self, asset_id: str, plan: dict, expected_id: str | None = None) -> dict:
+        """Validate saved plans without opening the source video or invoking a model."""
+        from fractions import Fraction
+        asset = self.get_asset(asset_id)
+        try:
+            if (not isinstance(plan, dict) or plan.get("asset_id") != asset_id
+                    or plan.get("fingerprint") != asset["fingerprint"]
+                    or (expected_id is not None and plan.get("id") != expected_id)
+                    or plan.get("plan_id", plan.get("id")) != plan.get("id")
+                    or not isinstance(plan.get("algorithm"), str) or not plan["algorithm"]):
+                raise ValueError("关键帧计划身份或来源无效")
+            safe_id(plan["id"])
+            start, end = plan["start_ms"], plan["end_ms"]
+            if type(start) is not int or type(end) is not int or not 0 <= start < end <= asset["duration_ms"]:
+                raise ValueError("关键帧计划时间范围无效")
+            if plan.get("status") == "pending":
+                if any(plan.get(key) for key in ("shots", "frames", "batches")):
+                    raise ValueError("未完成的关键帧计划不能包含有效帧引用")
+                return plan
+            if plan.get("status") != "completed":
+                raise ValueError("关键帧计划状态无效")
+            if any(not isinstance(plan.get(key), list) or not plan[key] for key in ("shots", "frames", "batches")):
+                raise ValueError("关键帧计划缺少镜头、帧或分析批次")
+            shots = {}
+            last_end = start
+            for shot in plan["shots"]:
+                identity = safe_id(shot["id"])
+                a, b = shot["start_ms"], shot["end_ms"]
+                if (identity in shots or type(a) is not int or type(b) is not int
+                        or not last_end <= a < b <= end):
+                    raise ValueError("关键帧镜头范围无效")
+                shots[identity] = shot
+                last_end = b
+            frames = {}
+            previous_time = None
+            stored_origin = asset.get("start_time_seconds", str(asset.get("start_time_ms", 0) / 1000))
+            origin = Fraction(plan.get("source_start_time_seconds", stored_origin))
+            if "start_time_seconds" in asset:
+                if origin != Fraction(asset["start_time_seconds"]):
+                    raise ValueError("关键帧计划与视频的精确起始时间不一致")
+            elif round(origin * 1000) != asset.get("start_time_ms", 0):
+                raise ValueError("关键帧计划与视频的起始时间不一致")
+            registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
+            for frame in plan["frames"]:
+                identity = safe_id(frame["id"])
+                if identity in frames or frame["shot_id"] not in shots:
+                    raise ValueError("关键帧 ID 重复或镜头引用无效")
+                for field in ("time_base", "source_time_base"):
+                    base = frame[field]
+                    if not isinstance(base, list) or len(base) != 2 or any(type(number) is not int or number <= 0 for number in base):
+                        raise ValueError("关键帧时间基无效")
+                if any(type(frame[field]) is not int for field in ("pts", "source_pts", "at_ms")):
+                    raise ValueError("关键帧时间戳无效")
+                timestamp = frame["pts"] * Fraction(*frame["time_base"])
+                source_time = frame["source_pts"] * Fraction(*frame["source_time_base"])
+                shot = shots[frame["shot_id"]]
+                if (timestamp != source_time - origin or round(timestamp * 1000) != frame["at_ms"]
+                        or not Fraction(start, 1000) <= timestamp < Fraction(end, 1000)
+                        or not shot["start_ms"] <= frame["at_ms"] < shot["end_ms"]
+                        or (previous_time is not None and timestamp <= previous_time)):
+                    raise ValueError("关键帧时间戳与镜头不一致")
+                self.frame_path(asset_id, identity)
+                if registry[identity].get("at_ms") != frame["at_ms"]:
+                    raise ValueError("关键帧计划与已保存证据帧不一致")
+                frames[identity] = frame
+                previous_time = timestamp
+            referenced, batch_ids = [], set()
+            last_end = start
+            for batch in plan["batches"]:
+                identity = safe_id(batch["id"])
+                a, b = batch["start_ms"], batch["end_ms"]
+                shot = shots.get(batch["shot_id"])
+                ids = batch["frame_ids"]
+                if (identity in batch_ids or type(a) is not int or type(b) is not int or not shot
+                        or not last_end <= a < b <= end
+                        or not shot["start_ms"] <= a < b <= shot["end_ms"]
+                        or not isinstance(ids, list) or not 1 <= len(ids) <= 8):
+                    raise ValueError("关键帧分析批次无效")
+                for frame_id in ids:
+                    frame = frames.get(frame_id)
+                    if frame is None or frame["shot_id"] != batch["shot_id"] or not a <= frame["at_ms"] < b:
+                        raise ValueError("关键帧批次引用了无效证据")
+                referenced.extend(ids)
+                batch_ids.add(identity)
+                last_end = b
+            if referenced != list(frames):
+                raise ValueError("关键帧批次遗漏、重复或打乱了证据帧")
+            return plan
+        except (KeyError, TypeError, ZeroDivisionError, OverflowError) as exc:
+            raise ValueError("关键帧计划格式无效") from exc
+
     def annotations(self, asset_id: str) -> list[dict]:
         annotations = sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")], key=lambda a: a["updated_at"])
         records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)}
@@ -552,6 +669,7 @@ class Library:
                     description += " " + " ".join(names)
                 frames = record.get("evidence_frame_ids", [])
                 result.append({"id": record["id"], "record_id": record["id"], "asset_id": asset["id"],
+                               **{key: asset.get(key) for key in ("project_id", "project_name", "folder_id", "folder_ids", "tags")},
                                "work_id": asset["work_id"], "title": asset["title"], "series": asset.get("series", ""),
                                "season": asset.get("season"), "episode": asset.get("episode"), "version": asset["version"],
                                "kind": "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
@@ -594,15 +712,20 @@ class Library:
                         record = next((c for c in read_jsonl(base / "subtitles.jsonl") if c["id"] == rid), None)
                 if record is None:
                     continue
+                if "summary" in record:
+                    from .characters import CharacterStore
+                    record = CharacterStore(self).decorate_observations(asset["id"], [record])[0]
                 text = annotation.get("summary", record.get("summary", record.get("text", "")))
                 frames = record.get("evidence_frame_ids", [])
                 result.append({"id": rid, "record_id": rid, "asset_id": asset["id"], "work_id": asset["work_id"],
+                               **{key: asset.get(key) for key in ("project_id", "project_name", "folder_id", "folder_ids", "tags")},
                                "title": asset["title"], "series": asset.get("series"), "season": asset.get("season"),
                                "episode": asset.get("episode"), "version": asset["version"], "start_ms": record["start_ms"],
                                "end_ms": record["end_ms"], "kind": "visual" if "summary" in record else "subtitle",
                                "text": text, "summary": text, "note": annotation.get("note", ""), "favorite": True,
                                "source": record.get("source", "vision"), "review_status": "historical",
                                "is_historical": True, "run_id": run_id, "evidence_frame_ids": frames,
+                               "entities": record.get("entities", []), "events": record.get("events", []),
                                "thumbnail": frames[0] if frames else None})
         return result
 
@@ -611,7 +734,8 @@ class Library:
         target = self.root / "runtime" / "backups" / f"{backup_id}.zip"
         target.parent.mkdir(parents=True, exist_ok=True)
         with self.lock, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-            for top in ("library.json", "works", "assets", "collections"):
+            self.organization.migrate()
+            for top in ("library.json", "works", "assets", "collections", "organization"):
                 item = self.root / top
                 for path in [item] if item.is_file() else item.rglob("*"):
                     if path.is_file() and not path.is_symlink() and path.suffix != ".tmp" and "/proxy/" not in str(path):
@@ -636,7 +760,7 @@ class Library:
                     relative = PurePosixPath(info.filename)
                     if relative.is_absolute() or ".." in relative.parts or "\\" in info.filename or not relative.parts:
                         raise ValueError("备份含非法路径")
-                    if relative.parts[0] not in {"library.json", "works", "assets", "collections", "media"}:
+                    if relative.parts[0] not in {"library.json", "works", "assets", "collections", "media", "organization"}:
                         raise ValueError("备份包含非资料文件")
                     if (info.external_attr >> 16) & 0o170000 == 0o120000:
                         raise ValueError("备份不允许符号链接")
@@ -648,6 +772,7 @@ class Library:
                 read_jsonl(file)
             # Validate the entire reference graph before committing any imported file.
             restored = Library(staging)
+            restored.organization.validate()
             for manifest in (staging / "assets").glob("*/manifest.json"):
                 if read_json(manifest).get("id") != manifest.parent.name:
                     raise ValueError("资产清单 ID 与目录不一致")
@@ -683,29 +808,34 @@ class Library:
                 registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
                 for frame_id in registry:
                     restored.frame_path(asset_id, frame_id)
+                for path in restored.asset_dir(asset_id).glob("keyframe-plans/*.json"):
+                    restored.validate_keyframe_plan(asset_id, read_json(path), path.stem)
             from .characters import CharacterStore
             CharacterStore(restored).validate_all()
-            paths = [p for p in staging.rglob("*") if p.is_file() and p.name != "library.json"]
+            paths = [p for p in staging.rglob("*") if p.is_file() and p.name != "library.json"
+                     and p != restored.organization.path]
             from .media import fingerprint
             for path in (staging / "media").glob("*"):
                 asset = restored.get_asset(path.stem)
                 if fingerprint(path) != asset["fingerprint"]:
                     raise ValueError("备份中的视频内容与资产指纹不一致")
             with self.lock:
+                merged_organization = self.organization.merge_catalog(restored.organization._read())
                 for path in paths:
-                    target = self.root / path.relative_to(staging)
-                    if target.exists() and not same_contents(target, path):
+                    target = confined_path(self.root, str(path.relative_to(staging)))
+                    if target.exists() and (not target.is_file() or not same_contents(target, path)):
                         raise ValueError(f"恢复冲突，未覆盖现有文件: {path.relative_to(staging)}")
-                for path in paths:
-                    target = self.root / path.relative_to(staging)
-                    if not target.exists():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        os.replace(path, target)
                 locations = read_json(self.root / "private" / "media-locations.json", {})
                 for path in (self.root / "media").glob("*"):
                     if path.stem.startswith("asset_"):
                         locations[path.stem] = source_snapshot(path)
-                atomic_json(self.root / "private" / "media-locations.json", locations)
+                for source in (staging / "media").glob("*"):
+                    target = self.root / "media" / source.name
+                    snapshot = source_snapshot(target if target.exists() else source)
+                    locations[source.stem] = {**snapshot, "path": str(target)}
+                self.organization.commit_restore(staging, paths, merged_organization, locations)
             return {"restored_files": len(paths), "message": "资料已恢复；元数据备份中的原视频可能需要重新定位"}
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            pending = read_json(self.organization.journal, {})
+            if pending.get("staging") != str(staging.relative_to(self.root)):
+                shutil.rmtree(staging, ignore_errors=True)

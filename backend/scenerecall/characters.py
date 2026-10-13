@@ -28,6 +28,8 @@ def normalized(value: str) -> str:
 
 
 def scope_id(asset: dict) -> str:
+    if asset.get("character_scope_id"):
+        return safe_id(asset["character_scope_id"])
     series = normalized(asset.get("series") or "")
     if series:
         return "cast_" + digest([asset.get("kind", "movie"), series])
@@ -101,6 +103,16 @@ class CharacterStore:
                     raise ValueError("角色档案列表字段无效")
             if not set(profile["edited_fields"]).issubset(EDITABLE_FIELDS) or type(profile.get("user_edited")) is not bool:
                 raise ValueError("角色档案人工编辑标记无效")
+            if not isinstance(profile.get("identity_origins", []), list):
+                raise ValueError("角色身份来源无效")
+            origins = [*profile.get("identity_origins", [])]
+            if profile.get("imported_from") is not None:
+                origins.append(profile["imported_from"])
+            for origin in origins:
+                if not isinstance(origin, dict):
+                    raise ValueError("角色身份来源无效")
+                checked_id(origin.get("scope_id"))
+                checked_id(origin.get("character_id"))
             representative = profile.get("representative")
             if representative is not None:
                 if not isinstance(representative, dict):
@@ -115,6 +127,16 @@ class CharacterStore:
             if target is not None:
                 checked_id(target)
             CharacterStore._resolve(registry, source, strict=True)
+        imports = registry.get("imports", {})
+        if not isinstance(imports, dict):
+            raise ValueError("角色来源映射无效")
+        for source_scope, mapping in imports.items():
+            checked_id(source_scope)
+            if not isinstance(mapping, dict):
+                raise ValueError("角色来源映射无效")
+            for source_id, target in mapping.items():
+                checked_id(source_id)
+                CharacterStore._resolve(registry, target, strict=True)
 
     @staticmethod
     def _resolve(registry: dict, character_id: str | None, *, strict=False) -> str | None:
@@ -157,7 +179,8 @@ class CharacterStore:
             for asset in assets:
                 for record in self.library.observations(asset["id"]):
                     for entity in record.get("entities", []):
-                        resolved = self._resolve(registry, entity.get("character_id"))
+                        resolved = self.library.organization.resolve_reference(
+                            asset["id"], record, entity.get("character_id"), registry)
                         if not resolved:
                             continue
                         frames = entity.get("evidence_frame_ids") or record.get("evidence_frame_ids", [])
@@ -174,20 +197,21 @@ class CharacterStore:
                 profile["appearance_count"] = len(profile["appearances"])
                 # Episode/shot order is authoritative; a reanalysis can remove the
                 # latest old association, in which case an earlier active image wins.
-                if profile["id"] in current_representatives:
-                    profile["representative"] = current_representatives[profile["id"]]
+                profile["representative"] = current_representatives.get(profile["id"])
             return {"scope_id": scope, "revision": registry["revision"],
-                    "profiles": list(profiles.values()), "assets": assets}
+                    "profiles": list(profiles.values()), "assets": assets,
+                    "membership_revision": self.library.get_asset(asset_id).get("membership_revision", 0)}
 
     def context(self, asset_id: str) -> dict:
         with self.library.lock:
             catalog = self.catalog(asset_id)
             fields = ("id", "name", "aliases", "description", "notes", "appearance",
                       "user_edited", "edited_fields", "representative", "updated_at", "created_at")
-            return {"scope_id": catalog["scope_id"], "revision": catalog["revision"], "profiles": [
+            return {"scope_id": catalog["scope_id"], "revision": catalog["revision"],
+                    "membership_revision": catalog["membership_revision"], "profiles": [
                 {**{key: copy.deepcopy(profile[key]) for key in fields},
                  "observed_traits": list(profile["appearance"])}
-                for profile in catalog["profiles"]
+                for profile in catalog["profiles"] if profile["appearance_count"] > 0
             ]}
 
     @staticmethod
@@ -401,7 +425,7 @@ class CharacterStore:
             for record in result:
                 for entity in record.get("entities", []):
                     original = entity.get("character_id")
-                    resolved = self._resolve(registry, original)
+                    resolved = self.library.organization.resolve_reference(asset_id, record, original, registry)
                     if resolved:
                         profile = registry["profiles"][resolved]
                         entity.update(character_id=resolved, character_name=profile["name"], name=profile["name"],
@@ -413,29 +437,56 @@ class CharacterStore:
     def validate_all(self) -> None:
         """Verify registry and evidence references before restoring any backup file."""
         assets = {asset["id"]: asset for asset in self.library.list_assets()}
+        organization = self.library.organization.validate()
+        historical_scopes = {scope for membership in organization["assets"].values()
+                             for scope in [membership["legacy_character_scope_id"],
+                                           membership["character_scope_id"], *membership["bindings"],
+                                           *membership.get("previous_scopes", [])]}
         registries = {}
         for path in (self.library.root / "works").glob("*/characters.json"):
             scope = checked_id(path.parent.name)
             registry = self._read(scope)
-            if not any(scope_id(asset) == scope for asset in assets.values()):
+            if scope not in historical_scopes:
                 raise ValueError("角色档案没有对应的视频作品")
             registries[scope] = registry
             for profile in registry["profiles"].values():
                 representative = profile.get("representative")
                 if representative:
                     asset = assets.get(representative["asset_id"])
-                    if not asset or scope_id(asset) != scope:
+                    membership = organization["assets"].get(representative["asset_id"], {})
+                    allowed = {membership.get("legacy_character_scope_id"),
+                               membership.get("character_scope_id"), *membership.get("bindings", {}),
+                               *membership.get("previous_scopes", [])}
+                    if not asset or scope not in allowed:
                         raise ValueError("角色证据引用了其他作品")
                     self.library.frame_path(asset["id"], representative["frame_id"])
+        for registry in registries.values():
+            for profile in registry["profiles"].values():
+                origins = [*profile.get("identity_origins", [])]
+                if profile.get("imported_from"):
+                    origins.append(profile["imported_from"])
+                for origin in origins:
+                    source = registries.get(origin["scope_id"])
+                    if source is None:
+                        raise ValueError("角色档案缺少历史来源")
+                    self._resolve(source, origin["character_id"], strict=True)
+            for source_scope, mapping in registry.get("imports", {}).items():
+                source = registries.get(source_scope)
+                if source is None:
+                    raise ValueError("角色映射缺少历史来源")
+                for character_id in mapping:
+                    self._resolve(source, character_id, strict=True)
         for asset in assets.values():
             scope = scope_id(asset)
             registry = registries.get(scope, {"profiles": {}, "redirects": {}})
             # Historical immutable records also need valid cross-work references.
             for path in self.library.asset_dir(asset["id"]).glob("analyses/*/observations/*.json"):
                 record = read_json(path)
-                if record.get("character_scope_id") not in {None, scope}:
-                    raise ValueError("识别记录引用了其他作品的角色档案")
+                source_scope = record.get("character_scope_id") or organization["assets"][asset["id"]]["legacy_character_scope_id"]
+                source_registry = registries.get(source_scope, {"profiles": {}, "redirects": {}})
                 for entity in record.get("entities", []):
                     self._representative(asset["id"], entity, record)
                     if entity.get("character_id"):
-                        self._resolve(registry, entity["character_id"], strict=True)
+                        self._resolve(source_registry, entity["character_id"], strict=True)
+                        self.library.organization.resolve_reference(
+                            asset["id"], record, entity["character_id"], registry, strict=True, catalog=organization)

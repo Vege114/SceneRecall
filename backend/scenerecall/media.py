@@ -111,7 +111,21 @@ def probe(path: Path) -> dict:
         "format_name": data.get("format", {}).get("format_name", "unknown"),
         "streams": streams, "video_stream_index": video["index"],
         "start_time_ms": round(origin * 1000),
+        # Exact decimal origin is needed when selecting an already observed PTS.
+        "start_time_seconds": str(origin),
     }
+
+
+def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, progress=None) -> dict:
+    """Build a local, content-driven plan without invoking any model."""
+    from .keyframes import scan_keyframes as scan
+    return scan(path, start_ms, end_ms, checkpoint=checkpoint, progress=progress)
+
+
+def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None) -> list[dict]:
+    """Extract the exact source pictures selected by a keyframe plan."""
+    from .keyframes import extract_keyframes as extract
+    return extract(path, frames, out_paths, checkpoint=checkpoint)
 
 
 _TEXT_SUBTITLE_CODECS = {"ass", "ssa", "subrip", "srt", "webvtt", "mov_text", "text"}

@@ -38,9 +38,10 @@ describe('Local container subtitle import', () => {
     expect(screen.getByRole('button', { name: /自动提取字幕轨/ }).getAttribute('aria-pressed')).toBe('true');
     await user.type(screen.getByLabelText(/视频绝对路径/), '"/tmp/synthetic.mkv"');
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
-    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets']);
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ video_path: '/tmp/synthetic.mkv', subtitle_mode: 'auto', subtitle_path: null, subtitle_offset_ms: 0 });
+    await screen.findByRole('dialog', { name: '批量导入进度' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/imports']);
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).items[0]).toMatchObject({ video_path: '/tmp/synthetic.mkv', subtitle_mode: 'auto', subtitle_path: null, subtitle_offset_ms: 0 });
     expect(value.refresh).toHaveBeenCalledOnce();
   });
 
@@ -56,14 +57,15 @@ describe('Local container subtitle import', () => {
     await user.selectOptions(select, '3');
     await user.clear(screen.getByLabelText(/时间偏移/)); await user.type(screen.getByLabelText(/时间偏移/), '-0.125');
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
-    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toMatchObject({ subtitle_mode: 'container', subtitle_stream_index: 3, subtitle_offset_ms: -125 });
+    await screen.findByRole('dialog', { name: '批量导入进度' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string).items[0]).toMatchObject({ subtitle_mode: 'container', subtitle_stream_index: 3, subtitle_offset_ms: -125 });
   });
 
   it('clears selected tracks on path change and ignores an older probe that finishes after the new probe', async () => {
     const user = userEvent.setup(); const stale = deferred<SubtitleTracks>();
     const fetch = mockFetch((url, options) => {
-      if (url === '/api/assets') return asset;
+      if (url === '/api/imports') return asset;
       return JSON.parse(options!.body as string).video_path === '/tmp/a.mkv' ? stale.promise : { duration_ms: 12000, recommended_stream_index: 7, tracks: [{ ...tracks.tracks[0], index: 7, title: '新文件轨道' }] };
     });
     const onClose = vi.fn(); renderApp(<ImportModal onClose={onClose} />);
@@ -79,10 +81,11 @@ describe('Local container subtitle import', () => {
     await user.clear(path); await user.type(path, '/tmp/c.mkv');
     expect(screen.queryByLabelText(/视频内的字幕轨/)).toBeNull();
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
-    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    const body = JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string);
+    await screen.findByRole('dialog', { name: '批量导入进度' });
+    expect(onClose).not.toHaveBeenCalled();
+    const body = JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string).items[0];
     expect(body).toMatchObject({ video_path: '/tmp/c.mkv', subtitle_mode: 'auto' });
-    expect(body).not.toHaveProperty('subtitle_stream_index');
+    expect(body.subtitle_stream_index).toBeNull();
   });
 
   it('allows unmodelled import with no tracks but blocks automatic import for bitmap-only tracks', async () => {
@@ -125,8 +128,9 @@ describe('Local container subtitle import', () => {
     await user.clear(screen.getByLabelText(/时间偏移/)); await user.type(screen.getByLabelText(/时间偏移/), '2.5');
     await user.click(screen.getByRole('button', { name: /画面字幕 OCR/ }));
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
-    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ subtitle_mode: 'embedded', subtitle_offset_ms: 0 });
+    await screen.findByRole('dialog', { name: '批量导入进度' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).items[0]).toMatchObject({ subtitle_mode: 'embedded', subtitle_offset_ms: 0 });
   });
 });
 
@@ -200,16 +204,18 @@ describe('Existing asset extraction and OCR exclusion', () => {
 
   it('disables OCR for container subtitles and submits only the independent visual stage', async () => {
     const user = userEvent.setup(); const value = context(); value.bootstrap.settings.bindings.vision = 'vision-test';
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] } : { id: 'visual-job' });
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-test', status: 'completed', frames: [] } : url.endsWith('/estimate') ? { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] } : { id: 'visual-job' });
     const onClose = vi.fn();
     renderApp(<JobModal asset={{ ...asset, subtitle_mode: 'container' }} onClose={onClose} />, value);
     const ocr = screen.getByRole('checkbox', { name: /画面字幕 OCR/ }) as HTMLInputElement;
     expect(ocr.disabled).toBe(true); expect(ocr.checked).toBe(false);
     expect(screen.getByText('容器文本字幕已在本地提取，无需发送字幕图片')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
+    await screen.findByRole('button', { name: '重新扫描关键帧' });
     await user.click(screen.getByRole('button', { name: '估算用量' }));
     await screen.findByRole('button', { name: '重新估算' });
     await user.click(screen.getByRole('button', { name: /开始分析/ }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(fetch.mock.calls.map((call) => JSON.parse(call[1]!.body as string).stages)).toEqual([['vision'], ['vision']]);
+    expect(fetch.mock.calls.filter((call) => call[0] !== '/api/keyframe-plans').map((call) => JSON.parse(call[1]!.body as string).stages)).toEqual([['vision'], ['vision']]);
   });
 });

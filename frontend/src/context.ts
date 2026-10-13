@@ -1,13 +1,16 @@
 import { createContext, useContext } from 'react';
-import type { Asset, Bootstrap, Job } from './types';
+import type { Asset, Bootstrap, Job, Project, Folder } from './types';
 
 export interface AppContextValue {
   bootstrap: Bootstrap;
   assets: Asset[];
+  projects?: Project[];
+  folders?: Folder[];
   jobs: Job[];
   refresh: () => Promise<void>;
   notify: (message: string, kind?: 'success' | 'error') => void;
-  openImport: () => void;
+  openImport: (projectId?: string) => void;
+  openJobs?: (assets: Asset[]) => void;
   openJob: (asset: Asset) => void;
 }
 export const AppContext = createContext<AppContextValue | null>(null);

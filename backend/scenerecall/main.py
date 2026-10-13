@@ -113,6 +113,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     def public_job(job):
         return {**{key: value for key, value in job.items() if key not in {"config", "checkpoints"}},
+                **({"sampling_strategy": job["config"].get("sampling_strategy", "uniform-v1")}
+                   if job["type"] == "analysis" and "vision" in job["config"].get("stages", []) else {}),
                 "budget": {"max_requests": job["config"].get("max_requests", 1000), "max_cost": job["config"].get("max_cost")}}
 
     def asset_view(asset):
@@ -193,6 +195,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     async def profile_test(profile_id: str, payload: dict = Body(...)):
         result = await providers.test(profile_id, payload.get("capability", "query"))
         return {"ok": True, "message": "连接与所选能力测试通过", "usage": result.usage, "request_count": result.request_count}
+
+    from .workflow_api import register_workflow_routes
+    from .organization_api import register_organization_routes
+    register_workflow_routes(app, library, queue, settings, public_job)
+    register_organization_routes(app, library, queue, search)
 
     @app.get("/api/assets")
     async def assets():
@@ -308,6 +315,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     raise ValueError(f"「{asset['title']}」原视频离线或已变化，请先定位原文件再重新识别")
                 request = AnalysisInput(**{**current["defaults"], "asset_id": asset["id"],
                     "stages": ["vision"], "start_ms": 0, "end_ms": asset["duration_ms"], "force": True,
+                    "keyframe_plan_id": payload.keyframe_plan_ids.get(asset["id"]),
                     "max_requests": payload.max_requests, "max_cost": payload.max_cost})
                 _, config = queue.validate(request, current)
                 config["character_reanalysis"] = True
@@ -339,8 +347,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.post("/api/jobs")
     async def job_start(payload: AnalysisInput):
-        asset, config = queue.validate(payload, settings())
-        return public_job(queue.add("analysis", config, asset["id"]))
+        with library.lock:
+            asset, config = queue.validate(payload, settings())
+            return public_job(queue.add("analysis", config, asset["id"]))
 
     @app.get("/api/jobs")
     async def jobs():

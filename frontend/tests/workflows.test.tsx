@@ -44,9 +44,11 @@ describe('Import and model prerequisites', () => {
     expect((screen.getByLabelText(/字幕文件绝对路径/) as HTMLInputElement).validity.valueMissing).toBe(true);
     await user.type(screen.getByLabelText(/字幕文件绝对路径/), '/tmp/synthetic.srt');
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
-    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ video_path: '/tmp/synthetic.mp4', subtitle_path: '/tmp/synthetic.srt', subtitle_mode: 'external', series: '', title: 'synthetic' });
-    expect(window.location.hash).toBe('#/asset/synthetic-asset');
+    await screen.findByRole('dialog', { name: '批量导入进度' });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).items[0]).toMatchObject({ video_path: '/tmp/synthetic.mp4', subtitle_path: '/tmp/synthetic.srt', subtitle_mode: 'external', series: '', title: 'synthetic' });
+    expect(fetch.mock.calls[0][0]).toBe('/api/imports');
+    expect(fetch.mock.calls.some((call) => call[0].startsWith('/api/jobs'))).toBe(false);
   });
 
   it('blocks embedded import until a subtitle model has been assigned', async () => {
@@ -242,18 +244,20 @@ describe('Codex CLI connections', () => {
   it('uses request budgets for CLI jobs and explicitly disables an inherited dollar limit', async () => {
     const user = userEvent.setup();
     const estimate = { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] };
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? estimate : { id: 'codex-job' });
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [], frame_count: 3, batch_count: 1 } : url.endsWith('/estimate') ? estimate : { id: 'codex-job' });
     const onClose = vi.fn();
     renderApp(<JobModal asset={asset} onClose={onClose} />, appContext({ bootstrap: { ...bootstrap, provider_profiles: [codex], settings: { bindings: { vision: codex.id }, defaults: { ...DEFAULTS, max_cost: 10 } } } }));
-    expect(screen.getByText(/Codex 默认模型 · 发送采样画面/)).toBeTruthy();
+    expect(screen.getByText(/Codex 默认模型 · 仅发送内容关键帧/)).toBeTruthy();
     expect(screen.queryByText(/尚未分配模型/)).toBeNull();
     expect((screen.getByLabelText(/费用上限（USD/) as HTMLInputElement).disabled).toBe(true);
     expect(screen.getByText(/金额预算（包括默认费用上限）已停用/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
+    await screen.findByRole('button', { name: '重新扫描关键帧' });
     await user.click(screen.getByRole('button', { name: '估算用量' }));
     await screen.findByText('重新估算');
     await user.click(screen.getByRole('button', { name: /开始分析/ }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(fetch.mock.calls.map((call) => JSON.parse(call[1]!.body as string).max_cost)).toEqual([null, null]);
+    expect(fetch.mock.calls.filter((call) => call[0] !== '/api/keyframe-plans').map((call) => JSON.parse(call[1]!.body as string).max_cost)).toEqual([null, null]);
     expect(JSON.parse(fetch.mock.calls[1][1]!.body as string).max_requests).toBe(DEFAULTS.max_requests);
   });
 });
@@ -262,22 +266,26 @@ describe('Analysis budgeting and independent stages', () => {
   const estimate = { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] };
   it('does not start a job with a missing model binding, even after a returned estimate', async () => {
     const user = userEvent.setup();
-    const fetch = mockFetch(() => estimate);
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [] } : estimate);
     renderApp(<JobModal asset={asset} onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
+    await screen.findByRole('button', { name: '重新扫描关键帧' });
     await user.click(screen.getByRole('button', { name: /估算用量/ }));
     await screen.findByText(/重新估算/);
     expect((screen.getByRole('button', { name: /开始分析/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/jobs/estimate']);
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/jobs/estimate']);
   });
 
   it('requires re-estimation after a sampling change and submits only the selected stage', async () => {
     const user = userEvent.setup();
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? estimate : { id: 'synthetic-job', status: 'queued' });
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [] } : url.endsWith('/estimate') ? estimate : { id: 'synthetic-job', status: 'queued' });
     const onClose = vi.fn();
     const context = appContext({ bootstrap: { ...bootstrap, provider_profiles: [profile], settings: { ...bootstrap.settings, bindings: { vision: profile.id } } } });
     renderApp(<JobModal asset={asset} onClose={onClose} />, context);
     const startButton = screen.getByRole('button', { name: /开始分析/ }) as HTMLButtonElement;
     expect(startButton.disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
+    await screen.findByRole('button', { name: '重新扫描关键帧' });
     await user.click(screen.getByRole('button', { name: /估算用量/ }));
     await waitFor(() => expect(startButton.disabled).toBe(false));
     const requests = screen.getByLabelText(/最多模型请求数/);

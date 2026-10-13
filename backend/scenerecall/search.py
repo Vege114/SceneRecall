@@ -22,7 +22,7 @@ import jieba
 from .providers import ProviderError, ProviderManager
 
 jieba.setLogLevel(logging.WARNING)
-ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character"}
+ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character", "project_id", "folder_id", "tag"}
 STOP_WORDS = {
     "的", "了", "在", "是", "有", "和", "与", "及", "或", "吗", "呢", "啊", "吧", "着", "地", "得",
     "我", "你", "他", "她", "它", "我们", "你们", "他们", "那个", "这个", "这些", "那些", "哪个",
@@ -283,6 +283,13 @@ class SearchEngine:
             if key == "character":
                 clauses.append("EXISTS (SELECT 1 FROM json_each(r.characters) WHERE value=?)")
                 params.append(normalize(str(value)))
+            elif key == "project_id":
+                clauses.append("json_extract(r.data, '$.project_id')=?")
+                params.append(value)
+            elif key in {"folder_id", "tag"}:
+                field = "folder_ids" if key == "folder_id" else "tags"
+                clauses.append(f"EXISTS (SELECT 1 FROM json_each(r.data, '$.{field}') WHERE value=?)")
+                params.append(value)
             else:
                 clauses.append(f"r.{key}=?")
                 params.append(value)

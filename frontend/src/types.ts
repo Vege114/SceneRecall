@@ -64,7 +64,25 @@ export interface Bootstrap {
   tools: { ffmpeg: boolean; ffprobe: boolean };
   version: string;
 }
+export interface Folder { id: string; name: string; parent_id: string | null }
+export interface Project { id: string; name: string; kind: AssetKind; folder_id: string | null; tags: string[]; asset_count: number }
+export interface ImportInput {
+  item_id: string; video_path: string; title: string; kind: AssetKind; series: string;
+  season: number | null; episode: number | null; version: string;
+  subtitle_mode: SubtitleMode; subtitle_path: string | null; subtitle_stream_index?: number | null; subtitle_offset_ms: number;
+}
+export interface ImportItem { item_id: string; name: string; status: string; asset_id?: string; error?: string; input?: ImportInput }
+export interface KeyframePlan {
+  id: string; plan_id?: string; job_id: string; status: string; error?: string; progress?: number; message?: string;
+  frames?: { id: string; at_ms: number; thumbnail_url: string; reason?: string }[];
+  frame_count?: number; batch_count?: number; shots?: unknown[]; batches?: unknown[];
+}
 export interface Asset {
+  project_id?: string | null;
+  project_name?: string;
+  folder_id?: string | null;
+  tags?: string[];
+  membership_revision?: number;
   id: string;
   work_id: string;
   title: string;
@@ -179,6 +197,9 @@ export interface AssetDetail {
   runs: Run[];
 }
 export interface Job {
+  batch_id?: string;
+  sampling_strategy?: string;
+  items?: ImportItem[];
   id: string;
   type: string;
   status: string;
@@ -197,7 +218,9 @@ export interface Job {
   cost_incomplete?: boolean;
   created_at: string;
 }
-export interface JobPayload extends Defaults {
+export interface JobPayload extends Omit<Defaults, 'window_ms' | 'frames_per_window'> {
+  keyframe_plan_id?: string;
+  sampling_strategy?: string;
   asset_id: string;
   stages: ('vision' | 'subtitle')[];
   start_ms: number;
@@ -254,3 +277,5 @@ export const CAPABILITIES: { key: Capability; name: string; description: string;
 ];
 export const DEFAULTS: Defaults = { window_ms: 6000, frames_per_window: 4, subtitle_fps: 2, subtitle_crop: [0, 0.65, 1, 0.35], max_requests: 1000, max_cost: null };
 export const KIND_LABELS: Record<AssetKind, string> = { movie: '电影', animation: '动画', series: '剧集' };
+
+export function keyframeReason(reason?: string): string { return ({ stable_pose: '稳定姿态', representative_pose: '代表姿态', content_change: '画面内容变化', shot_representative: '镜头代表帧' } as Record<string, string>)[reason || ''] || '内容代表帧'; }

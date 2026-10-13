@@ -8,6 +8,7 @@ from .library import Library, atomic_json, digest, now, read_json, uid
 from .models import AnalysisInput
 from .providers import (CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, MAX_OUTPUT_TOKENS,
                         PROMPT_VERSION, SUBTITLE_PROMPT_VERSION, ProviderManager)
+from .workflows import WorkflowQueueMixin
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -61,7 +62,7 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
     return result
 
 
-class JobQueue:
+class JobQueue(WorkflowQueueMixin):
     def __init__(self, library: Library, providers, search):
         from .characters import CharacterStore
 
@@ -72,6 +73,7 @@ class JobQueue:
         self.closed = False
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+        self.init_workflows()
         for job in self.list():
             if job["status"] in ("running", "pausing", "cancelling"):
                 state = {"running": "queued", "pausing": "paused", "cancelling": "cancelled"}[job["status"]]
@@ -112,14 +114,22 @@ class JobQueue:
             db.execute("UPDATE jobs SET data=? WHERE id=?", (json.dumps(job, ensure_ascii=False), job_id))
         return job
 
-    def add(self, job_type: str, config: dict, asset_id=None) -> dict:
-        import json
+    def _new_job(self, job_type: str, config: dict, asset_id=None) -> dict:
         job = {"id": uid("job"), "type": job_type, "asset_id": asset_id, "status": "queued", "stage": "queued",
                "progress": 0, "completed": 0, "total": 0, "message": "等待处理", "error": None,
                "request_count": 0, "cost": None, "known_cost": 0.0, "cost_incomplete": False,
                "usage": {}, "created_at": now(), "updated_at": now(),
                "config": config, "run_id": uid("run"), "failures": [], "checkpoints": []}
-        with self.connect() as db:
+        if job_type == "analysis" and "vision" in config.get("stages", []):
+            job["sampling_strategy"] = config.get("sampling_strategy", "uniform-v1")
+        if config.get("warnings"):
+            job["warnings"] = list(config["warnings"])
+        return job
+
+    def add(self, job_type: str, config: dict, asset_id=None) -> dict:
+        import json
+        job = self._new_job(job_type, config, asset_id)
+        with self.library.lock, self.connect() as db:
             db.execute("INSERT INTO jobs VALUES (?,?)", (job["id"], json.dumps(job, ensure_ascii=False)))
         return job
 
@@ -148,15 +158,24 @@ class JobQueue:
             snapshots[stage] = profile
         config = {**request.model_dump(), "end_ms": end, "bindings": dict(bindings), "profile_snapshots": snapshots}
         if "vision" in request.stages:
-            context = self.characters.context(request.asset_id)
-            config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision")}
+            context = self.character_context(request.asset_id)
+            config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}
+            config["sampling_strategy"] = "content-keyframes-v1"
+            if request.model_fields_set & {"window_ms", "frames_per_window"}:
+                config["warnings"] = ["window_ms / frames_per_window 已弃用；新画面任务统一使用内容关键帧。"]
+            if request.keyframe_plan_id:
+                self.validated_plan(request.asset_id, request.start_ms, end, request.keyframe_plan_id)
         return asset, config
 
     def estimate(self, request: AnalysisInput, settings: dict) -> dict:
         _, config = self.validate(request, settings)
         duration = config["end_ms"] - request.start_ms
-        windows = math.ceil(duration / request.window_ms)
-        vision = windows if "vision" in request.stages else 0
+        plan = None
+        if "vision" in request.stages:
+            if not request.keyframe_plan_id:
+                raise ValueError("请先扫描内容关键帧，再按实际选帧数量估算用量")
+            plan = self.validated_plan(request.asset_id, request.start_ms, config["end_ms"], request.keyframe_plan_id)
+        vision = len(plan["batches"]) if plan else 0
         subtitle_frames = math.ceil(duration / 1000 * request.subtitle_fps) if "subtitle" in request.stages else 0
         subtitle_requests = math.ceil(subtitle_frames / 8)
         estimate_cost = 0.0
@@ -165,21 +184,24 @@ class JobQueue:
         context_tokens = (len(ProviderManager.character_context_text(character_context).encode("utf-8"))
                           + CHARACTER_INSTRUCTION_TOKENS) if vision else 0
         reference_count = len((character_context or {}).get("reference_frames", []))
-        for stage, count, frame_count in (("vision", vision, request.frames_per_window), ("subtitle", subtitle_requests, 8)):
-            if count:
-                profile = config["profile_snapshots"][stage]
-                unit = self.estimated_call_cost(profile, frame_count + (reference_count if stage == "vision" else 0),
-                                                context_tokens=context_tokens if stage == "vision" else 0)
-                unknown |= unit is None
-                estimate_cost += (unit or 0) * count
-        warnings = ["请求数为切镜前估算，快速剪辑会增加窗口数；字幕去重可能减少请求。",
+        calls = [("vision", len(batch["frame_ids"])) for batch in (plan or {}).get("batches", [])]
+        calls += [("subtitle", min(8, subtitle_frames - i * 8)) for i in range(subtitle_requests)]
+        for stage, frame_count in calls:
+            profile = config["profile_snapshots"][stage]
+            unit = self.estimated_call_cost(profile, frame_count + (reference_count if stage == "vision" else 0),
+                                            context_tokens=context_tokens if stage == "vision" else 0)
+            unknown |= unit is None
+            estimate_cost += unit or 0
+        warnings = ["画面请求数来自已完成的内容关键帧计划；字幕去重可能减少 OCR 请求。",
                     "估算不含自动向量索引；重试最多三次。费用以供应商实际用量为准。",
                     "请求数不足或预算不足时任务暂停，不会自动扩大预算。"]
         if vision:
             warnings.append("人物识别会逐镜头携带同一作品的现有档案及最多 8 张参考图；费用估算已含当前档案，后续档案增长会增加费用，每次请求前重新检查预算。")
         if any(profile.get("provider_type") == "codex_cli" for profile in config["profile_snapshots"].values()):
             warnings.append("Codex CLI 由已登录账户的订阅额度管理，金额费用未知，并不表示免费；请求数预算仍生效。")
-        return {"duration_ms": duration, "estimated_frames": vision * request.frames_per_window + subtitle_frames,
+        if request.model_fields_set & {"window_ms", "frames_per_window"}:
+            warnings.append("window_ms / frames_per_window 已弃用；新画面任务统一使用内容关键帧。")
+        return {"duration_ms": duration, "estimated_frames": len((plan or {}).get("frames", [])) + subtitle_frames,
                 "estimated_requests": vision + subtitle_requests, "cost_estimate": None if unknown else round(estimate_cost, 6),
                 "currency": "USD", "warnings": warnings}
 
@@ -194,7 +216,9 @@ class JobQueue:
 
     def character_context(self, asset_id: str, expected: dict | None = None) -> dict:
         context = self.characters.context(asset_id)
-        if expected is not None and any(context[key] != expected.get(key) for key in ("scope_id", "revision")):
+        context["membership_revision"] = self.library.get_asset(asset_id).get("membership_revision", 0)
+        keys = ("scope_id", "revision", "membership_revision") if expected and "membership_revision" in expected else ("scope_id", "revision")
+        if expected is not None and any(context[key] != expected.get(key) for key in keys):
             raise CharacterContextChanged("角色档案已修改，此任务使用的是旧版档案。已完成结果保留；请在角色档案中按新版档案重新识别")
         ProviderManager.character_context_text(context)
         references = []
@@ -223,6 +247,10 @@ class JobQueue:
             return self.update(job_id, status="cancelling" if state in ("running", "pausing") else "cancelled", message="正在取消；已提交的结果保留")
         if action in ("resume", "retry") and state in ("paused", "failed", "partial", "cancelled"):
             config = job["config"]
+            if job.get("stale_organization"):
+                raise ValueError("视频归属已经改变，请创建新的分析任务；已完成资料保留")
+            if job["type"] == "analysis" and "vision" in config.get("stages", []):
+                self.character_context(job["asset_id"], config.get("character_snapshot"))
             if (job["type"] == "analysis" and "subtitle" in config.get("stages", [])
                     and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
                 raise ValueError("字幕来源已切换为文字字幕，请创建只包含画面理解的新任务")
@@ -332,12 +360,20 @@ class JobQueue:
             await self.execute(queued[0]["id"])
 
     async def execute(self, job_id: str):
-        job = self.update(job_id, status="running", error=None)
+        with self.library.lock:
+            current = self.get(job_id)
+            if current["status"] != "queued":
+                return
+            job = self.update(job_id, status="running", error=None)
         try:
             if job["type"] == "analysis":
                 await self.analyze(job_id)
             elif job["type"] == "index":
                 await self.reindex(job_id)
+            elif job["type"] == "import":
+                await self.import_files(job_id)
+            elif job["type"] == "keyframe_scan":
+                await self.scan_plan(job_id)
             elif job["type"] == "proxy":
                 from .media import create_proxy
                 path = self.library.require_source(job["asset_id"])
@@ -401,6 +437,7 @@ class JobQueue:
                 raise ValueError("任务所用模型配置已变化，请创建新任务；已有识别结果仍可复用")
         start, end = config["start_ms"], config["end_ms"]
         windows = []
+        plan = None
         if "vision" in config["stages"]:
             # Upgrade a pending pre-0.2 job once; every resumed/new job thereafter
             # remains bound to the human revision that was actually requested.
@@ -408,14 +445,24 @@ class JobQueue:
             if "character_snapshot" not in config:
                 config = {**config, "character_snapshot": {key: context[key] for key in ("scope_id", "revision")}}
                 self.update(job_id, config=config)
-            self.update(job_id, stage="segmentation", message="正在检测镜头边界")
-            segmentation_id = digest([start, end, "content-27-v1"])
-            segmentation_file = directory / "segmentation" / segmentation_id / "shots.json"
-            shots = read_json(segmentation_file)
-            if shots is None:
-                shots = await asyncio.to_thread(detect_shots, source, start, end)
-                atomic_json(segmentation_file, shots)
-            windows = make_windows(shots, config["window_ms"])
+            if config.get("sampling_strategy") == "content-keyframes-v1":
+                if config.get("keyframe_plan_id"):
+                    plan = self.validated_plan(asset_id, start, end, config["keyframe_plan_id"])
+                else:
+                    plan = await self.scan_plan(job_id, asset_id=asset_id, start_ms=start, end_ms=end)
+                    config = {**config, "keyframe_plan_id": plan["id"]}
+                    self.update(job_id, config=config)
+                windows = plan["batches"]
+            else:
+                # Persisted pre-keyframe jobs retain their original paid checkpoints.
+                self.update(job_id, stage="segmentation", message="旧版任务：正在检测镜头边界")
+                segmentation_id = digest([start, end, "content-27-v1"])
+                segmentation_file = directory / "segmentation" / segmentation_id / "shots.json"
+                shots = read_json(segmentation_file)
+                if shots is None:
+                    shots = await asyncio.to_thread(detect_shots, source, start, end)
+                    atomic_json(segmentation_file, shots)
+                windows = make_windows(shots, config["window_ms"])
         interval = max(1, round(1000 / config["subtitle_fps"]))
         subtitle_times = list(range(start, end, interval)) if "subtitle" in config["stages"] else []
         total = len(windows) + math.ceil(len(subtitle_times) / 8)
@@ -425,8 +472,11 @@ class JobQueue:
             self.checkpoint(job_id)
             self.character_context(asset_id, config["character_snapshot"])
             profile = config["profile_snapshots"]["vision"]
+            sampling = ([plan["id"], plan["algorithm"],
+                         [[frame["pts"], frame["time_base"]] for frame in plan["frames"] if frame["id"] in window["frame_ids"]]]
+                        if plan else config["frames_per_window"])
             cache_key = digest([self.library.get_asset(asset_id)["fingerprint"], window, model_identity(profile),
-                                config["frames_per_window"], PROMPT_VERSION, "vision", config["character_snapshot"]])
+                                sampling, PROMPT_VERSION, "vision", config["character_snapshot"]])
             checkpoint_key = "vision:" + cache_key
             record_id = "obs_" + digest([asset_id, window["start_ms"], window["end_ms"]])
             stage_path = directory / "analyses" / run_id / "vision-batches" / f"{cache_key}.json"
@@ -440,7 +490,12 @@ class JobQueue:
                 self.update(job_id, stage="vision", message=f"画面识别 {window['start_ms']/1000:.1f}–{window['end_ms']/1000:.1f} 秒")
                 data = read_json(stage_path)
                 if data is None:
-                    frames = await self.frames(asset_id, source, sample_times(window["start_ms"], window["end_ms"], config["frames_per_window"]))
+                    if plan:
+                        wanted = set(window["frame_ids"])
+                        frames = [{**frame, "path": str(self.library.frame_path(asset_id, frame["id"]))}
+                                  for frame in plan["frames"] if frame["id"] in wanted]
+                    else:
+                        frames = await self.frames(asset_id, source, sample_times(window["start_ms"], window["end_ms"], config["frames_per_window"]))
                     frames = [frame for frame in frames if window["start_ms"] <= frame["at_ms"] < window["end_ms"]]
                     if not frames:
                         raise ValueError("此窗口没有可用的实际视频帧，未跨镜头取用证据")
@@ -461,6 +516,9 @@ class JobQueue:
                                            "character_scope_id": context["scope_id"], "character_revision": context["revision"],
                                            "character_context_digest": digest(context_text),
                                            "character_profile_ids": [p["id"] for p in context["profiles"]]}}
+                    if plan:
+                        data["provenance"].update(keyframe_plan_id=plan["id"], sampling_strategy=plan["algorithm"],
+                            selected_frames=[{key: frame[key] for key in ("id", "pts", "time_base", "at_ms", "reason")} for frame in frames])
                     # Persist the validated provider result before either registry
                     # or observation publication. Replays preserve local entity IDs
                     # and cannot create orphan identities or repay a finished call.

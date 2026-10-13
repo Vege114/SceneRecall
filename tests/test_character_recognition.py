@@ -42,6 +42,32 @@ def cast_worker(tmp_path, monkeypatch):
         return frames
 
     monkeypatch.setattr("scenerecall.media.extract_frames", extract)
+
+    def scan_keyframes(path, start, end, checkpoint=None, progress=None):
+        # Three explicit content batches isolate identity behavior from detection.
+        # Real decoding/selection is covered by test_keyframes, never this fake file.
+        shots, frames, batches = [], [], []
+        for at in range(start, end, 1000):
+            stop = min(end, at + 1000)
+            shot = {"id": f"cast_shot_{at}", "start_ms": at, "end_ms": stop}
+            shots.append(shot)
+            selected = [{"id": f"cast_frame_{when}", "shot_id": shot["id"], "at_ms": when,
+                         "pts": when, "time_base": [1, 1000], "source_pts": when,
+                         "source_time_base": [1, 1000], "reason": "stable_pose"}
+                        for when in (at + 250, at + 750) if when < stop]
+            frames.extend(selected)
+            batches.append({**shot, "id": f"cast_batch_{at}", "shot_id": shot["id"],
+                            "frame_ids": [frame["id"] for frame in selected]})
+        if checkpoint:
+            checkpoint()
+        return {"algorithm": "content-keyframes-v1", "shots": shots, "frames": frames, "batches": batches}
+
+    def extract_keyframes(path, frames, outputs, checkpoint=None):
+        result = extract(path, [frame["at_ms"] for frame in frames], outputs)
+        return [{**planned, **actual} for planned, actual in zip(frames, result, strict=True)]
+
+    monkeypatch.setattr("scenerecall.media.scan_keyframes", scan_keyframes)
+    monkeypatch.setattr("scenerecall.media.extract_keyframes", extract_keyframes)
     state = {"contexts": [], "payloads": [], "callback": None}
 
     def handler(request):
@@ -175,8 +201,8 @@ async def test_inflight_human_edit_discards_stale_response_and_stops_remaining_w
     assert len(queue.library.observations(asset["id"])) == 1
     assert queue.characters.catalog(asset["id"])["profiles"][0]["name"] == "人工名称"
     state["callback"] = None
-    queue.control(job["id"], "retry")
-    await queue.execute(job["id"])
+    with pytest.raises(ValueError, match="新版档案重新识别"):
+        queue.control(job["id"], "retry")
     assert queue.get(job["id"])["status"] == "failed" and len(state["contexts"]) == 2
 
 
@@ -224,7 +250,8 @@ async def test_malformed_character_match_is_rejected_without_registry_changes(ca
     assert queue.library.observations(asset["id"]) == []
 
 
-def test_context_cost_includes_dossier_text_and_references_and_bounds_large_input(cast_worker):
+@pytest.mark.asyncio
+async def test_context_cost_includes_dossier_text_and_references_and_bounds_large_input(cast_worker):
     queue, asset, _state = cast_worker
     profile = queue.providers.get("vision")
     base = queue.estimated_call_cost(profile, frames=2)
@@ -232,7 +259,11 @@ def test_context_cost_includes_dossier_text_and_references_and_bounds_large_inpu
     assert extended - base == pytest.approx((4096 + 10000) / 1_000_000)
     with pytest.raises(ProviderError, match="角色档案上下文"):
         ProviderManager.character_context_text({"profiles": [{"notes": "a" * MAX_CHARACTER_CONTEXT_BYTES}]})
-    estimate = queue.estimate(AnalysisInput(asset_id=asset["id"]), {"bindings": {"vision": "vision"}})
+    plan = queue.ensure_plan(asset["id"])
+    await queue.execute(plan["job_id"])
+    assert queue.get(plan["job_id"])["status"] == "completed"
+    estimate = queue.estimate(AnalysisInput(asset_id=asset["id"], keyframe_plan_id=plan["id"]),
+                              {"bindings": {"vision": "vision"}})
     assert any("参考图" in warning and "费用" in warning for warning in estimate["warnings"])
 
 
@@ -297,8 +328,10 @@ async def test_crash_between_character_and_observation_publication_replays_stage
             faults.setattr("scenerecall.library.atomic_json", interrupted_pointer)
         with pytest.raises(asyncio.CancelledError):
             await queue.execute(job["id"])
-    profiles_before = queue.characters.context(asset["id"])["profiles"]
+    profiles_before = queue.characters.catalog(asset["id"])["profiles"]
     assert len(profiles_before) == 1 and len(state["contexts"]) == 1
+    # Unpublished evidence must not leak into subsequent AI identity context.
+    assert queue.characters.context(asset["id"])["profiles"] == []
     assert queue.library.observations(asset["id"]) == []
     restarted = JobQueue(queue.library, queue.providers, queue.search)
     await restarted.execute(job["id"])

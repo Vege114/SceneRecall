@@ -174,7 +174,7 @@ describe('Cross-shot character dossiers', () => {
 
 describe('Reinterpret video with revised dossiers', () => {
   it('estimates every selected episode, invalidates stale budgets and submits the dossier revision', async () => {
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? estimate : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job-one' }, { id: 'job-two' }], revision: 7 } : library);
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-test', status: 'completed', frames: [], frame_count: 1 } : url.endsWith('/estimate') ? estimate : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job-one' }, { id: 'job-two' }], revision: 7 } : library);
     const { user, context: app } = setup();
     await user.click(await screen.findByRole('button', { name: '按新版档案重新识别' }));
     const dialog = within(screen.getByRole('dialog', { name: '按新版档案重新识别' }));
@@ -193,7 +193,7 @@ describe('Reinterpret video with revised dossiers', () => {
     await user.click(start);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const call = fetch.mock.calls.find((entry) => entry[0].endsWith('/reanalyze'))!;
-    expect(JSON.parse(call[1]!.body as string)).toEqual({ scope: 'series', max_requests: 50, max_cost: null, expected_revision: 7 });
+    expect(JSON.parse(call[1]!.body as string)).toEqual({ scope: 'series', max_requests: 50, max_cost: null, expected_revision: 7, keyframe_plan_ids: { [asset.id]: 'plan-test', [episodeTwo.id]: 'plan-test' } });
     expect(app.refresh).toHaveBeenCalledOnce();
   });
 
@@ -210,7 +210,7 @@ describe('Reinterpret video with revised dossiers', () => {
   });
 
   it('disables money budgets for Codex and hides the series option for a single video', async () => {
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? { ...estimate, cost_estimate: null } : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job' }], revision: 7 } : { ...library, assets: [asset] });
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-test', status: 'completed', frames: [], frame_count: 1 } : url.endsWith('/estimate') ? { ...estimate, cost_estimate: null } : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job' }], revision: 7 } : { ...library, assets: [asset] });
     const app = context(); app.bootstrap.provider_profiles[0].provider_type = 'codex_cli'; app.bootstrap.settings.defaults = { ...DEFAULTS, max_cost: 10 };
     const { user } = setup(app);
     await user.click(await screen.findByRole('button', { name: '按新版档案重新识别' }));
@@ -220,6 +220,6 @@ describe('Reinterpret video with revised dossiers', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole('button', { name: '开始重新识别' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(fetch.mock.calls.filter((entry) => entry[1]?.method === 'POST').map((entry) => JSON.parse(entry[1]!.body as string).max_cost)).toEqual([null, null]);
+    expect(fetch.mock.calls.filter((entry) => entry[1]?.method === 'POST' && entry[0] !== '/api/keyframe-plans').map((entry) => JSON.parse(entry[1]!.body as string).max_cost)).toEqual([null, null]);
   });
 });
