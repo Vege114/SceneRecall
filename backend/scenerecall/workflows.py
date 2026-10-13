@@ -301,6 +301,13 @@ class WorkflowQueueMixin:
 
     def add_batch(self, request, settings):
         payload = request.model_dump()
+        for item, request_item in zip(payload["items"], request.items, strict=True):
+            # Empty selections keep pre-selection request fingerprints reusable.
+            if not item.get("model_overrides"):
+                item.pop("model_overrides", None)
+            else:
+                item["model_overrides"] = {stage: selection.model_dump(exclude_unset=True)
+                                           for stage, selection in request_item.model_overrides.items()}
         if len({item.asset_id for item in request.items}) != len(request.items):
             raise ValueError("同一批分析不能重复选择同一视频")
         with self.library.lock, self.connect() as db:

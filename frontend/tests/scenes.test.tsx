@@ -56,9 +56,10 @@ describe('Scene preparation and budgets', () => {
 
   it('disables dollar budgets when the preparation connection uses Codex', async () => {
     const value = context(); value.bootstrap.provider_profiles.push({ ...profile, id: 'codex-prep', provider_type: 'codex_cli', model: '', capabilities: ['preparation'] }); value.bootstrap.settings.bindings.preparation = 'codex-prep'; value.bootstrap.settings.defaults = { ...DEFAULTS, max_cost: 10 };
-    const fetch = mockFetch(() => ({})); mount(<JobModal asset={asset} onClose={vi.fn()} />, value);
+    const fetch = mockFetch(() => ({ models: [] })); mount(<JobModal asset={asset} onClose={vi.fn()} />, value);
     expect((screen.getByLabelText(/费用上限（USD/) as HTMLInputElement).disabled).toBe(true);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/codex/models']);
+    await screen.findByText('当前目录没有可选模型，可沿用连接或使用 Codex 内置默认。');
   });
 });
 

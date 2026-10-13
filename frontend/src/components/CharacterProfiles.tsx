@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { ArrowRight, Check, GitMerge, Images, Pencil, Play, RefreshCw, ScanLine, Search, Trash2, UserRound, UsersRound } from 'lucide-react';
 import { api, ApiError, assetLink, duration, formatTime, message, post } from '../api';
 import { useApp } from '../context';
-import { DEFAULTS, profileModelLabel, type Asset, type CharacterLibrary, type CharacterProfile, type Estimate, type Job, type KeyframePlan } from '../types';
+import { DEFAULTS, taskModelLabel, type Asset, type CharacterLibrary, type CharacterProfile, type Estimate, type Job, type KeyframePlan, type TaskModelRole } from '../types';
 import { Alert, Empty, Field, Modal, Spinner } from './ui';
+import TaskModels, { useTaskModels } from './TaskModels';
 
 const characterPath = (assetId: string, characterId?: string) => `/assets/${encodeURIComponent(assetId)}/characters${characterId ? `/${encodeURIComponent(characterId)}` : ''}`;
 const frameUrl = (assetId: string, frameId: string) => `/api/assets/${encodeURIComponent(assetId)}/frames/${encodeURIComponent(frameId)}`;
@@ -68,7 +69,13 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   const { bootstrap, refresh, notify, jobs } = useApp();
   const defaults = { ...DEFAULTS, ...bootstrap.settings.defaults };
   const model = bootstrap.provider_profiles.find((profile) => profile.id === bootstrap.settings.bindings.vision);
-  const usesCodex = model?.provider_type === 'codex_cli';
+  const preparation = bootstrap.provider_profiles.find((profile) => profile.id === bootstrap.settings.bindings.preparation);
+  const analysisStrategy = defaults.analysis_strategy || (preparation ? 'scene-chunks-v1' : 'content-keyframes-v1');
+  const usesPreparation = analysisStrategy === 'scene-chunks-v1';
+  const modelRoles: TaskModelRole[] = usesPreparation ? ['preparation', 'vision'] : ['vision'];
+  const taskModels = useTaskModels(modelRoles);
+  const modelOptions = taskModels.overrides ? { model_overrides: taskModels.overrides } : {};
+  const usesCodex = model?.provider_type === 'codex_cli' || (usesPreparation && preparation?.provider_type === 'codex_cli');
   const [scope, setScope] = useState<'asset' | 'series'>('asset');
   const [requestLimit, setRequestLimit] = useState(defaults.max_requests);
   const [costLimit, setCostLimit] = useState(defaults.max_cost?.toString() || '');
@@ -86,9 +93,9 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   const unavailable = assets.filter((candidate) => !candidate.source_available);
   const active = jobs.some((job) => assets.some((candidate) => candidate.id === job.asset_id) && ['queued', 'pending', 'running', 'pausing', 'cancelling'].includes(job.status));
   const maxCost = usesCodex || !costLimit ? null : Number(costLimit);
-  const key = JSON.stringify([scope, requestLimit, maxCost, library.revision, defaults, model?.id]);
+  const key = JSON.stringify([scope, requestLimit, maxCost, library.revision, defaults, model?.id, preparation?.id, taskModels.overrides, taskModels.sourceKey]);
   const validEstimate = estimates && estimateKey === key;
-  const blocked = !model || unavailable.length > 0 || active || stale;
+  const blocked = !model || (usesPreparation && !preparation) || unavailable.length > 0 || active || stale;
   const estimate = async (event: FormEvent) => {
     event.preventDefault();
     if (busy || blocked) return;
@@ -111,7 +118,7 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
           if (plan.status !== 'completed') throw new Error(plan.error || '关键帧预扫描未完成，请重试。');
           setPlans((current) => ({ ...current, [candidate.id]: plan }));
         }
-        results.push(await post<Estimate>('/jobs/estimate', { asset_id: candidate.id, keyframe_plan_id: plan.plan_id || plan.id, stages: ['vision'], start_ms: 0, end_ms: null, force: true, subtitle_fps: defaults.subtitle_fps, subtitle_crop: defaults.subtitle_crop, max_requests: requestLimit, max_cost: maxCost }));
+        results.push(await post<Estimate>('/jobs/estimate', { ...modelOptions, analysis_strategy: analysisStrategy, asset_id: candidate.id, keyframe_plan_id: plan.plan_id || plan.id, stages: ['vision'], start_ms: 0, end_ms: null, force: true, subtitle_fps: defaults.subtitle_fps, subtitle_crop: defaults.subtitle_crop, max_requests: requestLimit, max_cost: maxCost }));
       }
       setEstimates(results); setEstimateKey(key);
     } catch (caught) { setError(message(caught)); } finally { setBusy(null); setScanningPlan(null); }
@@ -120,7 +127,7 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
     if (busy || blocked || !validEstimate) return;
     setBusy('start'); setError('');
     try {
-      const result = await post<{ jobs: Job[]; revision: number }>(`${characterPath(asset.id)}/reanalyze`, { scope, max_requests: requestLimit, max_cost: maxCost, expected_revision: library.revision, keyframe_plan_ids: Object.fromEntries(assets.map((candidate) => [candidate.id, plans[candidate.id].plan_id || plans[candidate.id].id])) });
+      const result = await post<{ jobs: Job[]; revision: number }>(`${characterPath(asset.id)}/reanalyze`, { ...modelOptions, scope, max_requests: requestLimit, max_cost: maxCost, expected_revision: library.revision, keyframe_plan_ids: Object.fromEntries(assets.map((candidate) => [candidate.id, plans[candidate.id].plan_id || plans[candidate.id].id])) });
       await refresh(); notify(`已按新版角色档案创建 ${result.jobs.length} 个重新识别任务`); onClose();
     } catch (caught) { setError(message(caught)); if (caught instanceof ApiError && caught.status === 409) setStale(true); } finally { setBusy(null); }
   };
@@ -129,7 +136,9 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   return <Modal title="按新版档案重新识别" subtitle={`使用当前角色档案 · 修订 ${library.revision}`} onClose={() => { if (!busy) onClose(); }} wide><form onSubmit={estimate}><div className="modal-body">
     <div className="character-reanalyze-intro"><RefreshCw size={24} /><div><strong>把你确认的人物，交回给 AI</strong><p>从头重新分析所选视频的画面，优先匹配这些角色档案，并更新人物关联、动作与场景理解。原有分析版本和人工笔记保留。</p></div></div>
     <Field label="重新识别范围"><select value={scope} onChange={(event) => setScope(event.target.value as 'asset' | 'series')} disabled={Boolean(busy)}><option value="asset">当前作品 · {asset.title}</option>{library.assets.length > 1 && <option value="series">同一作品全部 {library.assets.length} 个视频</option>}</select></Field>
-    <p className="helper character-scope-summary">{assets.length} 个视频 · 共 {duration(assets.reduce((sum, candidate) => sum + candidate.duration_ms, 0))} · {profileModelLabel(model)}</p>
+    <p className="helper character-scope-summary">{assets.length} 个视频 · 共 {duration(assets.reduce((sum, candidate) => sum + candidate.duration_ms, 0))} · {taskModelLabel(model, taskModels.overrides?.vision)}</p>
+    <TaskModels roles={modelRoles} value={taskModels.overrides} onChange={taskModels.change} disabled={!!busy} />
+    {usesPreparation && !preparation && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配分块与简要索引模型。</Alert>}
     {!model && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配画面理解模型。</Alert>}{unavailable.length > 0 && <Alert>这些视频的原文件暂不可用：{unavailable.map((candidate) => candidate.title).join('、')}。请先在各自详情页定位原文件。</Alert>}{active && <Alert>所选作品仍有任务正在进行。请等待任务结束后重新识别。</Alert>}
     <div className="form-grid"><Field label="每个视频最多模型请求数" hint="每个视频独立计数；达到上限后停止，可在任务队列重试。"><input type="number" min={1} max={100000} step={1} value={requestLimit} onChange={(event) => setRequestLimit(Number(event.target.value))} required disabled={Boolean(busy)} /></Field><Field label="每个视频费用上限（USD）" hint={usesCodex ? 'Codex 订阅费用未知，金额上限已停用。' : '留空不限制；费用取决于模型连接的定价。'}><input type="number" min={0.01} step={0.01} value={usesCodex ? '' : costLimit} onChange={(event) => setCostLimit(event.target.value)} placeholder="不限制" disabled={Boolean(busy) || usesCodex} /></Field></div>
     {scanningPlan && ['queued', 'pending', 'running', 'cancelling', 'pausing'].includes(scanningPlan.status) && <div className="keyframe-preview"><p className="helper">{scanningPlan.message || '正在本机扫描关键帧'} · {Math.round((scanningPlan.progress || 0) * 100)}%</p><div className="progress-track" role="progressbar" aria-label="角色重识别关键帧扫描进度" aria-valuenow={Math.round((scanningPlan.progress || 0) * 100)} aria-valuemin={0} aria-valuemax={100}><div style={{ width: `${Math.min(100, (scanningPlan.progress || 0) * 100)}%` }} /></div><button type="button" className="text-button" disabled={cancellingScan || scanningPlan.status === 'cancelling'} onClick={async () => { setCancellingScan(true); try { await post(`/jobs/${encodeURIComponent(scanningPlan.job_id)}/cancel`); } catch (error) { setError(message(error)); } finally { setCancellingScan(false); } }}>取消当前扫描</button></div>}

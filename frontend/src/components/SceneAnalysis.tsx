@@ -2,8 +2,9 @@ import { useState, type FormEvent } from 'react';
 import { ArrowRight, Calculator, Maximize2, ScanLine } from 'lucide-react';
 import { formatTime, message, post, sceneLink, subtitleLink } from '../api';
 import { useApp } from '../context';
-import { DEFAULTS, estimatedCost, estimatedRequests, profileModelLabel, stageLabel, type Estimate, type Job, type SceneChunk, type SceneEvidence, type SceneFact, type Subtitle } from '../types';
+import { DEFAULTS, estimatedCost, estimatedRequests, taskModelLabel, stageLabel, type Estimate, type Job, type SceneChunk, type SceneEvidence, type SceneFact, type Subtitle } from '../types';
 import { Alert, Field, Modal, Spinner } from './ui';
+import TaskModels, { useTaskModels } from './TaskModels';
 
 export function SceneBadges({ scene }: { scene: SceneEvidence }) {
   return <><span className={`tag scene-level ${scene.understanding_level === 'deep' ? 'deep' : ''}`}>{scene.understanding_level === 'deep' ? '深入理解' : '初步理解'}</span>{scene.context_stale && <span className="tag stale-tag" title={scene.stale_reasons?.join('；')}>上下文待更新</span>}</>;
@@ -56,14 +57,15 @@ function DeepenSceneModal({ assetId, chunkId, title, contextStale, onClose, onSt
   const defaults = { ...DEFAULTS, ...bootstrap.settings.defaults };
   const profile = bootstrap.provider_profiles.find((entry) => entry.id === bootstrap.settings.bindings.vision);
   const usesCodex = profile?.provider_type === 'codex_cli';
+  const taskModels = useTaskModels(['vision']);
   const [requestLimit, setRequestLimit] = useState(defaults.max_requests);
   const [costLimit, setCostLimit] = useState(defaults.max_cost?.toString() || '');
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [estimateKey, setEstimateKey] = useState('');
   const [busy, setBusy] = useState<'estimate' | 'start' | null>(null);
   const [error, setError] = useState('');
-  const budget = { max_requests: requestLimit, max_cost: usesCodex || !costLimit ? null : Number(costLimit) };
-  const key = JSON.stringify(budget);
+  const budget = { ...(taskModels.overrides ? { model_overrides: taskModels.overrides } : {}), max_requests: requestLimit, max_cost: usesCodex || !costLimit ? null : Number(costLimit) };
+  const key = JSON.stringify([budget, taskModels.sourceKey]);
   const endpoint = `/assets/${encodeURIComponent(assetId)}/chunks/${encodeURIComponent(chunkId)}/deepen`;
   const estimateValid = estimate && estimateKey === key;
   const estimateJob = async (event: FormEvent) => {
@@ -77,5 +79,5 @@ function DeepenSceneModal({ assetId, chunkId, title, contextStale, onClose, onSt
     try { await post<Job>(endpoint, budget); await refresh(); notify('片段深入分析任务已加入队列，收藏与引用会保留'); onStarted?.(); onClose(); }
     catch (error) { setError(message(error)); } finally { setBusy(null); }
   };
-  return <Modal title="深入分析此片段" subtitle={title} onClose={onClose}><form onSubmit={estimateJob}><div className="modal-body"><p>使用保留的原始关键帧、对应台词与此前记忆升级当前片段。模型：{profileModelLabel(profile)}。</p>{contextStale && <Alert>此前内容已修订。更新这个片段后，受影响的后续内容会标为待更新。</Alert>}{!profile && <Alert>请在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配画面理解模型。</Alert>}<Field label="最多模型请求数" hint="达到上限后保留已完成结果，可在任务队列提高预算继续"><input type="number" min="1" max="100000" required value={requestLimit} onChange={(event) => setRequestLimit(Number(event.target.value))} disabled={!!busy} /></Field><Field label="费用上限（USD，可选）" hint={usesCodex ? 'Codex CLI 使用请求数控制用量，美元费用未知' : '留空不设金额上限；金额控制需要配置模型单价'}><input type="number" min="0.01" step="0.01" value={usesCodex ? '' : costLimit} disabled={usesCodex || !!busy} onChange={(event) => setCostLimit(event.target.value)} /></Field>{estimateValid && <><div className="estimate"><div><span>预计请求</span><strong>{estimatedRequests(estimate)} <small>次</small></strong></div><div><span>估算费用</span><strong>{estimatedCost(estimate)}</strong></div>{estimate.warnings?.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}</div><StageEstimates estimate={estimate} /></>}{error && <Alert tone="error">{error}</Alert>}</div><footer className="modal-footer"><button type="submit" className="button secondary" disabled={!!busy || !profile}>{busy === 'estimate' ? <Spinner label="正在估算" /> : <><Calculator size={15} />{estimateValid ? '重新估算' : '估算用量'}</>}</button><button type="button" className="button primary" onClick={() => void start()} disabled={!!busy || !estimateValid || !profile}>{busy === 'start' ? <Spinner label="正在提交" /> : <>开始深入分析 <ArrowRight size={15} /></>}</button></footer></form></Modal>;
+  return <Modal title="深入分析此片段" subtitle={title} onClose={onClose}><form onSubmit={estimateJob}><div className="modal-body"><p>使用保留的原始关键帧、对应台词与此前记忆升级当前片段。模型：{taskModelLabel(profile, taskModels.overrides?.vision)}。</p><TaskModels roles={['vision']} value={taskModels.overrides} onChange={taskModels.change} disabled={!!busy} />{contextStale && <Alert>此前内容已修订。更新这个片段后，受影响的后续内容会标为待更新。</Alert>}{!profile && <Alert>请在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配画面理解模型。</Alert>}<Field label="最多模型请求数" hint="达到上限后保留已完成结果，可在任务队列提高预算继续"><input type="number" min="1" max="100000" required value={requestLimit} onChange={(event) => setRequestLimit(Number(event.target.value))} disabled={!!busy} /></Field><Field label="费用上限（USD，可选）" hint={usesCodex ? 'Codex CLI 使用请求数控制用量，美元费用未知' : '留空不设金额上限；金额控制需要配置模型单价'}><input type="number" min="0.01" step="0.01" value={usesCodex ? '' : costLimit} disabled={usesCodex || !!busy} onChange={(event) => setCostLimit(event.target.value)} /></Field>{estimateValid && <><div className="estimate"><div><span>预计请求</span><strong>{estimatedRequests(estimate)} <small>次</small></strong></div><div><span>估算费用</span><strong>{estimatedCost(estimate)}</strong></div>{estimate.warnings?.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}</div><StageEstimates estimate={estimate} /></>}{error && <Alert tone="error">{error}</Alert>}</div><footer className="modal-footer"><button type="submit" className="button secondary" disabled={!!busy || !profile}>{busy === 'estimate' ? <Spinner label="正在估算" /> : <><Calculator size={15} />{estimateValid ? '重新估算' : '估算用量'}</>}</button><button type="button" className="button primary" onClick={() => void start()} disabled={!!busy || !estimateValid || !profile}>{busy === 'start' ? <Spinner label="正在提交" /> : <>开始深入分析 <ArrowRight size={15} /></>}</button></footer></form></Modal>;
 }

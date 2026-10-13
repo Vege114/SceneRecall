@@ -18,6 +18,7 @@ import signal
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,10 @@ MAX_DIAGNOSTIC_BYTES = 256 * 1024
 MAX_PROMPT_BYTES = 4 * 1024 * 1024
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_CATALOG_BYTES = 4 * 1024 * 1024
 STATUS_TIMEOUT_S = 10
+REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
+_MODEL_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,299}"
 _REQUIRED_FLAGS = ("--ignore-user-config", "--ignore-rules", "--ephemeral", "--json", "--image")
 _DISABLED_FEATURES = (
     "shell_tool", "unified_exec", "apps", "plugins", "hooks", "multi_agent", "multi_agent_v2",
@@ -211,6 +215,88 @@ async def status() -> dict:
         return await _inspect(executable, Path(directory))
 
 
+def _cached_model_catalog() -> dict:
+    """Read only Codex's public model metadata, never its config or credentials.
+
+    Unlike exec, app-server cannot ignore user config. Reading its local catalog
+    avoids booting a second server with user plugins/hooks just for a selector.
+    Cache entries describe picker options, not a guarantee of account access.
+    """
+    unavailable = {"models": [], "default_model": None, "source": "unavailable", "fetched_at": None,
+                   "message": "暂无 Codex 本地模型目录。可在终端启动 Codex 刷新目录，或使用 Codex 默认设置。"}
+    directory = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    try:
+        with (directory / "models_cache.json").open("rb") as handle:
+            payload = handle.read(MAX_CATALOG_BYTES + 1)
+        if len(payload) > MAX_CATALOG_BYTES:
+            return unavailable
+        raw = json.loads(payload)
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+        return unavailable
+    if not isinstance(raw, dict) or not isinstance(raw.get("models"), list):
+        return unavailable
+    models, seen = [], set()
+    for entry in raw["models"]:
+        if not isinstance(entry, dict) or entry.get("visibility") != "list":
+            continue
+        model_id = entry.get("slug")
+        if not isinstance(model_id, str) or not re.fullmatch(_MODEL_ID_PATTERN, model_id) or model_id in seen:
+            continue
+        name = entry.get("display_name")
+        if not isinstance(name, str) or not name.strip() or len(name) > 200:
+            name = model_id
+        efforts = []
+        supported = entry.get("supported_reasoning_levels", [])
+        for option in supported if isinstance(supported, list) else []:
+            effort = option.get("effort") if isinstance(option, dict) else None
+            if isinstance(effort, str) and effort in REASONING_EFFORTS and effort not in efforts:
+                efforts.append(effort)
+        default = entry.get("default_reasoning_level")
+        if not isinstance(default, str) or default not in efforts:
+            default = None
+        models.append({"id": model_id, "name": name.strip(), "reasoning_efforts": efforts,
+                       "default_reasoning_effort": default})
+        seen.add(model_id)
+    if not models:
+        return unavailable
+    fetched_at = raw.get("fetched_at")
+    try:
+        if not isinstance(fetched_at, str) or len(fetched_at) > 64:
+            raise ValueError
+        timestamp = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            raise ValueError
+    except ValueError:
+        fetched_at = None
+    return {"models": models, "default_model": None, "source": "local_cache", "fetched_at": fetched_at,
+            "message": "模型及思考等级来自本机 Codex 缓存，实际可用性以当前账号为准；留空时使用 Codex 默认设置。"}
+
+
+async def model_catalog() -> dict:
+    checked = await status()
+    if not checked["compatible"] or not checked["authenticated"]:
+        return {"models": [], "default_model": None, "source": "unavailable", "fetched_at": None,
+                "message": checked["message"]}
+    return await asyncio.to_thread(_cached_model_catalog)
+
+
+def validate_model(model: str) -> None:
+    if not isinstance(model, str) or (model and not re.fullmatch(_MODEL_ID_PATTERN, model)):
+        raise CodexCLIError("Codex CLI 模型名格式无效")
+
+
+def validate_reasoning_effort(model: str, reasoning_effort: str | None) -> None:
+    if reasoning_effort is None or reasoning_effort == "":
+        return
+    if not isinstance(reasoning_effort, str) or reasoning_effort not in REASONING_EFFORTS:
+        raise CodexCLIError("Codex CLI 思考等级无效")
+    # Preserve legacy/custom models and offline operation when no metadata is
+    # available; Codex remains authoritative for those requests.
+    entry = next((entry for entry in _cached_model_catalog()["models"] if entry["id"] == model), None)
+    if entry is not None and reasoning_effort not in entry["reasoning_efforts"]:
+        raise CodexCLIError(f"Codex 模型 {model} 不支持思考等级 {reasoning_effort}")
+
+
 def _prepare_content(content: Any, directory: Path) -> tuple[str, list[Path]]:
     if isinstance(content, str):
         text = content
@@ -295,9 +381,10 @@ class _Events:
                 self.turn_failed = True
 
 
-async def complete(instruction: str, user_content: Any, model: str, timeout_s: float) -> CodexCLIResult:
-    if not isinstance(model, str) or (model and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,299}", model)):
-        raise CodexCLIError("Codex CLI 模型名格式无效")
+async def complete(instruction: str, user_content: Any, model: str, timeout_s: float,
+                   reasoning_effort: str | None = None) -> CodexCLIResult:
+    validate_model(model)
+    validate_reasoning_effort(model, reasoning_effort)
     if not isinstance(instruction, str) or len(instruction.encode("utf-8")) > MAX_PROMPT_BYTES:
         raise CodexCLIError("Codex CLI 指令格式或大小无效")
     if not isinstance(timeout_s, (int, float)) or not math.isfinite(timeout_s) or timeout_s <= 0:
@@ -327,6 +414,8 @@ async def complete(instruction: str, user_content: Any, model: str, timeout_s: f
                         "--skip-git-repo-check", "--json", "--color", "never", "-s", "read-only"]
                 if model:
                     args.extend(["-m", model])
+                if reasoning_effort:
+                    args.extend(["-c", f"model_reasoning_effort={json.dumps(reasoning_effort)}"])
                 for override in (*_ISOLATION_CONFIG, f"model_instructions_file={json.dumps(str(instructions))}"):
                     args.extend(["-c", override])
                 for feature in _DISABLED_FEATURES:

@@ -244,7 +244,7 @@ describe('Codex CLI connections', () => {
   it('uses request budgets for CLI jobs and explicitly disables an inherited dollar limit', async () => {
     const user = userEvent.setup();
     const estimate = { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] };
-    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [], frame_count: 3, batch_count: 1 } : url.endsWith('/estimate') ? estimate : { id: 'codex-job' });
+    const fetch = mockFetch((url) => url === '/api/codex/models' ? { models: [] } : url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [], frame_count: 3, batch_count: 1 } : url.endsWith('/estimate') ? estimate : { id: 'codex-job' });
     const onClose = vi.fn();
     renderApp(<JobModal asset={asset} onClose={onClose} />, appContext({ bootstrap: { ...bootstrap, provider_profiles: [codex], settings: { bindings: { vision: codex.id, preparation: codex.id }, defaults: { ...DEFAULTS, max_cost: 10 } } } }));
     expect(screen.getByText(/Codex 默认模型 · 仅发送内容关键帧/)).toBeTruthy();
@@ -257,8 +257,8 @@ describe('Codex CLI connections', () => {
     await screen.findByText('重新估算');
     await user.click(screen.getByRole('button', { name: /开始分析/ }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(fetch.mock.calls.filter((call) => call[0] !== '/api/keyframe-plans').map((call) => JSON.parse(call[1]!.body as string).max_cost)).toEqual([null, null]);
-    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string).max_requests).toBe(DEFAULTS.max_requests);
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST' && call[0] !== '/api/keyframe-plans').map((call) => JSON.parse(call[1]!.body as string).max_cost)).toEqual([null, null]);
+    expect(JSON.parse(fetch.mock.calls.find((call) => call[0] === '/api/jobs/estimate')![1]!.body as string).max_requests).toBe(DEFAULTS.max_requests);
   });
 });
 

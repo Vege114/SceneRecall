@@ -18,6 +18,21 @@ export interface SubtitleTracks {
 }
 export const SUBTITLE_SOURCE_LABELS = { container: '容器字幕轨', external: '外挂字幕', embedded: '画面烧录字幕 · OCR' };
 export type ProviderType = 'openai_compatible' | 'codex_cli';
+export type TaskModelRole = 'preparation' | 'vision' | 'subtitle';
+export interface TaskModelOverride {
+  provider_type: 'codex_cli';
+  profile_id: string;
+  model?: string;
+  reasoning_effort?: string | null;
+}
+export type TaskModelOverrides = Partial<Record<TaskModelRole, TaskModelOverride>>;
+export interface CodexModelCatalog {
+  models: { id: string; name: string; reasoning_efforts: string[]; default_reasoning_effort: string | null }[];
+  default_model?: string | null;
+  message?: string;
+  source?: 'local_cache' | 'unavailable';
+  fetched_at?: string | null;
+}
 export interface Profile {
   id: string;
   name: string;
@@ -44,7 +59,12 @@ export interface CodexStatus {
 export function profileModelLabel(profile?: Profile): string {
   return profile?.model || (profile?.provider_type === 'codex_cli' ? 'Codex 默认模型' : '尚未分配模型');
 }
+export function taskModelLabel(profile?: Profile, selection?: TaskModelOverride): string {
+  if (profile?.provider_type === 'codex_cli' && selection?.profile_id === profile.id && selection.model !== undefined) return selection.model || 'Codex 内置默认';
+  return profileModelLabel(profile);
+}
 export interface Defaults {
+  analysis_strategy?: 'scene-chunks-v1' | 'content-keyframes-v1';
   window_ms: number;
   frames_per_window: number;
   subtitle_fps: number;
@@ -242,6 +262,7 @@ export interface AssetDetail {
   runs: Run[];
 }
 export interface Job {
+  task_models?: Partial<Record<TaskModelRole, { provider_type: ProviderType; profile_id: string; model: string; reasoning_effort?: string | null }>>;
   batch_id?: string;
   sampling_strategy?: string;
   analysis_strategy?: string;
@@ -268,6 +289,7 @@ export interface Job {
   created_at: string;
 }
 export interface JobPayload extends Omit<Defaults, 'window_ms' | 'frames_per_window'> {
+  model_overrides?: TaskModelOverrides;
   keyframe_plan_id?: string;
   sampling_strategy?: string;
   analysis_strategy?: 'scene-chunks-v1';

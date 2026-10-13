@@ -118,6 +118,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 **({"sampling_strategy": job["config"].get("sampling_strategy", "uniform-v1")}
                    if job["type"] == "analysis" and "vision" in job["config"].get("stages", []) else {}),
                 **({"chunk_id": job["config"]["deepen_chunk_id"]} if job["config"].get("deepen_chunk_id") else {}),
+                "task_models": {stage: {"provider_type": profile.get("provider_type", "openai_compatible"),
+                    "profile_id": profile["id"], "model": profile.get("model", ""),
+                    "reasoning_effort": profile.get("reasoning_effort")}
+                    for stage, profile in job["config"].get("profile_snapshots", {}).items()},
                 "budget": {"max_requests": job["config"].get("max_requests", 1000), "max_cost": job["config"].get("max_cost")}}
 
     def asset_view(asset):
@@ -179,6 +183,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.get("/api/codex/status")
     async def codex_status():
         return await codex_cli.status()
+
+    @app.get("/api/codex/models")
+    async def codex_models():
+        return await codex_cli.model_catalog()
 
     @app.post("/api/profiles")
     async def profile_save(payload: dict = Body(...)):
@@ -259,6 +267,13 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 and job["status"] in {"queued", "running", "pausing"}
                 and job["config"].get("deepen_chunk_id") == chunk_id
                 and job["config"].get("deepen_revision") == config["deepen_revision"]), None)
+            if existing:
+                from .jobs import model_identity
+                previous_profile = existing["config"]["profile_snapshots"]["vision"]
+                chosen_profile = config["profile_snapshots"]["vision"]
+                if (previous_profile["id"] != chosen_profile["id"]
+                        or model_identity(previous_profile) != model_identity(chosen_profile)):
+                    raise ValueError("该片段已有使用其他模型选择的待处理任务，请先完成或取消该任务再重新提交")
             return public_job(existing or queue.add("analysis", config, asset_id))
 
     @app.post("/api/assets/{asset_id}/relocate")
@@ -338,6 +353,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 request = AnalysisInput(**{**current["defaults"], "asset_id": asset["id"],
                     "stages": ["vision"], "start_ms": 0, "end_ms": asset["duration_ms"], "force": True,
                     "keyframe_plan_id": payload.keyframe_plan_ids.get(asset["id"]),
+                    "model_overrides": payload.model_overrides,
                     "max_requests": payload.max_requests, "max_cost": payload.max_cost})
                 _, config = queue.validate(request, current)
                 config["character_reanalysis"] = True

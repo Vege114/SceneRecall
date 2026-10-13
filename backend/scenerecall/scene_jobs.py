@@ -273,7 +273,7 @@ class SceneJobMixin:
         self.before_call(job_id, profile, frames=images, context_tokens=encoded_size(canonical(args)))
         started = time.monotonic()
         try:
-            result = await method(profile["id"], *args)
+            result = await self.invoke_profile(profile, method, *args)
         except Exception as exc:
             self.account(job_id, exc)
             self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
@@ -333,7 +333,8 @@ class SceneJobMixin:
         chunk = store.get(asset_id, chunk_id)
         request = AnalysisInput(asset_id=asset_id, analysis_strategy=STRATEGY,
                                 start_ms=chunk["start_ms"], end_ms=chunk["end_ms"],
-                                max_requests=payload.max_requests, max_cost=payload.max_cost)
+                                max_requests=payload.max_requests, max_cost=payload.max_cost,
+                                model_overrides=payload.model_overrides)
         # Manual deepening needs only vision; no new preparation work is performed.
         _, config = self.validate(request, settings, scene_deepening=True)
         config.update(analysis_strategy=STRATEGY, sampling_strategy=STRATEGY,
@@ -383,7 +384,6 @@ class SceneJobMixin:
         return context
 
     async def analyze_scenes(self, job_id):
-        from .jobs import model_identity
         from .scenes import SceneStore
         store = SceneStore(self.library)
         job = self.checkpoint(job_id)
@@ -408,7 +408,7 @@ class SceneJobMixin:
         self.library.require_source(asset_id)
         self._scene_context(asset_id, config)
         for profile in config["profile_snapshots"].values():
-            if model_identity(self.providers.get(profile["id"])) != model_identity(profile):
+            if not self.profile_source_unchanged(config, profile):
                 raise ValueError("模型配置已变化，请创建新任务")
         directory = self.library.asset_dir(asset_id) / "analyses" / run_id
         state_path = directory / "scene-state.json"

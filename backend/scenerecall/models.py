@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from . import codex_cli
 
 
 class Contract(BaseModel):
@@ -45,7 +47,31 @@ class SubtitleExtractInput(Contract):
     subtitle_offset_ms: int = Field(default=0, strict=True)
 
 
-class AnalysisInput(Contract):
+class TaskModelOverride(Contract):
+    provider_type: Literal["codex_cli"]
+    profile_id: str = Field(min_length=1, max_length=180)
+    model: str = Field(default="", max_length=300)
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] | None = None
+
+    @field_validator("profile_id", "model")
+    @classmethod
+    def validate_identifier(cls, value):
+        if value != value.strip() or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+            raise ValueError("模型或连接标识不能包含首尾空白或控制字符")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value):
+        codex_cli.validate_model(value)
+        return value
+
+
+class TaskModelSelection(Contract):
+    model_overrides: dict[Literal["preparation", "vision", "subtitle"], TaskModelOverride] = Field(default_factory=dict)
+
+
+class AnalysisInput(TaskModelSelection):
     asset_id: str
     analysis_strategy: Literal["scene-chunks-v1", "content-keyframes-v1"] | None = None
     keyframe_plan_id: str | None = None
@@ -72,7 +98,7 @@ class AnalysisInput(Contract):
         return self
 
 
-class DeepenInput(Contract):
+class DeepenInput(TaskModelSelection):
     max_requests: int = Field(default=1000, ge=1, le=100000, strict=True)
     max_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
@@ -118,7 +144,7 @@ class CharacterMergeInput(Contract):
     expected_revision: int | None = Field(default=None, ge=0, strict=True)
 
 
-class CharacterReanalysisInput(Contract):
+class CharacterReanalysisInput(TaskModelSelection):
     scope: Literal["asset", "series"] = "asset"
     max_requests: int = Field(default=1000, ge=1, le=100000, strict=True)
     max_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)

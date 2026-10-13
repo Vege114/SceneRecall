@@ -18,6 +18,8 @@ import tempfile
 import threading
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -287,6 +289,7 @@ class ProviderManager:
         self._transport = transport
         self._lock = threading.RLock()
         self._semaphores: dict[tuple[str, int], asyncio.Semaphore] = {}
+        self._task_profile: ContextVar[dict | None] = ContextVar("scenerecall_task_profile", default=None)
         # Separate instances/libraries must never share a keychain credential.
         import hashlib
         self._keyring_service = "SceneRecall:" + hashlib.sha256(str(self.path.resolve()).encode()).hexdigest()[:20]
@@ -388,8 +391,24 @@ class ProviderManager:
             raise ProviderError("当前连接尚无 API Key；请填写密钥或为本地服务选择无需密钥")
         return key
 
+    @contextmanager
+    def use_profile(self, profile: dict):
+        """Use one task's frozen Codex selection without changing shared connections."""
+        token = self._task_profile.set(dict(profile) if profile.get("provider_type") == "codex_cli" else None)
+        try:
+            yield
+        finally:
+            self._task_profile.reset(token)
+
     def _profile(self, id: str, capability: str) -> dict:
+        selected = self._task_profile.get()
         profile = self.get(id)
+        if selected is not None and selected["id"] == id:
+            if profile.get("provider_type") != selected.get("provider_type"):
+                raise ProviderError("任务所用连接来源已变化，请创建新任务")
+            # Timeouts, concurrency limits and capability repairs stay live so a
+            # failed job can recover. Only output-affecting task choices freeze.
+            profile = {**profile, "model": selected["model"], "reasoning_effort": selected.get("reasoning_effort")}
         if capability not in profile["capabilities"]:
             raise ProviderError(f"连接未启用 {capability} 能力")
         return profile
@@ -513,7 +532,9 @@ class ProviderManager:
         async with semaphore:
             for attempt in range(3):
                 try:
-                    result = await codex_cli.complete(instruction, user_content, profile["model"], profile["timeout_s"])
+                    options = ({"reasoning_effort": profile["reasoning_effort"]}
+                               if profile.get("reasoning_effort") is not None else {})
+                    result = await codex_cli.complete(instruction, user_content, profile["model"], profile["timeout_s"], **options)
                 except codex_cli.CodexCLIError as exc:
                     for name in usage:
                         usage[name] += exc.usage.get(name, 0)

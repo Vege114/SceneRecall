@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import math
 import sqlite3
+from contextlib import nullcontext
 
+from . import codex_cli
 from .library import Library, atomic_json, digest, now, read_json, uid
 from .models import AnalysisInput
 from .providers import (CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, MAX_OUTPUT_TOKENS,
@@ -29,6 +32,8 @@ def model_identity(profile: dict) -> dict:
     provider_type = profile.get("provider_type") or "openai_compatible"
     if provider_type != "openai_compatible":
         identity["provider_type"] = provider_type
+    if profile.get("reasoning_effort") is not None:
+        identity["reasoning_effort"] = profile["reasoning_effort"]
     return identity
 
 
@@ -156,26 +161,45 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                 a = min(request.start_ms, *(row["start_ms"] for row in overlap))
                 b = max(end, *(row["end_ms"] for row in overlap))
                 raise ValueError(f"重分块范围需包含相交片段的完整边界，请选择 {a / 1000:g}–{b / 1000:g} 秒；单片段可使用深入分析")
-        snapshots = {}
+        snapshots, source_snapshots, sources = {}, {}, {}
         required = list(request.stages)
         if "vision" in required and strategy == "scene-chunks-v1" and not scene_deepening:
             required.append("preparation")
+        if set(request.model_overrides) - set(required):
+            raise ValueError("只能为本次任务启用的阶段选择模型和思考等级")
         for stage in required:
             if stage == "subtitle" and asset["subtitle_mode"] != "embedded":
                 raise ValueError("容器或外挂文字字幕已在本地解析，无需调用字幕视觉模型")
             profile_id = bindings.get(stage)
             if not profile_id:
                 raise ValueError(f"请先在设置中为 {stage} 绑定模型")
-            profile = self.providers.get(profile_id)
+            if profile_id not in sources:
+                sources[profile_id] = self.providers.get(profile_id)
+            profile = copy.deepcopy(sources[profile_id])
+            source_snapshots[stage] = copy.deepcopy(profile)
             if stage not in profile.get("capabilities", []):
                 raise ValueError(f"模型未声明 {stage} 能力，请检查连接配置")
+            selected = request.model_overrides.get(stage)
+            if selected is not None:
+                if selected.profile_id != profile_id or selected.provider_type != profile.get("provider_type"):
+                    raise ValueError("模型来源或绑定连接已变化，请刷新后重新选择任务模型")
+                profile = copy.deepcopy(profile)
+                if "model" in selected.model_fields_set:
+                    profile["model"] = selected.model
+                if "reasoning_effort" in selected.model_fields_set:
+                    profile["reasoning_effort"] = selected.reasoning_effort
+                codex_cli.validate_model(profile.get("model", ""))
+                codex_cli.validate_reasoning_effort(profile.get("model", ""), profile.get("reasoning_effort"))
             if request.max_cost is not None and profile.get("provider_type") == "codex_cli":
                 raise ValueError(CODEX_COST_BUDGET_MESSAGE)
             if request.max_cost is not None and (profile.get("input_price_per_million") is None or profile.get("output_price_per_million") is None):
                 raise ValueError("设置费用预算前，请填写所用模型的输入与输出单价")
             snapshots[stage] = profile
         config = {**request.model_dump(), "analysis_strategy": strategy, "end_ms": end,
-                  "bindings": dict(bindings), "profile_snapshots": snapshots}
+                  "bindings": dict(bindings), "profile_snapshots": snapshots,
+                  "source_profile_snapshots": source_snapshots,
+                  "model_overrides": {stage: selected.model_dump(exclude_unset=True)
+                                      for stage, selected in request.model_overrides.items()}}
         if "vision" in request.stages:
             context = self.character_context(request.asset_id, scene=strategy == "scene-chunks-v1")
             config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}
@@ -287,6 +311,8 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                     and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
                 raise ValueError("字幕来源已切换为文字字幕，请创建只包含画面理解的新任务")
             if overrides:
+                if "model_overrides" in overrides:
+                    raise ValueError("恢复或重试会沿用任务已保存的模型选择；如需切换模型，请创建新任务")
                 for key in ("max_requests", "max_cost"):
                     if key in overrides:
                         if key == "max_cost" and overrides[key] is None:
@@ -320,10 +346,15 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             raise StopJob()
         return job
 
+    def profile_source_unchanged(self, config: dict, profile: dict) -> bool:
+        original = next((snapshot for snapshot in config.get("source_profile_snapshots", {}).values()
+                         if snapshot["id"] == profile["id"]), profile)
+        return model_identity(self.providers.get(profile["id"])) == model_identity(original)
+
     def before_call(self, job_id: str, profile: dict, frames=0, text_count=1, context_tokens=0):
         job = self.checkpoint(job_id)
         current_profile = self.providers.get(profile["id"])
-        if model_identity(current_profile) != model_identity(profile):
+        if not self.profile_source_unchanged(job["config"], profile):
             self.update(job_id, status="paused", message="任务所用连接类型、模型地址或名称已变化，请还原配置后继续或创建新任务")
             raise StopJob()
         count_budget = job["config"].get("max_requests", 1000)
@@ -364,10 +395,15 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                     cost=known if total_attempts and not incomplete else None,
                     known_cost=known, cost_incomplete=incomplete, inflight_attempts=0)
 
+    async def invoke_profile(self, profile: dict, method, *args):
+        scope = getattr(self.providers, "use_profile", None)
+        with scope(profile) if scope else nullcontext():
+            return await method(profile["id"], *args)
+
     async def call(self, job_id: str, profile: dict, method, *args, frames=0, context_tokens=0):
         self.before_call(job_id, profile, frames, context_tokens=context_tokens)
         try:
-            result = await method(profile["id"], *args)
+            result = await self.invoke_profile(profile, method, *args)
         except Exception as exc:
             self.account(job_id, exc)
             raise
@@ -483,7 +519,7 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         source = self.library.require_source(asset_id)
         directory = self.library.asset_dir(asset_id)
         for snapshot in config["profile_snapshots"].values():
-            if model_identity(self.providers.get(snapshot["id"])) != model_identity(snapshot):
+            if not self.profile_source_unchanged(config, snapshot):
                 raise ValueError("任务所用模型配置已变化，请创建新任务；已有识别结果仍可复用")
         start, end = config["start_ms"], config["end_ms"]
         windows = []
