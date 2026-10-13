@@ -84,7 +84,7 @@ export default function ImportModal({ onClose, projectId, retryJobId }: { onClos
       setJob(result); await refresh(); notify(job ? '失败文件已重新排队' : '视频已加入导入队列');
     } catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
-  const analyze = async () => { setBusy(true); try { const all = await api<Asset[]>('/assets'); const ids = new Set(job?.items?.filter((result) => result.asset_id).map((result) => result.asset_id)); const imported = all.filter((asset) => ids.has(asset.id)); if (imported.length) { onClose(); openJobs?.(imported); } } catch (error) { setError(message(error)); } finally { setBusy(false); } };
+  const analyze = async () => { setBusy(true); try { const all = await api<Asset[]>('/assets'); const ids = new Set(job?.items?.filter((result) => result.asset_id).map((result) => result.asset_id)); const imported = all.filter((asset) => ids.has(asset.id)); if (imported.length) { onClose(); openJobs?.(imported); } else setError('这批视频已不在资料库，可到回收站查看或恢复。'); } catch (error) { setError(message(error)); } finally { setBusy(false); } };
   const result = tracks[item?.item_id]; const usingTracks = item?.subtitle_mode === 'auto' || item?.subtitle_mode === 'container';
   const unsupported = usingTracks && !!result?.tracks.length && !result.tracks.some((track) => track.supported);
   const failed = job?.items?.filter((entry) => entry.status === 'failed').length || 0;

@@ -180,6 +180,14 @@ class SearchEngine:
                     self._write_record(db, context)
             self._generation += 1
 
+    def remove_assets(self, asset_ids):
+        """Remove evidence immediately and invalidate any in-flight publication."""
+        with self._lock, self._db() as db:
+            for asset_id in asset_ids:
+                db.execute("DELETE FROM evidence_fts WHERE id IN (SELECT id FROM records WHERE asset_id=?)", (asset_id,))
+                db.execute("DELETE FROM records WHERE asset_id=?", (asset_id,))
+            self._generation += 1
+
     def _signature(self, profile_id: str) -> str:
         profile = self.providers.get(profile_id)
         # Storage mode, keys and prices do not affect the mathematical vector space.

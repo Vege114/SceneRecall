@@ -334,6 +334,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.get("/api/assets/{asset_id}/frames/{frame_id}")
     async def frame(asset_id: str, frame_id: str):
+        library.get_asset(asset_id)
         return FileResponse(library.frame_path(asset_id, frame_id), media_type="image/jpeg")
 
     @app.post("/api/assets/{asset_id}/proxy")
@@ -386,6 +387,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 changed |= text != record.get("text")
                 results.append(enrich({**record, "text": text, "summary": text, "subtitle_text": text,
                                        "start_ms": min(r["start_ms"] for r in sources), "end_ms": max(r["end_ms"] for r in sources)}))
+            else:
+                changed = True
         if changed:
             result["explanation"] = None
             result.setdefault("degraded", []).append("资料已有新修正，已显示最新原文；请重建索引更新排序")

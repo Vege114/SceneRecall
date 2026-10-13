@@ -4,6 +4,7 @@ import { api, post, message } from '../api';
 import { useApp } from '../context';
 import type { AssetKind, Folder, Project } from '../types';
 import { Alert, Field, Modal, Spinner } from './ui';
+import DeleteModal from './DeleteModal';
 
 export function folderLabel(id: string, folders: Folder[]): string {
   const names: string[] = []; const seen = new Set<string>(); let current: string | null = id;
@@ -16,18 +17,16 @@ export function inFolder(id: string | null | undefined, parent: string, folders:
   return false;
 }
 export default function Organization({ projectId, folderId, onProject, onFolder }: { projectId: string; folderId: string; onProject: (id: string) => void; onFolder: (id: string) => void }) {
-  const { projects = [], folders = [], refresh, notify } = useApp();
+  const { projects = [], folders = [] } = useApp();
   const [editor, setEditor] = useState<{ type: 'project' | 'folder'; entity?: Project | Folder } | null>(null);
   const [deleting, setDeleting] = useState<{ type: 'project' | 'folder'; id: string; name: string } | null>(null);
-  const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const selected = projects.find((entry) => entry.id === projectId); const folder = folders.find((entry) => entry.id === folderId);
-  const remove = async () => { if (!deleting) return; setBusy(true); setError(''); try { await api(`/${deleting.type === 'project' ? 'projects' : 'folders'}/${encodeURIComponent(deleting.id)}`, { method: 'DELETE' }); await refresh(); if (deleting.type === 'project') onProject('all'); else onFolder(''); setDeleting(null); notify('分类已删除，视频资料保留'); } catch (error) { setError(message(error)); } finally { setBusy(false); } };
   return <section className="organization" aria-label="项目与文件夹管理">
     <div className="section-row"><div><h2>剧集与项目</h2><p className="helper">一部动画一个项目；用文件夹和标签整理多部作品。</p></div><div className="button-row"><button type="button" className="button secondary small" onClick={() => setEditor({ type: 'folder' })}><FolderPlus size={15} />新建文件夹</button><button type="button" className="button secondary small" onClick={() => setEditor({ type: 'project' })}><Plus size={15} />新建项目</button></div></div>
     <div className="organization-controls"><Field label="文件夹"><select value={folderId} onChange={(event) => { onFolder(event.target.value); onProject('all'); }}><option value="">全部文件夹</option>{folders.map((entry) => <option key={entry.id} value={entry.id}>{folderLabel(entry.id, folders)}</option>)}</select></Field><Field label="项目"><select value={projectId} onChange={(event) => onProject(event.target.value)}><option value="all">全部项目</option><option value="unassigned">未归类视频</option>{projects.filter((entry) => !folderId || inFolder(entry.folder_id, folderId, folders)).map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.asset_count} 个视频</option>)}</select></Field></div>
-    {(selected || folder) && <div className="section-row"><div className="project-tags"><strong>{selected?.name || (folder && folderLabel(folder.id, folders))}</strong>{selected?.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div><div className="button-row">{selected && <><button className="text-button" onClick={() => setEditor({ type: 'project', entity: selected })}><Pencil size={14} />编辑项目与标签</button><button className="text-button" onClick={() => { setError(''); setDeleting({ type: 'project', id: selected.id, name: selected.name }); }}><Trash2 size={14} />删除项目</button></>}{folder && <><button className="text-button" onClick={() => setEditor({ type: 'folder', entity: folder })}>编辑文件夹</button><button className="text-button" onClick={() => { setError(''); setDeleting({ type: 'folder', id: folder.id, name: folder.name }); }}>删除文件夹</button></>}</div></div>}
+    {(selected || folder) && <div className="section-row"><div className="project-tags"><strong>{selected?.name || (folder && folderLabel(folder.id, folders))}</strong>{selected?.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div><div className="button-row">{selected && <><button className="text-button" onClick={() => setEditor({ type: 'project', entity: selected })}><Pencil size={14} />编辑项目与标签</button><button className="text-button" onClick={() => { setDeleting({ type: 'project', id: selected.id, name: selected.name }); }}><Trash2 size={14} />删除项目</button></>}{folder && <><button className="text-button" onClick={() => setEditor({ type: 'folder', entity: folder })}>编辑文件夹</button><button className="text-button" onClick={() => { setDeleting({ type: 'folder', id: folder.id, name: folder.name }); }}>删除文件夹</button></>}</div></div>}
     {editor && <OrganizationEditor type={editor.type} entity={editor.entity} folderId={folderId} onClose={() => setEditor(null)} onSaved={(id) => { if (editor.type === 'project') onProject(id); else onFolder(id); setEditor(null); }} />}
-    {deleting && <Modal title={`删除${deleting.type === 'project' ? '项目' : '文件夹'}`} onClose={() => setDeleting(null)}><div className="modal-body"><p>删除「{deleting.name}」这一分类？原视频、分析记录与人工注释会保留。</p>{error && <Alert tone="error">{error}</Alert>}</div><footer className="modal-footer"><button type="button" className="button secondary" onClick={() => setDeleting(null)}>取消</button><button type="button" className="button danger" disabled={busy} onClick={() => void remove()}>{busy ? <Spinner label="删除中" /> : '确认删除分类'}</button></footer></Modal>}
+    {deleting && <DeleteModal target={{ kind: deleting.type, id: deleting.id, name: deleting.name }} onClose={() => setDeleting(null)} onDeleted={() => { if (deleting.type === 'project') onProject('all'); else { onFolder(''); onProject('all'); } setDeleting(null); }} />}
   </section>;
 }
 function OrganizationEditor({ type, entity, folderId, onClose, onSaved }: { type: 'project' | 'folder'; entity?: Project | Folder; folderId: string; onClose: () => void; onSaved: (id: string) => void }) {

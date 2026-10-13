@@ -66,6 +66,21 @@ export interface Bootstrap {
 }
 export interface Folder { id: string; name: string; parent_id: string | null }
 export interface Project { id: string; name: string; kind: AssetKind; folder_id: string | null; tags: string[]; asset_count: number }
+export type DeletionTarget = { kind: 'assets'; asset_ids: string[] } | { kind: 'project' | 'folder'; id: string; name: string };
+export interface DeletionScope {
+  title: string; asset_count: number; project_count: number; folder_count: number;
+  assets: { id: string; title: string }[]; projects: { id: string; name: string }[]; folders: { id: string; name: string }[];
+}
+export interface DeletionPreview extends DeletionScope {
+  token: string; blocked_jobs: { id: string; status: string; message: string }[]; source_files_preserved: boolean;
+  delete_source: boolean; source_file_count: number;
+  source_files: { asset_ids: string[]; path: string; status: 'ready' | 'missing' | 'changed' | 'shared' | 'unsafe'; message: string }[];
+}
+export interface SourceDeletionResult { asset_ids: string[]; status: 'pending' | 'deleted' | 'error'; message: string }
+export interface TrashEntry extends DeletionScope {
+  id: string; kind: 'assets' | 'project' | 'folder'; deleted_at: string; delete_contents: boolean;
+  delete_source: boolean; source_results: SourceDeletionResult[];
+}
 export interface ImportInput {
   item_id: string; video_path: string; title: string; kind: AssetKind; series: string;
   season: number | null; episode: number | null; version: string;

@@ -18,6 +18,11 @@ from .models import AssetInput, Observation
 SCHEMA = "1.0"
 
 
+class DeletedAssetError(ValueError):
+    def __init__(self):
+        super().__init__("该视频已在回收站，请先从回收站恢复")
+
+
 class DuplicateAssetError(ValueError):
     def __init__(self, asset_id):
         super().__init__("该视频已在资料库中，可重新定位原文件或重跑识别")
@@ -158,11 +163,14 @@ class Library:
         read_json(self.root / "library.json")
         from .organization import OrganizationStore
         self.organization = OrganizationStore(self)
+        from .deletions import DeletionStore
+        self.deletions = DeletionStore(self)
+        self.deletions.reconcile_sources()
 
     def asset_dir(self, asset_id: str) -> Path:
         return self.root / "assets" / safe_id(asset_id)
 
-    def get_asset(self, asset_id: str) -> dict:
+    def get_asset(self, asset_id: str, *, include_deleted=False) -> dict:
         result = read_json(self.asset_dir(asset_id) / "manifest.json")
         if result is None:
             raise FileNotFoundError("未找到视频资产")
@@ -181,7 +189,7 @@ class Library:
             result.update(subtitle_mode="container", subtitle_stream_index=container["stream_index"],
                           subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"])
             result.pop("subtitle_fallback_reason", None)
-        return self.organization.project_asset(result)
+        return self.organization.project_asset(result, include_deleted=include_deleted)
 
     def source_path(self, asset_id: str) -> Path | None:
         item = read_json(self.root / "private" / "media-locations.json", {}).get(safe_id(asset_id))
@@ -192,8 +200,9 @@ class Library:
             raise ValueError("原视频离线或文件已变化，请先重新定位并校验原片")
         return self.source_path(asset_id)
 
-    def list_assets(self) -> list[dict]:
-        return sorted([self.get_asset(p.parent.name) for p in (self.root / "assets").glob("*/manifest.json")],
+    def list_assets(self, *, include_deleted=False) -> list[dict]:
+        assets = [self.get_asset(p.parent.name, include_deleted=True) for p in (self.root / "assets").glob("*/manifest.json")]
+        return sorted([asset for asset in assets if include_deleted or not asset["deleted"]],
                       key=lambda a: a["created_at"], reverse=True)
 
     def register(self, payload: AssetInput, *, import_item_key: str | None = None) -> dict:
@@ -201,8 +210,10 @@ class Library:
         from .subtitles import parse_subtitles
 
         if import_item_key:
-            for asset in self.list_assets():
+            for asset in self.list_assets(include_deleted=True):
                 if asset.get("import_item_key") == import_item_key:
+                    if asset["deleted"]:
+                        raise DeletedAssetError()
                     return asset
         explicit_project = "project_id" in payload.model_fields_set
         if explicit_project and payload.project_id is not None:
@@ -240,10 +251,14 @@ class Library:
         with self.lock:
             if explicit_project and payload.project_id is not None:
                 self.organization.get_project(payload.project_id)
-            for asset in self.list_assets():
+            for asset in self.list_assets(include_deleted=True):
                 if import_item_key and asset.get("import_item_key") == import_item_key:
+                    if asset["deleted"]:
+                        raise DeletedAssetError()
                     return asset
                 if asset["fingerprint"] == checksum:
+                    if asset["deleted"]:
+                        raise DeletedAssetError()
                     raise DuplicateAssetError(asset["id"])
             asset_id = uid("asset")
             title = payload.title.strip() or source.stem
@@ -509,7 +524,7 @@ class Library:
     def validate_keyframe_plan(self, asset_id: str, plan: dict, expected_id: str | None = None) -> dict:
         """Validate saved plans without opening the source video or invoking a model."""
         from fractions import Fraction
-        asset = self.get_asset(asset_id)
+        asset = self.get_asset(asset_id, include_deleted=True)
         try:
             if (not isinstance(plan, dict) or plan.get("asset_id") != asset_id
                     or plan.get("fingerprint") != asset["fingerprint"]
@@ -606,6 +621,7 @@ class Library:
         return annotations
 
     def annotate(self, asset_id: str, payload: dict) -> dict:
+        self.get_asset(asset_id)
         records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)}
         if payload["record_id"] not in records:
             historical = next((r for r in self.collections() if r["asset_id"] == asset_id and r["record_id"] == payload["record_id"]), None)
@@ -741,8 +757,10 @@ class Library:
                     if path.is_file() and not path.is_symlink() and path.suffix != ".tmp" and "/proxy/" not in str(path):
                         archive.write(path, path.relative_to(self.root))
             if include_media:
-                for asset in self.list_assets():
-                    path = self.require_source(asset["id"])
+                for asset in self.list_assets(include_deleted=True):
+                    if asset["deleted"] and not asset["source_available"]:
+                        continue
+                    path = self.source_path(asset["id"]) if asset["deleted"] else self.require_source(asset["id"])
                     archive.write(path, f"media/{asset['id']}{path.suffix}", compress_type=zipfile.ZIP_STORED)
         return {"id": backup_id, "download_url": f"/api/backups/{backup_id}", "includes_media": include_media}
 
@@ -776,7 +794,7 @@ class Library:
             for manifest in (staging / "assets").glob("*/manifest.json"):
                 if read_json(manifest).get("id") != manifest.parent.name:
                     raise ValueError("资产清单 ID 与目录不一致")
-            for asset in restored.list_assets():
+            for asset in restored.list_assets(include_deleted=True):
                 asset_id = safe_id(asset["id"])
                 if not (staging / "assets" / asset_id / "manifest.json").is_file():
                     raise ValueError("资产清单 ID 与目录不一致")
@@ -816,7 +834,7 @@ class Library:
                      and p != restored.organization.path]
             from .media import fingerprint
             for path in (staging / "media").glob("*"):
-                asset = restored.get_asset(path.stem)
+                asset = restored.get_asset(path.stem, include_deleted=True)
                 if fingerprint(path) != asset["fingerprint"]:
                     raise ValueError("备份中的视频内容与资产指纹不一致")
             with self.lock:

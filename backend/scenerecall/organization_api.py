@@ -1,4 +1,5 @@
 """Local-session-protected organization routes, registered by the application."""
+import asyncio
 from typing import Literal
 
 from fastapi import Request
@@ -36,6 +37,20 @@ class FolderEdit(Input):
     parent_id: str | None = None
 
 
+class DeletionPreview(Input):
+    kind: Literal["assets", "project", "folder"]
+    asset_ids: list[str] | None = Field(default=None, max_length=10000)
+    id: str | None = None
+    delete_contents: bool = False
+    delete_source: bool = False
+
+
+class AssetDeletion(Input):
+    asset_ids: list[str] = Field(min_length=1, max_length=10000)
+    expected_token: str | None = None
+    delete_source: bool = False
+
+
 class Assignment(Input):
     asset_ids: list[str] = Field(min_length=1, max_length=10000)
     project_id: str | None
@@ -43,6 +58,8 @@ class Assignment(Input):
 
 def register_organization_routes(app, library, queue, search):
     organization = library.organization
+    from .deletions import DeletionStore
+    deletions = DeletionStore(library, queue, search)
 
     @app.exception_handler(OrganizationConflict)
     async def organization_conflict(request: Request, exc):
@@ -72,8 +89,11 @@ def register_organization_routes(app, library, queue, search):
         return result
 
     @app.delete("/api/projects/{project_id}")
-    async def delete_project(project_id: str):
-        result = organization.delete_project(project_id, queue)
+    async def delete_project(project_id: str, delete_contents: bool = False, delete_source: bool = False,
+                             expected_token: str | None = None):
+        result = await asyncio.to_thread(deletions.delete, kind="project", id=project_id,
+                                         delete_contents=delete_contents, delete_source=delete_source,
+                                         expected_token=expected_token)
         await refresh()
         return {"deleted_id": project_id, **result}
 
@@ -92,7 +112,37 @@ def register_organization_routes(app, library, queue, search):
         return result
 
     @app.delete("/api/folders/{folder_id}")
-    async def delete_folder(folder_id: str):
-        organization.delete_folder(folder_id)
+    async def delete_folder(folder_id: str, delete_contents: bool = False, delete_source: bool = False,
+                            expected_token: str | None = None):
+        result = await asyncio.to_thread(deletions.delete, kind="folder", id=folder_id,
+                                         delete_contents=delete_contents, delete_source=delete_source,
+                                         expected_token=expected_token)
         await refresh()
-        return {"deleted_id": folder_id}
+        return {"deleted_id": folder_id, **result}
+
+    @app.post("/api/deletions/preview")
+    async def deletion_preview(payload: DeletionPreview):
+        return await asyncio.to_thread(deletions.preview, **payload.model_dump())
+
+    @app.delete("/api/assets/{asset_id}")
+    async def delete_asset(asset_id: str, delete_source: bool = False, expected_token: str | None = None):
+        result = await asyncio.to_thread(deletions.delete, kind="assets", asset_ids=[asset_id],
+                                         delete_source=delete_source, expected_token=expected_token)
+        await refresh()
+        return result
+
+    @app.post("/api/assets/delete")
+    async def delete_assets(payload: AssetDeletion):
+        result = await asyncio.to_thread(deletions.delete, kind="assets", **payload.model_dump())
+        await refresh()
+        return result
+
+    @app.get("/api/trash")
+    async def trash():
+        return deletions.list()
+
+    @app.post("/api/trash/{trash_id}/restore")
+    async def restore_trash(trash_id: str):
+        result = await asyncio.to_thread(deletions.restore, trash_id)
+        await refresh()
+        return result

@@ -120,6 +120,9 @@ class JobQueue(WorkflowQueueMixin):
                "request_count": 0, "cost": None, "known_cost": 0.0, "cost_incomplete": False,
                "usage": {}, "created_at": now(), "updated_at": now(),
                "config": config, "run_id": uid("run"), "failures": [], "checkpoints": []}
+        catalog = self.library.organization._read()
+        job["deletion_revision"] = (catalog["assets"].get(asset_id, {}).get("deletion_revision", 0)
+                                    if asset_id else catalog.get("deletion_revision", 0))
         if job_type == "analysis" and "vision" in config.get("stages", []):
             job["sampling_strategy"] = config.get("sampling_strategy", "uniform-v1")
         if config.get("warnings"):
@@ -238,6 +241,14 @@ class JobQueue(WorkflowQueueMixin):
                 break
         return {**context, "reference_frames": references}
 
+    def _check_deletion(self, job):
+        catalog = self.library.organization._read()
+        membership = catalog["assets"].get(job.get("asset_id"), {})
+        revision = membership.get("deletion_revision", 0) if job.get("asset_id") else catalog.get("deletion_revision", 0)
+        if (job.get("stale_deletion") or membership.get("trash_id")
+                or ((job.get("asset_id") or job["type"] == "index") and revision != job.get("deletion_revision", 0))):
+            raise ValueError("相关资料已删除或恢复，旧任务不可继续，请创建新任务")
+
     def control(self, job_id: str, action: str, overrides=None) -> dict:
         job = self.get(job_id)
         state = job["status"]
@@ -246,6 +257,7 @@ class JobQueue(WorkflowQueueMixin):
         if action == "cancel" and state not in ("completed", "cancelled"):
             return self.update(job_id, status="cancelling" if state in ("running", "pausing") else "cancelled", message="正在取消；已提交的结果保留")
         if action in ("resume", "retry") and state in ("paused", "failed", "partial", "cancelled"):
+            self._check_deletion(job)
             config = job["config"]
             if job.get("stale_organization"):
                 raise ValueError("视频归属已经改变，请创建新的分析任务；已完成资料保留")
@@ -363,6 +375,11 @@ class JobQueue(WorkflowQueueMixin):
         with self.library.lock:
             current = self.get(job_id)
             if current["status"] != "queued":
+                return
+            try:
+                self._check_deletion(current)
+            except ValueError as exc:
+                self.update(job_id, status="cancelled", stale_deletion=True, message=str(exc))
                 return
             job = self.update(job_id, status="running", error=None)
         try:

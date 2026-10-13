@@ -82,8 +82,9 @@ class OrganizationStore:
             shutil.rmtree(staging, ignore_errors=True)
 
     def _read(self):
-        self.recover()
-        return read_json(self.path)
+        with self.library.lock:
+            self.recover()
+            return read_json(self.path)
 
     def _commit(self, catalog, registries=None):
         self.validate(catalog, check_assets=False)
@@ -146,11 +147,15 @@ class OrganizationStore:
         project_id = asset.get("project_id")
         if "project_id" not in asset and normalized(asset.get("series") or ""):
             project_id = "project_" + digest(["legacy", asset.get("kind", "movie"), normalized(asset["series"])])
+            project_scope = old_scope
+            while catalog["projects"].get(project_id, {}).get("trash_id"):
+                project_id = "project_" + digest(["legacy-recreated", project_id, catalog["projects"][project_id]["trash_id"]])
+                project_scope = "cast_" + project_id
             catalog["projects"].setdefault(project_id, {
                 "id": project_id, "name": asset["series"].strip(), "kind": asset.get("kind", "movie"),
-                "folder_id": None, "tags": [], "character_scope_id": old_scope,
+                "folder_id": None, "tags": [], "character_scope_id": project_scope,
             })
-        if project_id is not None and project_id not in catalog["projects"]:
+        if project_id is not None and (project_id not in catalog["projects"] or catalog["projects"][project_id].get("trash_id")):
             raise ValueError("视频归属的项目不存在")
         scope = (catalog["projects"][project_id]["character_scope_id"] if project_id else
                  asset.get("character_scope_id") or old_scope)
@@ -160,13 +165,15 @@ class OrganizationStore:
             "membership_revision": asset.get("membership_revision", 0), "bindings": {}, "previous_scopes": [],
         }
 
-    def project_asset(self, asset):
+    def project_asset(self, asset, *, include_deleted=False):
         with self.library.lock:
             catalog = self._read()
             if asset["id"] not in catalog["assets"]:
                 self._add_asset(catalog, asset)
                 self._commit(catalog)
             membership = catalog["assets"][asset["id"]]
+            if membership.get("trash_id") and not include_deleted:
+                raise FileNotFoundError("视频已在回收站，请先恢复")
             project = catalog["projects"].get(membership["project_id"])
             folder_id = project["folder_id"] if project else None
             ancestors = []
@@ -180,18 +187,20 @@ class OrganizationStore:
                 "project_id", "character_scope_id", "membership_revision")},
                 "project_name": project["name"] if project else None,
                 "series": project["name"] if project else asset.get("series", ""),
-                "folder_id": folder_id, "folder_ids": ancestors, "tags": project["tags"] if project else []}
+                "folder_id": folder_id, "folder_ids": ancestors, "tags": project["tags"] if project else [],
+                "deleted": bool(membership.get("trash_id")), "trash_id": membership.get("trash_id")}
 
     def projects(self):
         self.migrate()
         with self.library.lock:
             catalog = self._read()
             return [{**project, "asset_count": sum(item["project_id"] == project["id"]
-                    for item in catalog["assets"].values())} for project in catalog["projects"].values()]
+                    for item in catalog["assets"].values() if not item.get("trash_id"))}
+                    for project in catalog["projects"].values() if not project.get("trash_id")]
 
     def folders(self):
         with self.library.lock:
-            return list(self._read()["folders"].values())
+            return [folder for folder in self._read()["folders"].values() if not folder.get("trash_id")]
 
     def get_project(self, project_id):
         safe_id(project_id)
@@ -203,7 +212,7 @@ class OrganizationStore:
     def save_project(self, payload, project_id=None):
         with self.library.lock:
             catalog = self._read()
-            if project_id is not None and project_id not in catalog["projects"]:
+            if project_id is not None and (project_id not in catalog["projects"] or catalog["projects"][project_id].get("trash_id")):
                 raise FileNotFoundError("项目不存在")
             project_id = project_id or uid("project")
             previous = catalog["projects"].get(project_id, {
@@ -212,6 +221,8 @@ class OrganizationStore:
             item = {**previous, **payload, "id": project_id}
             item["name"] = self._name(item.get("name"))
             item["tags"] = self._tags(item["tags"])
+            if item.get("folder_id") and catalog["folders"].get(item["folder_id"], {}).get("trash_id"):
+                raise ValueError("文件夹已在回收站")
             catalog["projects"][project_id] = item
             self._commit(catalog)
             return next(project for project in self.projects() if project["id"] == project_id)
@@ -219,28 +230,20 @@ class OrganizationStore:
     def save_folder(self, payload, folder_id=None):
         with self.library.lock:
             catalog = self._read()
-            if folder_id is not None and folder_id not in catalog["folders"]:
+            if folder_id is not None and (folder_id not in catalog["folders"] or catalog["folders"][folder_id].get("trash_id")):
                 raise FileNotFoundError("文件夹不存在")
             folder_id = folder_id or uid("folder")
             item = {**catalog["folders"].get(folder_id, {"parent_id": None}), **payload, "id": folder_id}
             item["name"] = self._name(item.get("name"))
+            if item.get("parent_id") and catalog["folders"].get(item["parent_id"], {}).get("trash_id"):
+                raise ValueError("父文件夹已在回收站")
             catalog["folders"][folder_id] = item
             self._commit(catalog)
             return item
 
     def delete_folder(self, folder_id):
-        with self.library.lock:
-            catalog = self._read()
-            folder = catalog["folders"].pop(folder_id, None)
-            if folder is None:
-                raise FileNotFoundError("文件夹不存在")
-            for child in catalog["folders"].values():
-                if child["parent_id"] == folder_id:
-                    child["parent_id"] = folder["parent_id"]
-            for project in catalog["projects"].values():
-                if project["folder_id"] == folder_id:
-                    project["folder_id"] = folder["parent_id"]
-            self._commit(catalog)
+        from .deletions import DeletionStore
+        return DeletionStore(self.library).delete(kind="folder", id=folder_id)
 
     def resolve_reference(self, asset_id, record, character_id, registry, *, strict=False, catalog=None):
         from .characters import CharacterStore
@@ -282,17 +285,17 @@ class OrganizationStore:
                     pending.append(ancestor["imported_from"])
         return result
 
-    def assign(self, asset_ids, project_id, queue=None, *, delete_project_id=None):
+    def assign(self, asset_ids, project_id, queue=None, *, delete_project_id=None, _defer=False):
         from .characters import CharacterStore
         with self.library.lock:
             self.migrate()
             catalog = self._read()
-            if project_id is not None and project_id not in catalog["projects"]:
+            if project_id is not None and (project_id not in catalog["projects"] or catalog["projects"][project_id].get("trash_id")):
                 raise FileNotFoundError("项目不存在")
             ids = list(dict.fromkeys(asset_ids))
             if not ids and delete_project_id is None:
                 raise ValueError("请选择至少一个视频")
-            if any(asset_id not in catalog["assets"] for asset_id in ids):
+            if any(asset_id not in catalog["assets"] or catalog["assets"][asset_id].get("trash_id") for asset_id in ids):
                 raise FileNotFoundError("视频不存在")
             ids = [asset_id for asset_id in ids if catalog["assets"][asset_id]["project_id"] != project_id]
             destination = catalog["projects"][project_id]["character_scope_id"] if project_id else None
@@ -367,6 +370,8 @@ class OrganizationStore:
                 del catalog["projects"][delete_project_id]
             for registry in registries.values():
                 registry["revision"] += 1
+            if _defer:
+                return catalog, registries
             if ids or delete_project_id is not None:
                 self._commit(catalog, registries)
                 for job in affected_jobs:
@@ -376,20 +381,16 @@ class OrganizationStore:
             return {"assets": [self.library.get_asset(asset_id) for asset_id in asset_ids], "moved_count": len(ids)}
 
     def delete_project(self, project_id, queue=None):
-        self.migrate()
-        with self.library.lock:
-            catalog = self._read()
-            if project_id not in catalog["projects"]:
-                raise FileNotFoundError("项目不存在")
-            ids = [asset_id for asset_id, membership in catalog["assets"].items()
-                   if membership["project_id"] == project_id]
-            return self.assign(ids, None, queue, delete_project_id=project_id)
+        from .deletions import DeletionStore
+        return DeletionStore(self.library, queue).delete(kind="project", id=project_id)
 
     def validate(self, catalog=None, *, check_assets=True):
         catalog = catalog or self._read()
         if not isinstance(catalog, dict) or catalog.get("organization_version") != 1 or any(
                 not isinstance(catalog.get(key), dict) for key in ("projects", "folders", "assets")):
             raise ValueError("组织目录格式无效")
+        if type(catalog.get("deletion_revision", 0)) is not int or catalog.get("deletion_revision", 0) < 0:
+            raise ValueError("删除版本无效")
         for folder_id, folder in catalog["folders"].items():
             safe_id(folder_id)
             if folder.get("id") != folder_id:
@@ -426,6 +427,8 @@ class OrganizationStore:
                 safe_id(scope)
             if project and membership["character_scope_id"] != project["character_scope_id"]:
                 raise ValueError("视频角色档案与项目不一致")
+            if type(membership.get("deletion_revision", 0)) is not int or membership.get("deletion_revision", 0) < 0:
+                raise ValueError("删除版本无效")
             if type(membership.get("membership_revision")) is not int or membership["membership_revision"] < 0:
                 raise ValueError("视频归属版本无效")
             if not isinstance(membership.get("bindings"), dict):
@@ -438,13 +441,103 @@ class OrganizationStore:
                     safe_id(original)
                     if target is not None:
                         safe_id(target)
+        trash = catalog.get("trash", {})
+        if not isinstance(trash, dict):
+            raise ValueError("回收站格式无效")
+        for trash_id, entry in trash.items():
+            safe_id(trash_id)
+            if (not isinstance(entry, dict) or entry.get("id") != trash_id
+                    or entry.get("kind") not in {"assets", "project", "folder"}
+                    or not isinstance(entry.get("patches"), dict)
+                    or set(entry["patches"]) != {"assets", "projects", "folders"}
+                    or not isinstance(entry.get("source_results", []), list)):
+                raise ValueError("回收记录或恢复快照无效")
+            for category in ("assets", "projects", "folders"):
+                patches = entry["patches"][category]
+                listed = entry.get(category)
+                if not isinstance(patches, dict) or not isinstance(listed, list):
+                    raise ValueError("回收记录引用无效")
+                identities = [item.get("id") for item in listed if isinstance(item, dict)]
+                if (len(identities) != len(listed) or len(set(identities)) != len(identities)
+                        or entry.get(category[:-1] + "_count") != len(identities)):
+                    raise ValueError("回收记录数量无效")
+                archived = set()
+                for identity, patch in patches.items():
+                    safe_id(identity)
+                    if identity not in catalog[category] or not isinstance(patch, dict) or set(patch) != {"before", "after"}:
+                        raise ValueError("恢复快照引用不存在")
+                    for phase in ("before", "after"):
+                        item = patch[phase]
+                        if not isinstance(item, dict) or (category != "assets" and item.get("id") != identity):
+                            raise ValueError("恢复快照身份无效")
+                        if item.get("trash_id") and (phase != "after" or item["trash_id"] != trash_id):
+                            raise ValueError("恢复快照回收引用无效")
+                        if category == "assets":
+                            for key in ("character_scope_id", "legacy_character_scope_id"):
+                                safe_id(item.get(key))
+                            if (type(item.get("membership_revision")) is not int or item["membership_revision"] < 0
+                                    or not isinstance(item.get("bindings"), dict)
+                                    or not isinstance(item.get("previous_scopes", []), list)):
+                                raise ValueError("恢复快照视频关联无效")
+                            for role_scope in item.get("previous_scopes", []):
+                                safe_id(role_scope)
+                            for role_scope, mapping in item["bindings"].items():
+                                safe_id(role_scope)
+                                if not isinstance(mapping, dict):
+                                    raise ValueError("恢复角色映射无效")
+                                for original, target in mapping.items():
+                                    safe_id(original)
+                                    if target is not None:
+                                        safe_id(target)
+                            parent, target_category = item.get("project_id"), "projects"
+                        else:
+                            self._name(item.get("name"))
+                            parent, target_category = item.get("parent_id" if category == "folders" else "folder_id"), "folders"
+                            if category == "projects":
+                                safe_id(item.get("character_scope_id"))
+                                self._tags(item.get("tags"))
+                                if item.get("kind") not in {"movie", "animation", "series"}:
+                                    raise ValueError("恢复快照项目类型无效")
+                        if parent is not None and parent not in catalog[target_category]:
+                            raise ValueError("恢复快照缺少原分类")
+                    if patch["after"].get("trash_id") == trash_id:
+                        archived.add(identity)
+                if archived != set(identities):
+                    raise ValueError("回收记录与恢复快照不一致")
+            for result in entry.get("source_results", []):
+                if (not isinstance(result, dict) or result.get("status") not in {"pending", "deleted", "error"}
+                        or not isinstance(result.get("asset_ids"), list)
+                        or not set(result["asset_ids"]).issubset({item["id"] for item in entry["assets"]})):
+                    raise ValueError("源文件删除状态无效")
+            for field in ("registry_revisions", "registry_digests"):
+                if not isinstance(entry.get(field, {}), dict):
+                    raise ValueError("角色恢复快照无效")
+                for role_scope, value in entry.get(field, {}).items():
+                    safe_id(role_scope)
+                    if (field == "registry_revisions" and (type(value) is not int or value < 0)) or (field == "registry_digests" and not isinstance(value, str)):
+                        raise ValueError("角色恢复版本无效")
+        for category in ("assets", "projects", "folders"):
+            for identity, item in catalog[category].items():
+                trash_id = item.get("trash_id")
+                if trash_id:
+                    entry = trash.get(trash_id)
+                    if (not entry or entry.get("restored_at")
+                            or entry["patches"][category].get(identity, {}).get("after", {}).get("trash_id") != trash_id):
+                        raise ValueError("已删除资料缺少可恢复的回收记录")
+                else:
+                    field, target_category = (("project_id", "projects") if category == "assets" else
+                                              ("folder_id", "folders") if category == "projects" else ("parent_id", "folders"))
+                    parent = item.get(field)
+                    if parent and catalog[target_category][parent].get("trash_id"):
+                        raise ValueError("有效资料引用已删除分类")
         return catalog
 
     def merge_catalog(self, incoming):
         current = self._read()
         result = copy.deepcopy(current)
-        for category in ("projects", "folders", "assets"):
-            for identity, item in incoming[category].items():
+        for category in ("projects", "folders", "assets", "trash"):
+            result.setdefault(category, {})
+            for identity, item in incoming.get(category, {}).items():
                 if identity in result[category] and result[category][identity] != item:
                     raise ValueError(f"恢复冲突，未覆盖现有组织记录: {identity}")
                 result[category][identity] = copy.deepcopy(item)

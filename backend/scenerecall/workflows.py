@@ -73,7 +73,7 @@ class WorkflowQueueMixin:
                 raise ValueError("只能重试本批次未成功的文件")
             config = dict(job["config"])
             configs = {item["item_id"]: item for item in config["items"]}
-            committed_keys = {asset.get("import_item_key") for asset in self.library.list_assets()}
+            committed_keys = {asset.get("import_item_key") for asset in self.library.list_assets(include_deleted=True)}
             for item_id, item in supplied.items():
                 value = item.model_dump(exclude_unset=True)
                 if "project_id" not in value and "project_id" in configs[item_id]:
@@ -105,8 +105,11 @@ class WorkflowQueueMixin:
             items[item_id].update(status="running", error=None)
             self.update(job_id, stage="import", items=list(items.values()), message=f"正在导入 {items[item_id]['name']}")
             try:
-                existing = next((asset for asset in self.library.list_assets()
+                existing = next((asset for asset in self.library.list_assets(include_deleted=True)
                                  if asset.get("import_item_key") == item_key), None)
+                if existing and existing.get("deleted"):
+                    from .library import DeletedAssetError
+                    raise DeletedAssetError()
                 if existing is None:
                     payload = AssetInput.model_validate({key: value for key, value in config.items() if key != "item_id"})
                     existing = await self._local_work(job_id, lambda _check: self.library.register(payload, import_item_key=item_key))
@@ -210,6 +213,7 @@ class WorkflowQueueMixin:
 
     def plan_view(self, plan_id):
         plan = self.load_plan(plan_id)
+        self.library.get_asset(plan["asset_id"])
         result = {key: value for key, value in plan.items() if key != "fingerprint"}
         if plan.get("status") != "completed" and plan.get("job_id"):
             try:

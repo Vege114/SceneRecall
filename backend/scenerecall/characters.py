@@ -436,7 +436,7 @@ class CharacterStore:
 
     def validate_all(self) -> None:
         """Verify registry and evidence references before restoring any backup file."""
-        assets = {asset["id"]: asset for asset in self.library.list_assets()}
+        assets = {asset["id"]: asset for asset in self.library.list_assets(include_deleted=True)}
         organization = self.library.organization.validate()
         historical_scopes = {scope for membership in organization["assets"].values()
                              for scope in [membership["legacy_character_scope_id"],
