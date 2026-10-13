@@ -14,11 +14,102 @@ from .execution import bounded_map, execution_width, finish_on_cancel
 
 STRATEGY = "scene-chunks-v1"
 CORE_FRAMES = 56
+CODEX_CORE_FRAMES = 24
+MIN_VISUAL_FRAMES = 7
 CONTEXT_FRAMES = 8
 DEEP_FRAMES = 24
 TRANSCRIPT_CUES = 100
 TRANSCRIPT_BYTES = 24000
 MEMORY_BYTES = 18000
+
+
+def visual_batch_size(config):
+    # Old tasks retain their original input units and paid receipt keys.
+    return config.get("visual_batch_size", CORE_FRAMES)
+
+
+def visual_split_index(frames):
+    if len(frames) < 2 * MIN_VISUAL_FRAMES:
+        return None
+    candidates = [index for index in range(MIN_VISUAL_FRAMES, len(frames) - MIN_VISUAL_FRAMES + 1)
+                  if frames[index - 1]["at_ms"] < frames[index]["at_ms"]]
+    return min(candidates, key=lambda index: abs(index - len(frames) / 2)) if candidates else None
+
+
+def visual_fallback_calls(frames):
+    """Count the bounded binary fallback tree, excluding transport retries."""
+    index = visual_split_index(frames)
+    if index is None:
+        return 1
+    return 1 + visual_fallback_calls(frames[:index]) + visual_fallback_calls(frames[index:])
+
+
+def split_visual_args(args, index):
+    frames, context_frames, subtitles, *_ = args
+    bounds = subtitles if isinstance(subtitles, dict) else {}
+    cues = bounds.get("cues", []) if isinstance(subtitles, dict) else subtitles or []
+    start = bounds.get("start_ms", frames[0]["at_ms"])
+    end = bounds.get("end_ms", max([frames[-1]["at_ms"] + 1, *(cue["end_ms"] for cue in cues)]))
+    boundary = frames[index]["at_ms"]
+    result = []
+    for core, reference, a, b in ((frames[:index], context_frames, start, boundary),
+                                 (frames[index:], (context_frames + frames[:index])[-CONTEXT_FRAMES:], boundary, end)):
+        local = [cue for cue in cues if cue["start_ms"] < b and cue["end_ms"] > a]
+        ids = {cue["id"] for cue in local}
+        data = {**bounds, "cues": local, "start_ms": a, "end_ms": b}
+        if "segments" in data:
+            data["segments"] = [{**segment, "cue_ids": [value for value in segment["cue_ids"] if value in ids]}
+                                for segment in data["segments"] if set(segment["cue_ids"]) & ids]
+        data.pop("omitted_cues", None)
+        data["notice"] = "细分批次沿用原批次的字幕采样；仅引用与当前子范围相交的字幕。"
+        result.append(copy.deepcopy([core, reference, data, *args[3:]]))
+    return result
+
+
+def join_visual_results(results, args):
+    """Join continuation across fallback boundaries and recheck all evidence."""
+    from pydantic import ValidationError
+    from .scene_preparation import PreparedChunk, subtitle_context_data, validate_visual_preparation
+    chunks, unresolved = [], []
+    for result in results:
+        unresolved.extend(result.get("unresolved", []))
+        for number, raw in enumerate(result["chunks"]):
+            chunk = copy.deepcopy(raw)
+            if number == 0 and chunks and chunk.get("continues_previous"):
+                previous = chunks[-1]
+                separate = copy.deepcopy(chunk)
+                separate["continues_previous"] = False
+                needed = set(deep_frame_ids(previous) + deep_frame_ids(chunk))
+                chunk["frame_ids"] = previous["frame_ids"] + chunk["frame_ids"]
+                chunk["deep_frame_ids"] = [value for value in chunk["frame_ids"] if value in needed]
+                chunk["summary"] = previous["summary"] + "；" + chunk["summary"]
+                chunk["reason"] = (previous.get("reason", "") + "；" + chunk.get("reason", "")).strip("；")
+                chunk["scene_key"] = chunk.get("scene_key") or previous.get("scene_key", "")
+                for field in ("visual_facts", "dialogue_facts", "inferences"):
+                    chunk[field] = previous.get(field, []) + chunk.get(field, [])
+                chunk["needs_deep"] = previous["needs_deep"] or chunk["needs_deep"]
+                chunk["continues_previous"] = previous.get("continues_previous", False)
+                representatives = list(dict.fromkeys(previous["representative_frame_ids"] + chunk["representative_frame_ids"]))
+                chunk["representative_frame_ids"] = (representatives if len(representatives) <= 8
+                                                       else representatives[:7] + [representatives[-1]])
+                try:
+                    PreparedChunk.model_validate(chunk)
+                except ValidationError:
+                    # Keep a valid boundary when merging would exceed schema
+                    # limits; neither child's facts or text may be discarded.
+                    chunk = separate
+                else:
+                    chunks.pop()
+            chunks.append(chunk)
+    frames, context_frames, subtitles, *_ = args
+    data, cue_ids = subtitle_context_data(subtitles)
+    cues = data.get("cues", []) if isinstance(data, dict) else data or []
+    bounds = {key: data[key] for key in ("start_ms", "end_ms") if key in data} if isinstance(data, dict) else {}
+    unresolved = list(dict.fromkeys(unresolved))
+    if len(unresolved) > 64:
+        unresolved = unresolved[:63] + ["\n".join(unresolved[63:])]
+    return validate_visual_preparation({"chunks": chunks, "unresolved": unresolved},
+        frames, cue_ids, has_context=bool(context_frames), cues=cues, **bounds)
 
 
 def deep_batch_size(profile):
@@ -226,7 +317,9 @@ class SceneJobMixin:
             for key, value in receipt["usage"].items():
                 if isinstance(value, (int, float)):
                     item["usage"][key] = item["usage"].get(key, 0) + value
-            released = self._release_reservation(job, receipt.get("call_id"))
+            # An aggregate performed no provider call and owns no reservation.
+            # Legacy paid receipts without call_id still use their old release path.
+            released = {} if receipt.get("split") else self._release_reservation(job, receipt.get("call_id"))
             self.update(job_id, usage=usage, request_count=job["request_count"] + count,
                         known_cost=known, cost=None if incomplete else known, cost_incomplete=incomplete,
                         pending_scene_receipt=None, stage_metrics=metrics, **released,
@@ -282,6 +375,11 @@ class SceneJobMixin:
             self._account_scene_receipt(job_id, receipt)
             self._scene_metric(job_id, stage, cache=1)
             return copy.deepcopy(receipt["data"])
+        split_path = run / "scene-splits" / f"{key}.json"
+        split = read_json(split_path) if stage == "preparation" else None
+        if split is not None:
+            return await self._split_scene_call(job_id, stage, unit, profile, method, args,
+                                                split["index"], key, output)
         self.update(job_id, stage=stage, pending_scene_receipt=str(output.relative_to(root)))
         call_id = uid("call")
         await self.reserve_call(job_id, profile, call_id=call_id, stage=stage, frames=images,
@@ -295,6 +393,13 @@ class SceneJobMixin:
                 self.account(job_id, exc, call_id)
                 self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
                                    requests=getattr(exc, "request_count", 0), usage=getattr(exc, "usage", {}))
+                if (stage == "preparation" and getattr(exc, "request_count", 0) > 0
+                        and getattr(exc, "code", None) in {"timeout", "invalid_output"}):
+                    index = visual_split_index(args[0])
+                    if index is not None:
+                        # Freeze the fallback decision before any child admission.
+                        # Resuming this run never resubmits the exhausted parent.
+                        atomic_json(split_path, {"index": index, "code": exc.code})
                 raise
             receipt = {"receipt_id": key, "call_id": call_id, "job_id": job_id, "stage": stage, "data": result.data,
                        "usage": result.usage, "request_count": result.request_count, "cost": result.cost,
@@ -302,7 +407,31 @@ class SceneJobMixin:
             atomic_json(output, receipt)
             self._account_scene_receipt(job_id, receipt)
             return copy.deepcopy(result.data)
-        return await finish_on_cancel(perform())
+        try:
+            return await finish_on_cancel(perform())
+        except Exception:
+            split = read_json(split_path) if stage == "preparation" else None
+            if split is None:
+                raise
+            return await self._split_scene_call(job_id, stage, unit, profile, method, args,
+                                                split["index"], key, output)
+
+    async def _split_scene_call(self, job_id, stage, unit, profile, method, args, index, key, output):
+        self.checkpoint(job_id)
+        self.update(job_id, message=f"视觉分块请求过大或输出无效，细分为较小批次（原 {len(args[0])} 帧）")
+        results = []
+        for number, child in enumerate(split_visual_args(args, index)):
+            # Child calls own normal reservations, frozen inputs and receipts.
+            # Controls/budgets are checked before each sequential admission.
+            self.checkpoint(job_id)
+            results.append(await self._scene_call(job_id, stage, [unit, "split", number], profile, method, child,
+                images=math.ceil((len(child[0]) + len(child[1])) / 16)))
+        data = join_visual_results(results, args)
+        receipt = {"receipt_id": key, "job_id": job_id, "stage": stage, "data": data,
+                   "usage": {}, "request_count": 0, "cost": 0, "elapsed_ms": 0, "split": True}
+        atomic_json(output, receipt)
+        self._account_scene_receipt(job_id, receipt)
+        return copy.deepcopy(data)
 
     def estimate_scenes(self, config, plan):
         from .scenes import SceneStore
@@ -311,15 +440,18 @@ class SceneJobMixin:
         cues = [c for c in SceneStore(self.library).subtitle_records(config["asset_id"])
                 if c["end_ms"] > config["start_ms"] and c["start_ms"] < config["end_ms"]]
         transcript = len(list(cue_batches(cues)))
-        prep = math.ceil(frames / CORE_FRAMES)
+        batch_size = visual_batch_size(config)
+        prep = math.ceil(frames / batch_size)
+        prep_max = sum(visual_fallback_calls(plan["frames"][offset:offset + batch_size])
+                       for offset in range(0, frames, batch_size))
         ocr_frames = (math.ceil((config["end_ms"] - config["start_ms"]) / 1000 * config["subtitle_fps"])
                       if "subtitle" in config["stages"] else 0)
         ocr = math.ceil(ocr_frames / 8)
         # OCR may produce one cue per sample; estimate a range before it exists.
         transcript_max = max(transcript, math.ceil(ocr_frames / TRANSCRIPT_CUES))
-        minimum, maximum = prep + transcript + ocr, prep + transcript_max + ocr + 2 * frames
+        minimum, maximum = prep + transcript + ocr, prep_max + transcript_max + ocr + 2 * frames
         stages = {"transcript": {"requests_min": transcript, "requests_max": transcript_max},
-                  "preparation": {"requests_min": prep, "requests_max": prep},
+                  "preparation": {"requests_min": prep, "requests_max": prep_max},
                   "vision": {"requests_min": 0, "requests_max": frames},
                   "context_refresh": {"requests_min": 0, "requests_max": frames},
                   "subtitle": {"requests_min": 0 if ocr else 0, "requests_max": ocr}}
@@ -330,18 +462,19 @@ class SceneJobMixin:
                 value += (MAX_PREPARATION_OUTPUT_TOKENS - 4096) * profile["output_price_per_million"] / 1_000_000
             return value
 
-        ptext, pvisual = price("preparation", 0, 32000), price("preparation", 4, 50000)
+        ptext = price("preparation", 0, 32000)
+        pvisual = price("preparation", math.ceil((batch_size + CONTEXT_FRAMES) / 16), 50000)
         pdeep = price("vision", deep_batch_size(config["profile_snapshots"]["vision"]) + 8, 50000)
         pocr = price("subtitle", 8, 0) if ocr else 0
         low = high = None
         if all(value is not None for value in (ptext, pvisual, pdeep, pocr)):
             low = transcript * ptext + prep * pvisual + ocr * pocr
-            high = transcript_max * ptext + prep * pvisual + ocr * pocr + frames * (pdeep + ptext)
+            high = transcript_max * ptext + prep_max * pvisual + ocr * pocr + frames * (pdeep + ptext)
         return {"duration_ms": config["end_ms"] - config["start_ms"], "estimated_frames": frames + ocr_frames,
                 "estimated_requests": minimum, "estimated_requests_min": minimum, "estimated_requests_max": maximum,
                 "cost_estimate": low, "cost_estimate_min": low, "cost_estimate_max": high,
                 "currency": "USD", "stage_estimates": stages,
-                "warnings": ["深入理解及后续文字上下文更新数量由分块结果决定；上限按每帧独立复杂片段保守计算，不含重试和向量索引。",
+                "warnings": ["视觉分块上限包含超时或无效输出后的逐级细分；深入理解与上下文更新按每帧独立复杂片段计算，不含传输重试和向量索引。",
                              "先复用本机关键帧并建立简要索引，复杂片段继续深入分析；费用与耗时以实际调用为准。"]}
 
     def deepen_config(self, asset_id, chunk_id, payload, settings):
@@ -452,6 +585,8 @@ class SceneJobMixin:
                         "prior_memory_digest": prior["digest"], "keyframe_plan_id": config.get("keyframe_plan_id"),
                         "strategy": STRATEGY, "prompt_versions": prompt_versions(),
                         "deep_batch_size": deep_batch_size(config["profile_snapshots"]["vision"])}
+        if visual_batch_size(config) != CORE_FRAMES:
+            dependencies["visual_batch_size"] = visual_batch_size(config)
         if config.get("scene_dependencies") and config["scene_dependencies"] != dependencies:
             raise ValueError("字幕或前序记忆已改变，请创建新任务；已保存的结果仍然保留")
         config["scene_dependencies"] = dependencies
@@ -493,7 +628,8 @@ class SceneJobMixin:
             frames = [{**frame, "path": str(paths[frame["id"]])} for frame in plan["frames"]]
             prep_profile = config["profile_snapshots"]["preparation"]
             batches = list(cue_batches(cues))
-            total = math.ceil(len(frames) / CORE_FRAMES)
+            batch_size = visual_batch_size(config)
+            total = math.ceil(len(frames) / batch_size)
             self._scene_progress(job_id, "transcript", total=len(batches))
             self._scene_progress(job_id, "preparation", total=total)
             transcript_started = time.monotonic()
@@ -538,7 +674,7 @@ class SceneJobMixin:
             self.update(job_id, total=total, completed=0)
             frame_lookup = {f["id"]: f for f in frames}
             preparation_started = time.monotonic()
-            offsets = list(range(0, len(frames), CORE_FRAMES))
+            offsets = list(range(0, len(frames), batch_size))
             prepared = None
             parallel_preparation = (config.get("execution") or {}).get("preparation") == "parallel"
             if parallel_preparation:
@@ -546,10 +682,10 @@ class SceneJobMixin:
                     "notice": "并行分块只共享已冻结的前序记忆；边界参考帧属于之前的时间范围，不能写成当前片段的事实。"}
                 frozen_characters = self._scene_context(asset_id, config)
                 async def prepare_batch(index, offset):
-                    core = frames[offset:offset + CORE_FRAMES]
+                    core = frames[offset:offset + batch_size]
                     context_frames = frames[max(0, offset - CONTEXT_FRAMES):offset]
                     a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
-                    b = frames[offset + CORE_FRAMES]["at_ms"] if offset + CORE_FRAMES < len(frames) else config["end_ms"]
+                    b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
                     self.update(job_id, message=f"并行视觉分块与简要索引：第 {index + 1}/{total} 组")
                     return await self._scene_call(job_id, "preparation", str(index), prep_profile,
                         self.providers.prepare_visual, [core, context_frames, subtitle_context(cues, segments, a, b),
@@ -569,9 +705,9 @@ class SceneJobMixin:
             for index, offset in enumerate(offsets):
                 self.checkpoint(job_id)
                 self._scene_context(asset_id, config)
-                core, context_frames = frames[offset:offset + CORE_FRAMES], frames[max(0, offset - CONTEXT_FRAMES):offset]
+                core, context_frames = frames[offset:offset + batch_size], frames[max(0, offset - CONTEXT_FRAMES):offset]
                 a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
-                b = frames[offset + CORE_FRAMES]["at_ms"] if offset + CORE_FRAMES < len(frames) else config["end_ms"]
+                b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
                 local_cues = [c for c in cues if c["end_ms"] > a and c["start_ms"] < b]
                 sub_context = subtitle_context(cues, segments, a, b)
                 if prepared is not None:

@@ -13,7 +13,7 @@ from .models import AnalysisInput
 from .providers import (CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, MAX_OUTPUT_TOKENS,
                         PROMPT_VERSION, SUBTITLE_PROMPT_VERSION, ProviderManager)
 from .workflows import WorkflowQueueMixin
-from .scene_jobs import SceneJobMixin
+from .scene_jobs import CODEX_CORE_FRAMES, CORE_FRAMES, SceneJobMixin
 from .execution import ReservationBusy, bounded_map, execution_width, finish_on_cancel
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
@@ -204,6 +204,9 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                   "source_profile_snapshots": source_snapshots,
                   "model_overrides": {stage: selected.model_dump(exclude_unset=True)
                                       for stage, selected in request.model_overrides.items()}}
+        if strategy == "scene-chunks-v1" and "preparation" in snapshots:
+            config["visual_batch_size"] = (CODEX_CORE_FRAMES
+                if snapshots["preparation"].get("provider_type") == "codex_cli" else CORE_FRAMES)
         if "vision" in request.stages:
             context = self.character_context(request.asset_id, scene=strategy == "scene-chunks-v1")
             config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}

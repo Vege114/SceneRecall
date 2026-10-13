@@ -99,7 +99,8 @@ async def test_provider_specific_batch_sizes_preserve_all_selected_important_fra
     worker = scene_worker(40)
     worker.provider.deep_times = {250}
     get = worker.provider.get
-    monkeypatch.setattr(worker.provider, "get", lambda identity: {**get(identity), "provider_type": provider_type})
+    monkeypatch.setattr(worker.provider, "get", lambda identity: {
+        **get(identity), "provider_type": provider_type if identity == "deep" else "openai_compatible"})
     selected = select_frames(worker, monkeypatch, lambda frames: frames[:sum(part_lengths) - 1] + [frames[-1]])
     job = await execute(worker, enqueue(worker))
     assert job["status"] == "completed", job

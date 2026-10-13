@@ -61,10 +61,12 @@ class CodexCLIResult:
 
 
 class CodexCLIError(ValueError):
-    def __init__(self, message: str, *, usage: dict | None = None, request_count: int = 0):
+    def __init__(self, message: str, *, usage: dict | None = None, request_count: int = 0,
+                 code: str | None = None):
         super().__init__(message)
         self.usage = usage or _zero_usage()
         self.request_count = request_count
+        self.code = code
 
 
 def _executable() -> str | None:
@@ -149,7 +151,7 @@ async def _run(args: list[str], *, directory: Path, timeout_s: float, stdin: byt
             stdout, stderr, _, returncode = await asyncio.gather(*tasks)
             return returncode, stdout, stderr
     except TimeoutError:
-        raise CodexCLIError("Codex CLI 请求超时，请稍后重试或增加连接超时") from None
+        raise CodexCLIError("Codex CLI 请求超时，请稍后重试或增加连接超时", code="timeout") from None
     except OSError:
         raise CodexCLIError("无法启动本地 Codex CLI，请检查安装及执行权限") from None
     finally:
@@ -433,6 +435,6 @@ async def complete(instruction: str, user_content: Any, model: str, timeout_s: f
                 return CodexCLIResult(events.content, events.usage)
         except TimeoutError:
             raise CodexCLIError("Codex CLI 请求超时，请稍后重试或增加连接超时",
-                                usage=events.usage, request_count=count) from None
+                                usage=events.usage, request_count=count, code="timeout") from None
         except CodexCLIError as exc:
-            raise CodexCLIError(str(exc), usage=events.usage, request_count=count) from None
+            raise CodexCLIError(str(exc), usage=events.usage, request_count=count, code=exc.code) from None

@@ -76,7 +76,8 @@ async def test_deep_stage_total_uses_selected_frames_and_profile_batch_size(scen
     worker = scene_worker(40)
     worker.provider.deep_times = {250}
     get = worker.provider.get
-    monkeypatch.setattr(worker.provider, "get", lambda identity: {**get(identity), "provider_type": provider_type})
+    monkeypatch.setattr(worker.provider, "get", lambda identity: {
+        **get(identity), "provider_type": provider_type if identity == "deep" else "openai_compatible"})
     select_frames(worker, monkeypatch, lambda frames: frames[:16] + [frames[-1]])
     parts = math.ceil(17 / deep_batch_size(worker.provider.get("deep")))
     job = enqueue(worker)
