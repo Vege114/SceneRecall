@@ -9,7 +9,7 @@ from scenerecall.models import AnalysisInput, ExecutionOptions
 from test_character_api import CharacterAPIProvider, seed_episode
 
 
-PARALLEL = {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel", "max_concurrency": 4}
+PARALLEL = {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel", "max_concurrency": 16}
 SERIAL = ExecutionOptions().model_dump()
 
 

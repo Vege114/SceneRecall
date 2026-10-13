@@ -7,6 +7,7 @@ import mimetypes
 import os
 import secrets
 import shutil
+from contextlib import nullcontext
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from .characters import CharacterStore, StaleCharacterRevision
 from .jobs import JobQueue
 from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
 from .models import (
-    AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput,
+    AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput, ConcurrencyInput,
     CharacterMergeInput, CharacterReanalysisInput, DeepenInput, ExecutionOptions, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
 from .providers import ProviderManager
@@ -31,7 +32,7 @@ DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", 
             "defaults": {"window_ms": 6000, "frames_per_window": 4, "subtitle_fps": 2,
                          "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None,
                          "execution": {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel",
-                                       "max_concurrency": 4}}}
+                                       "max_concurrency": 16}}}
 
 
 def create_app(data_dir: Path | None = None, start_worker=True, providers=None, token=None, allowed_ports=None):
@@ -39,6 +40,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     library = Library(Path(root))
     characters = CharacterStore(library)
     providers = providers or ProviderManager(library.root / "private")
+    from .concurrency import recover_concurrency
+    with getattr(providers, "_lock", nullcontext()):
+        recover_concurrency(library.root / "private")
     search = SearchEngine(library.root / "indexes", providers)
     queue = JobQueue(library, providers, search)
     session_token = token or secrets.token_urlsafe(32)
@@ -101,7 +105,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return JSONResponse({"detail": "资料或文件不存在，请检查输入路径或重新定位原视频"}, status_code=404)
 
     def settings():
-        value = read_json(library.root / "private" / "settings.json", {})
+        from .concurrency import recover_concurrency
+        with getattr(providers, "_lock", nullcontext()):
+            recover_concurrency(library.root / "private")
+            value = read_json(library.root / "private" / "settings.json", {})
         defaults = {**DEFAULTS["defaults"], **value.get("defaults", {})}
         defaults["execution"] = ExecutionOptions.model_validate({
             **DEFAULTS["defaults"]["execution"], **defaults.get("execution", {})}).model_dump()
@@ -186,6 +193,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         result = {"bindings": bindings, "defaults": defaults}
         atomic_json(library.root / "private" / "settings.json", result)
         return result
+
+    @app.put("/api/concurrency")
+    async def put_concurrency(payload: ConcurrencyInput):
+        from .concurrency import save_concurrency
+        return save_concurrency(library, providers, payload, settings)
 
     @app.get("/api/profiles")
     async def profiles():

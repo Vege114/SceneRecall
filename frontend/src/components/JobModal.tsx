@@ -41,7 +41,7 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
   const modelRoles = useMemo<TaskModelRole[]>(() => [...(vision ? ['preparation' as const, 'vision' as const] : []), ...(subtitle && assets.some((item) => item.subtitle_mode === 'embedded') ? ['subtitle' as const] : [])], [vision, subtitle, assets]);
   const taskModels = useTaskModels(modelRoles);
   const executionStages: ExecutionStage[] = [...(vision ? ['transcript' as const, 'preparation' as const] : []), ...(subtitle && assets.some((item) => item.subtitle_mode === 'embedded') ? ['subtitle' as const] : [])];
-  const connectionLimits = Object.fromEntries(executionStages.map((stage) => [stage, getProfile(stage === 'transcript' ? 'preparation' : stage)?.max_concurrency ?? 4]));
+  const connectionLimits = Object.fromEntries(executionStages.map((stage) => [stage, getProfile(stage === 'transcript' ? 'preparation' : stage)?.max_concurrency ?? 16]));
   const usesCodex = (vision && (getProfile('vision')?.provider_type === 'codex_cli' || getProfile('preparation')?.provider_type === 'codex_cli')) || (subtitle && assets.some((item) => item.subtitle_mode === 'embedded') && getProfile('subtitle')?.provider_type === 'codex_cli');
   const ranges = useMemo(() => assets.map((item) => ({ asset_id: item.id, start_ms: Math.round(start * 1000), end_ms: end ? Math.min(Math.round(Number(end) * 1000), item.duration_ms) : null })), [assets, start, end]);
   const rangeKey = JSON.stringify(ranges);

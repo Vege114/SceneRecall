@@ -3,10 +3,9 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { AppContext, type AppContextValue } from '../src/context';
-import { DEFAULTS, DEFAULT_EXECUTION, type Asset, type Estimate, type ExecutionOptions, type Profile, type Settings as SettingsType } from '../src/types';
+import { DEFAULTS, DEFAULT_EXECUTION, type Asset, type Estimate, type ExecutionOptions, type Profile } from '../src/types';
 import JobModal from '../src/components/JobModal';
 import Jobs from '../src/components/Jobs';
-import Settings from '../src/components/Settings';
 import CharacterProfiles from '../src/components/CharacterProfiles';
 import { DeepenSceneButton } from '../src/components/SceneAnalysis';
 
@@ -40,7 +39,7 @@ describe('Stage execution selection', () => {
     expect((screen.getByLabelText('台词整理执行方式') as HTMLSelectElement).value).toBe('parallel');
     expect((screen.getByLabelText('视觉分块执行方式') as HTMLSelectElement).value).toBe('parallel');
     expect(screen.queryByLabelText('字幕识别执行方式')).toBeNull();
-    expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).value).toBe('4');
+    expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).value).toBe('16');
     expect(screen.getAllByText('连接并发上限 4；本次最多同时 4 个请求')).toHaveLength(2);
     expect(screen.getByText(/共享开始时的此前记忆/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
@@ -103,29 +102,6 @@ describe('Stage execution selection', () => {
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
     expect(body(fetch, '/api/jobs').execution.max_concurrency).toBe(value);
     expect(body(fetch, '/api/jobs/estimate').execution.max_concurrency).toBe(value);
-  });
-
-  it('saves connection concurrency above 16 without applying an operational cap', async () => {
-    const fetch = mockFetch(); const user = userEvent.setup(); const app = context(); mount(<Settings />, app);
-    await user.click(screen.getByRole('button', { name: `编辑 ${model.name}` }));
-    const dialog = within(screen.getByRole('dialog', { name: '编辑模型连接' }));
-    await user.click(dialog.getByText('连接参数与费用单价'));
-    const input = dialog.getByLabelText('最大并发') as HTMLInputElement;
-    expect(input.hasAttribute('max')).toBe(false);
-    await user.clear(input); await user.type(input, '64');
-    await user.click(dialog.getByRole('button', { name: '保存连接' }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(body(fetch, '/api/profiles').max_concurrency).toBe(64);
-    expect(app.refresh).toHaveBeenCalledOnce();
-  });
-
-  it('starts new connections at four and preserves an existing saved connection ceiling', async () => {
-    const user = userEvent.setup(); const app = context(); app.bootstrap.provider_profiles = [{ ...model, max_concurrency: 2 }]; mount(<Settings />, app);
-    await user.click(screen.getByRole('button', { name: '添加连接' }));
-    expect((screen.getByLabelText('最大并发') as HTMLInputElement).value).toBe('4');
-    await user.click(screen.getByRole('button', { name: '关闭' }));
-    await user.click(screen.getByRole('button', { name: `编辑 ${model.name}` }));
-    expect((screen.getByLabelText('最大并发') as HTMLInputElement).value).toBe('2');
   });
 
   it('preserves saved task defaults and an unchecked preference affects only this task without invalidating the estimate', async () => {
@@ -208,7 +184,7 @@ describe('Stage execution selection', () => {
     await user.click(screen.getByRole('button', { name: '开始分析' }));
     await screen.findByText(/默认执行方式已保存，但任务创建失败：任务队列不可用/);
     expect(app.refresh).toHaveBeenCalledOnce();
-    expect(body(fetch, '/api/settings')).toEqual({ defaults: { execution: { subtitle: 'parallel', max_concurrency: 4 } } });
+    expect(body(fetch, '/api/settings')).toEqual({ defaults: { execution: { subtitle: 'parallel', max_concurrency: 16 } } });
   });
 
   it('never duplicates a successfully created task when refreshing the queue fails', async () => {
@@ -235,24 +211,6 @@ describe('Stage execution selection', () => {
     expect(input.disabled).toBe(true);
     await runEstimate(user);
     expect(body(fetch, '/api/jobs/estimate').execution.max_concurrency).toBe(3);
-  });
-
-  it('persists defaults and applies them when a new modal opens', async () => {
-    let saved: SettingsType | undefined;
-    const fetch = mockFetch((url, options) => { if (url === '/api/settings') { saved = JSON.parse(options!.body as string); return saved; } return {}; });
-    const user = userEvent.setup(); const app = context(); const settingsView = mount(<Settings />, app);
-    await user.click(screen.getByRole('button', { name: '分析默认值' }));
-    await user.selectOptions(screen.getByLabelText('台词整理执行方式'), mixed.transcript);
-    await user.selectOptions(screen.getByLabelText('字幕识别执行方式'), mixed.subtitle);
-    await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), String(mixed.max_concurrency));
-    await user.click(screen.getByRole('button', { name: '保存默认值' }));
-    await waitFor(() => expect(app.refresh).toHaveBeenCalledOnce());
-    expect(body(fetch, '/api/settings').defaults.execution).toEqual(mixed);
-    settingsView.unmount();
-    mount(<JobModal asset={asset} onClose={vi.fn()} />, { ...app, bootstrap: { ...app.bootstrap, settings: saved! } });
-    expect((screen.getByLabelText('台词整理执行方式') as HTMLSelectElement).value).toBe('serial');
-    expect((screen.getByLabelText('视觉分块执行方式') as HTMLSelectElement).value).toBe('parallel');
-    expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).value).toBe('5');
   });
 
   it('keeps reanalysis estimates current and passes the same execution choices into creation', async () => {

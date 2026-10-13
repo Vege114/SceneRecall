@@ -27,7 +27,8 @@ export interface ExecutionOptions {
   subtitle: ExecutionMode;
   max_concurrency: number;
 }
-export const DEFAULT_EXECUTION: ExecutionOptions = { transcript: 'parallel', preparation: 'parallel', subtitle: 'parallel', max_concurrency: 4 };
+export const DEFAULT_CONCURRENCY = 16;
+export const DEFAULT_EXECUTION: ExecutionOptions = { transcript: 'parallel', preparation: 'parallel', subtitle: 'parallel', max_concurrency: DEFAULT_CONCURRENCY };
 export const SERIAL_EXECUTION: ExecutionOptions = { transcript: 'serial', preparation: 'serial', subtitle: 'serial', max_concurrency: 1 };
 export function executionDefaults(value?: Partial<ExecutionOptions>): ExecutionOptions { return { ...DEFAULT_EXECUTION, ...value }; }
 export interface TaskModelOverride {
@@ -87,6 +88,14 @@ export interface Defaults {
 export interface Settings {
   bindings: Partial<Record<Capability, string | null>>;
   defaults: Defaults;
+}
+export interface ConcurrencySettings {
+  execution: ExecutionOptions;
+  profiles: Record<string, number>;
+}
+export interface ConcurrencySettingsResult {
+  settings: Settings;
+  provider_profiles: Profile[];
 }
 export interface Bootstrap {
   library_path: string;

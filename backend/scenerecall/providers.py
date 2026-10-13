@@ -77,7 +77,7 @@ class Profile(BaseModel):
     secret_mode: Literal["session", "keyring", "env", "none"] = "session"
     env_var: str | None = None
     timeout_s: float = Field(default=90, ge=1, le=600)
-    max_concurrency: int = Field(default=4, ge=1, strict=True)
+    max_concurrency: int = Field(default=16, ge=1, strict=True)
     input_price_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     output_price_per_million: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
@@ -281,6 +281,44 @@ def _atomic_json(path: Path, value: Any) -> None:
             os.unlink(filename)
 
 
+class ConnectionLimiter:
+    """A single in-flight counter per connection, even when its cap changes."""
+
+    def __init__(self, current_limit):
+        self.current_limit = current_limit
+        self.active = 0
+        self.loop = asyncio.get_running_loop()
+        self.waiters: set[asyncio.Future] = set()
+
+    @property
+    def available(self):
+        return max(0, self.current_limit() - self.active)
+
+    def _wake(self):
+        for waiter in self.waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    def changed(self):
+        if not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self._wake)
+
+    async def __aenter__(self):
+        while self.active >= self.current_limit():
+            waiter = self.loop.create_future()
+            self.waiters.add(waiter)
+            try:
+                await waiter
+            finally:
+                self.waiters.discard(waiter)
+        self.active += 1
+        return self
+
+    async def __aexit__(self, *_):
+        self.active -= 1
+        self._wake()
+
+
 class ProviderManager:
     def __init__(self, settings_dir: Path, *, transport: httpx.AsyncBaseTransport | None = None):
         self.settings_dir = Path(settings_dir)
@@ -289,13 +327,15 @@ class ProviderManager:
         self._session_keys: dict[str, str] = {}
         self._transport = transport
         self._lock = threading.RLock()
-        self._semaphores: dict[tuple[str, int], asyncio.Semaphore] = {}
+        self._limiters: dict[str, ConnectionLimiter] = {}
         self._task_profile: ContextVar[dict | None] = ContextVar("scenerecall_task_profile", default=None)
         # Separate instances/libraries must never share a keychain credential.
         import hashlib
         self._keyring_service = "SceneRecall:" + hashlib.sha256(str(self.path.resolve()).encode()).hexdigest()[:20]
 
     def _profiles(self) -> dict[str, dict]:
+        from .concurrency import recover_concurrency
+        recover_concurrency(self.settings_dir)
         if not self.path.exists():
             return {}
         try:
@@ -355,7 +395,17 @@ class ProviderManager:
                 self._session_keys.pop(profile.id, None)
             if previous_mode == "keyring" and profile.secret_mode != "keyring":
                 self._delete_keyring(profile.id)
+            self.concurrency_changed()
             return data
+
+    def concurrency_changed(self):
+        for limiter in list(self._limiters.values()):
+            limiter.changed()
+
+    def connection_limiter(self, id):
+        if id not in self._limiters:
+            self._limiters[id] = ConnectionLimiter(lambda: self.get(id)["max_concurrency"])
+        return self._limiters[id]
 
     def _delete_keyring(self, id: str) -> None:
         try:
@@ -437,8 +487,7 @@ class ProviderManager:
         complete_usage = True
         message = "模型请求失败"
         error_code = None
-        semaphore_key = (id, profile["max_concurrency"])
-        semaphore = self._semaphores.setdefault(semaphore_key, asyncio.Semaphore(profile["max_concurrency"]))
+        semaphore = self.connection_limiter(id)
         async with semaphore, httpx.AsyncClient(transport=self._transport, timeout=profile["timeout_s"],
                                     follow_redirects=False, trust_env=False) as client:
             for attempt in range(3):
@@ -536,8 +585,7 @@ class ProviderManager:
                           validator: Callable[[Any], Any], *, validation_attempts: int = 3) -> AIResult:
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         counted = 0
-        semaphore_key = (profile["id"], profile["max_concurrency"])
-        semaphore = self._semaphores.setdefault(semaphore_key, asyncio.Semaphore(profile["max_concurrency"]))
+        semaphore = self.connection_limiter(profile["id"])
         async with semaphore:
             for attempt in range(validation_attempts):
                 try:

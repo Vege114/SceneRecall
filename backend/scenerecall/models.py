@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -78,6 +78,11 @@ class ExecutionOptions(Contract):
     preparation: Literal["serial", "parallel"] = "serial"
     subtitle: Literal["serial", "parallel"] = "serial"
     max_concurrency: int = Field(default=3, ge=1, strict=True)
+
+
+class ConcurrencyInput(Contract):
+    execution: ExecutionOptions | None = None
+    profiles: dict[str, Annotated[int, Field(ge=1, strict=True)]] = Field(default_factory=dict)
 
 
 class AnalysisInput(TaskModelSelection):
