@@ -29,6 +29,7 @@ MAX_PROMPT_BYTES = 4 * 1024 * 1024
 MAX_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_BYTES = 4 * 1024 * 1024
+MAX_SCHEMA_BYTES = 256 * 1024
 STATUS_TIMEOUT_S = 10
 REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 _MODEL_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,299}"
@@ -384,13 +385,23 @@ class _Events:
 
 
 async def complete(instruction: str, user_content: Any, model: str, timeout_s: float,
-                   reasoning_effort: str | None = None) -> CodexCLIResult:
+                   reasoning_effort: str | None = None, *, output_schema: dict | None = None) -> CodexCLIResult:
     validate_model(model)
     validate_reasoning_effort(model, reasoning_effort)
     if not isinstance(instruction, str) or len(instruction.encode("utf-8")) > MAX_PROMPT_BYTES:
         raise CodexCLIError("Codex CLI 指令格式或大小无效")
     if not isinstance(timeout_s, (int, float)) or not math.isfinite(timeout_s) or timeout_s <= 0:
         raise CodexCLIError("Codex CLI 超时设置无效")
+    schema_bytes = None
+    if output_schema is not None:
+        try:
+            if not isinstance(output_schema, dict) or output_schema.get("type") != "object":
+                raise ValueError
+            schema_bytes = json.dumps(output_schema, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            if len(schema_bytes) > MAX_SCHEMA_BYTES:
+                raise ValueError
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            raise CodexCLIError("Codex CLI 输出结构格式或大小无效") from None
     executable = _executable()
     if not executable:
         raise CodexCLIError("未找到 Codex CLI，请先安装并在终端运行 codex login")
@@ -414,6 +425,11 @@ async def complete(instruction: str, user_content: Any, model: str, timeout_s: f
                 instructions.chmod(0o600)
                 args = [executable, "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
                         "--skip-git-repo-check", "--json", "--color", "never", "-s", "read-only"]
+                if schema_bytes is not None:
+                    schema_path = directory / "output-schema.json"
+                    schema_path.write_bytes(schema_bytes)
+                    schema_path.chmod(0o600)
+                    args.extend(["--output-schema", str(schema_path)])
                 if model:
                     args.extend(["-m", model])
                 if reasoning_effort:

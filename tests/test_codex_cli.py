@@ -46,6 +46,10 @@ else:
               "image_data": [base64_encode(image.read_bytes()) for image in images],
               "image_modes": [image.stat().st_mode & 0o777 for image in images],
               "instructions": Path(json.loads(instructions)).read_text()}
+    if "--output-schema" in args:
+        schema_path = Path(args[args.index("--output-schema") + 1])
+        record["output_schema"] = json.loads(schema_path.read_text())
+        record["schema_mode"] = schema_path.stat().st_mode & 0o777
     with log.open("a") as handle:
         handle.write(json.dumps(record) + "\\n")
     scenario = config.get("scenario", "success")
@@ -160,6 +164,39 @@ async def test_text_stdin_isolation_and_final_message_usage(cli, monkeypatch):
     assert call["env"]["CODEX_HOME"] == "/tmp/example-codex-home"
     assert not any(name in call["env"] for name in ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "CODEX_THREAD_ID"])
     assert not Path(call["cwd"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_output_schema_is_passed_as_private_temporary_file_and_removed(cli):
+    _, calls = cli
+    schema = {"type": "object", "properties": {"frame_id": {"type": "string", "enum": ["current-frame"]}},
+              "required": ["frame_id"], "additionalProperties": False}
+    result = await codex_cli.complete("Return JSON", "fixture", "", 5, output_schema=schema)
+    [call] = calls()
+    assert call["output_schema"] == schema and call["schema_mode"] == 0o600
+    path = Path(call["args"][call["args"].index("--output-schema") + 1])
+    assert path.parent.resolve() == Path(call["cwd"]).resolve() and not path.exists()
+    assert result.request_count == 1 and result.usage["total_tokens"] == 109
+
+
+@pytest.mark.parametrize("schema", [[], {}, {"type": "string"}, {"type": "object", "invalid": float("nan")},
+                                    {"type": "object", "invalid": object()}])
+@pytest.mark.asyncio
+async def test_invalid_output_schema_is_rejected_before_model_admission(cli, schema):
+    _, calls = cli
+    with pytest.raises(CodexCLIError, match="输出结构") as caught:
+        await codex_cli.complete("Return JSON", "fixture", "", 5, output_schema=schema)
+    assert caught.value.request_count == 0 and not calls()
+
+
+@pytest.mark.asyncio
+async def test_oversized_output_schema_is_rejected_before_model_admission(cli, monkeypatch):
+    _, calls = cli
+    monkeypatch.setattr(codex_cli, "MAX_SCHEMA_BYTES", 32)
+    with pytest.raises(CodexCLIError, match="输出结构") as caught:
+        await codex_cli.complete("Return JSON", "fixture", "", 5,
+                                 output_schema={"type": "object", "description": "x" * 64})
+    assert caught.value.request_count == 0 and not calls()
 
 
 @pytest.mark.asyncio

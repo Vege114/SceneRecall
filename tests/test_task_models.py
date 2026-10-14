@@ -232,7 +232,7 @@ async def test_full_worker_uses_stage_specific_frozen_models_for_legacy_and_scen
     worker.queue.providers = providers
     calls = []
 
-    async def complete(instruction, content, model, timeout_s, reasoning_effort=None):
+    async def complete(instruction, content, model, timeout_s, reasoning_effort=None, output_schema=None):
         calls.append((model, reasoning_effort))
         mapping = next((part["text"].removeprefix("Original frame map: ") for part in content
                         if part.get("type") == "text" and part["text"].startswith("Original frame map: ")), None)
