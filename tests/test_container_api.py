@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from scenerecall import media
 from scenerecall.jobs import JobQueue
 from scenerecall.library import Library, atomic_json, read_json, recommended_subtitle_track
 from scenerecall.main import create_app
@@ -121,6 +122,45 @@ def test_auto_without_tracks_defers_ocr_and_container_requires_tracks(local_app,
     assert "未检测到" in asset["subtitle_fallback_reason"]
     estimate = client.post("/api/jobs/estimate", json={"asset_id": asset["id"], "stages": ["subtitle"]})
     assert estimate.status_code == 400 and "绑定模型" in estimate.json()["detail"]
+    assert providers.calls == []
+
+
+def test_ass_import_diagnostics_follow_selected_container_track(local_app, container_movie, tmp_path, monkeypatch):
+    app, client, providers = local_app
+    video, _ = container_movie
+    track = tmp_path / "extracted.ass"
+    track.write_text("[Script Info]\nScriptType: v4.00+\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.50,0:00:01.50,Default,,0,0,0,,有效字幕\n"
+        "Dialogue: 0,0:00:02.00,0:00:01.00,OP,,0,0,0,,不可播放特效\n", encoding="utf-8")
+    original_bytes = track.read_bytes()
+    real_extract = media.extract_subtitle_track
+
+    def extraction(source, stream_index, output, metadata=None):
+        return track if stream_index == 2 else real_extract(source, stream_index, output, metadata=metadata)
+
+    monkeypatch.setattr("scenerecall.media.extract_subtitle_track", extraction)
+    response = client.post("/api/assets", json={"video_path": str(video)})
+    assert response.status_code == 200, response.text
+    asset = response.json()
+    assert len(asset["subtitle_import_warnings"]) == 1
+    directory = app.state.library.asset_dir(asset["id"])
+    first = app.state.library.active(asset["id"])["container_subtitles"]
+    diagnostics = read_json(directory / "analyses" / first["run_id"] / "subtitle-import-diagnostics.json")
+    assert diagnostics["ignored_ass_events"][0]["start_ms"] == 2000
+    assert (directory / first["original_path"]).read_bytes() == original_bytes
+    assert app.state.library.runs(asset["id"])[0]["subtitle_import_warnings"] == asset["subtitle_import_warnings"]
+    # The active pointer must also recover correct notices if manifest refresh
+    # was interrupted, and switching to a clean track must clear old notices.
+    manifest = read_json(directory / "manifest.json")
+    manifest["subtitle_import_warnings"] = ["stale manifest notice"]
+    atomic_json(directory / "manifest.json", manifest)
+    assert app.state.library.get_asset(asset["id"])["subtitle_import_warnings"] == asset["subtitle_import_warnings"]
+    switched = client.post(f"/api/assets/{asset['id']}/subtitles/extract", json={"subtitle_stream_index": 1})
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["subtitle_import_warnings"] == []
+    assert (directory / first["original_path"]).read_bytes() == original_bytes
+    assert track.read_bytes() == original_bytes
     assert providers.calls == []
 
 

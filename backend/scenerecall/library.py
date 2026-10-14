@@ -187,7 +187,8 @@ class Library:
         container = self._container_pointer(asset_id)
         if container:
             result.update(subtitle_mode="container", subtitle_stream_index=container["stream_index"],
-                          subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"])
+                          subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"],
+                          subtitle_import_warnings=container.get("warnings", []))
             result.pop("subtitle_fallback_reason", None)
         return self.organization.project_asset(result, include_deleted=include_deleted)
 
@@ -207,7 +208,7 @@ class Library:
 
     def register(self, payload: AssetInput, *, import_item_key: str | None = None) -> dict:
         from .media import fingerprint, probe, subtitle_tracks
-        from .subtitles import parse_subtitles
+        from .subtitles import import_warnings, parse_subtitles
 
         if import_item_key:
             for asset in self.list_assets(include_deleted=True):
@@ -226,6 +227,7 @@ class Library:
         metadata = probe(source)
         tracks = subtitle_tracks(metadata)
         cues = []
+        subtitle_diagnostics = {}
         sub_path = None
         container = None
         mode = payload.subtitle_mode
@@ -255,7 +257,8 @@ class Library:
                 mode = "container"
         if mode == "external":
             sub_path = sub_path or Path(payload.subtitle_path).expanduser().resolve(strict=True)
-            cues = parse_subtitles(sub_path, metadata["duration_ms"], payload.subtitle_offset_ms)
+            cues = parse_subtitles(sub_path, metadata["duration_ms"], payload.subtitle_offset_ms,
+                                   diagnostics=subtitle_diagnostics)
             if not cues:
                 raise ValueError("字幕文件没有有效字幕")
         checksum = fingerprint(source)
@@ -283,6 +286,7 @@ class Library:
                      "version": payload.version, "fingerprint": checksum, "file_name": source.name,
                      "subtitle_mode": mode, "subtitle_import_mode": payload.subtitle_mode,
                      "subtitle_offset_ms": payload.subtitle_offset_ms, "subtitle_tracks": tracks,
+                     "subtitle_import_warnings": container["warnings"] if container else import_warnings(subtitle_diagnostics),
                      "created_at": now(), "status": "ready"}
             if explicit_project:
                 asset["project_id"] = payload.project_id
@@ -303,6 +307,7 @@ class Library:
                     cues = [{**c, "schema_version": SCHEMA, "asset_id": asset_id,
                              "id": "cue_" + digest([asset_id, c["id"]]), "source": "external"} for c in cues]
                     atomic_jsonl(directory / "subtitles" / "external.jsonl", cues)
+                    atomic_json(directory / "subtitles" / "import-diagnostics.json", subtitle_diagnostics)
                 active = {"schema_version": SCHEMA, "observations": {}, "subtitle_runs": {}}
                 if container:
                     pointer = self._write_container(asset, container, payload.subtitle_offset_ms, directory=directory)
@@ -320,14 +325,16 @@ class Library:
     @staticmethod
     def _extract_container(source: Path, metadata: dict, track: dict, offset_ms: int) -> dict:
         from .media import extract_subtitle_track
-        from .subtitles import parse_container_subtitles
+        from .subtitles import import_warnings, parse_container_subtitles
 
         with tempfile.TemporaryDirectory(prefix="scenerecall-subtitles-") as temporary:
             output = extract_subtitle_track(source, track["index"], Path(temporary) / "track", metadata=metadata)
-            cues = parse_container_subtitles(output, metadata["duration_ms"], offset_ms)
+            diagnostics = {}
+            cues = parse_container_subtitles(output, metadata["duration_ms"], offset_ms, diagnostics=diagnostics)
             if not cues:
                 raise ValueError("所选容器字幕轨没有可用的字幕文字")
-            return {"track": track, "cues": cues, "suffix": output.suffix.lower(), "original": output.read_bytes()}
+            return {"track": track, "cues": cues, "suffix": output.suffix.lower(), "original": output.read_bytes(),
+                    "diagnostics": diagnostics, "warnings": import_warnings(diagnostics)}
 
     def _write_container(self, asset: dict, extracted: dict, offset_ms: int, directory: Path | None = None) -> dict:
         asset_id, track, run_id = asset["id"], extracted["track"], uid("run")
@@ -348,12 +355,15 @@ class Library:
         atomic_jsonl(directory / relative, cues)
         pointer = {"path": str(relative), "original_path": str(original), "run_id": run_id,
                    "stream_index": track["index"], "track": track, "offset_ms": offset_ms,
+                   "warnings": extracted.get("warnings", []),
                    "extraction_version": 1}
+        atomic_json(directory / "analyses" / run_id / "subtitle-import-diagnostics.json", extracted.get("diagnostics", {}))
         atomic_json(directory / "analyses" / run_id / "run.json", {
             "schema_version": SCHEMA, "id": run_id, "asset_id": asset_id,
             "stage": "subtitle", "source": "container", "status": "completed",
             "created_at": now(), "request_count": 0, "cost": 0,
-            "subtitle_track": track, "subtitle_offset_ms": offset_ms, "subtitle_count": len(cues)})
+            "subtitle_track": track, "subtitle_offset_ms": offset_ms, "subtitle_count": len(cues),
+            "subtitle_import_warnings": extracted.get("warnings", [])})
         return pointer
 
     def extract_subtitles(self, asset_id: str, stream_index: int | None = None, offset_ms: int = 0) -> dict:
@@ -381,7 +391,8 @@ class Library:
             atomic_json(self.asset_dir(asset_id) / "active-analysis.json", active)
             manifest = read_json(self.asset_dir(asset_id) / "manifest.json")
             manifest.update(subtitle_mode="container", subtitle_stream_index=track["index"], subtitle_track=track,
-                            subtitle_tracks=tracks, subtitle_offset_ms=offset_ms)
+                            subtitle_tracks=tracks, subtitle_offset_ms=offset_ms,
+                            subtitle_import_warnings=extracted.get("warnings", []))
             manifest.pop("subtitle_fallback_reason", None)
             atomic_json(self.asset_dir(asset_id) / "manifest.json", manifest)
         return self.get_asset(asset_id)

@@ -160,7 +160,7 @@ export interface ImportInput {
   subtitle_mode: SubtitleMode; subtitle_path: string | null; subtitle_stream_index?: number | null; subtitle_offset_ms: number;
   anime_profile?: AnimeProfileSelection;
 }
-export interface ImportItem { item_id: string; name: string; status: string; asset_id?: string; error?: string; input?: ImportInput }
+export interface ImportItem { item_id: string; name: string; status: string; asset_id?: string; error?: string; warnings?: string[]; input?: ImportInput }
 export interface KeyframePlan {
   id: string; plan_id?: string; job_id: string; status: string; error?: string; progress?: number; message?: string;
   frames?: { id: string; at_ms: number; thumbnail_url: string; reason?: string }[];
@@ -190,6 +190,7 @@ export interface Asset {
   subtitle_track?: SubtitleTrack | null;
   subtitle_offset_ms?: number;
   subtitle_fallback_reason?: string;
+  subtitle_import_warnings?: string[];
   source_available: boolean;
   source_changed: boolean;
   created_at: string;

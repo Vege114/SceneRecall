@@ -12,10 +12,11 @@ sidecars are independently parsed as well. Source media and subtitles are never
 modified. The output is a private verification library, not a redistributable
 fixture: it contains subtitle text and, when requested, a few video frames and
 provider results. Keep it under an ignored directory such as test-results/.
-Invalid source ASS events remain a strict import failure unless the explicit
---filter-invalid-ass-events flag creates a labelled local derivative. That mode
-records original rejection and omission counts; it does not establish support
-for importing the unmodified ASS.
+Original ASS files are imported directly. Nonpositive-duration ASS events have
+no playable interval; the product omits them while retaining the original file
+and recording diagnostics. Positive-duration timing errors remain failures.
+The historical --filter-invalid-ass-events option remains available for labelled
+derived fixtures if strict parsing rejects a source; it is normally unnecessary.
 
 The optional vision probe calls the real configured provider. It never replaces
 the user's settings, copies credentials, or processes every episode with a model.
@@ -78,9 +79,14 @@ def prepare_sidecar(path: Path, duration: int, args: argparse.Namespace, episode
                     suffix: str) -> tuple[Path, list[dict], dict]:
     """Never alter sources; an explicit flag permits a labelled derived fixture."""
     details = {"suffix": suffix, "derived_subtitle": False,
-               "source_validation": {"status": "passed", "excluded_events": 0}}
+               "source_validation": {"status": "passed", "excluded_events": 0, "automatic_ignored_events": 0}}
+    diagnostics = {}
     try:
-        cues = subtitles.parse_subtitles(path, duration)
+        cues = subtitles.parse_subtitles(path, duration, diagnostics=diagnostics)
+        ignored = diagnostics.get("ignored_ass_events", [])
+        details["parsing_diagnostics"] = diagnostics
+        details["source_validation"].update(excluded_events=len(ignored), automatic_ignored_events=len(ignored),
+                                             excluded_styles=dict(Counter(event["style"] for event in ignored)))
         return path, cues, details
     except subtitles.SubtitleError as exc:
         if not args.filter_invalid_ass_events:
@@ -98,10 +104,12 @@ def prepare_sidecar(path: Path, duration: int, args: argparse.Namespace, episode
     parsed.save(target, encoding="utf-8", format_="ass")
     if [event.as_dict() for event in pysubs2.load(target)] != before:
         raise ValueError("Derived ASS failed the retained-event preservation check")
-    cues = subtitles.parse_subtitles(target, duration)
+    derived_diagnostics = {}
+    cues = subtitles.parse_subtitles(target, duration, diagnostics=derived_diagnostics)
     details.update(derived_subtitle=True, derived_path=str(target.relative_to(args.output)),
+                   parsing_diagnostics=derived_diagnostics, rejected_source_diagnostics=diagnostics,
                    source_validation={"status": "rejected", "error": source_error,
-                                      "excluded_events": len(excluded),
+                                      "excluded_events": len(excluded), "automatic_ignored_events": 0,
                                       "excluded_styles": dict(Counter(event.style for event in excluded)),
                                       "retained_events": len(retained), "retained_events_preserved": True})
     return target, cues, details
@@ -332,6 +340,20 @@ async def verify(args: argparse.Namespace) -> dict:
             return Counter((cue["start_ms"], cue["end_ms"], cue["text"]) for cue in rows)
         imported_matches = (cue_projection(cues) == cue_projection(prepared_tracks[".sc.ass"][1])
                             if ".sc.ass" in prepared_tracks else bool(cues))
+        import_diagnostics = read_json(library.asset_dir(asset["id"]) / "subtitles" / "import-diagnostics.json", {})
+        saved_input_matches = None
+        original_source_imported = None
+        diagnostics_match = None
+        if ".sc.ass" in prepared_tracks:
+            selected, _, selected_details = prepared_tracks[".sc.ass"]
+            saved_original = library.asset_dir(asset["id"]) / "subtitles" / "originals" / "original.ass"
+            saved_input_matches = saved_original.is_file() and saved_original.read_bytes() == selected.read_bytes()
+            original_source_imported = selected == sc and saved_input_matches
+            diagnostics_match = import_diagnostics == selected_details["parsing_diagnostics"]
+            check(report, f"episode {number} retained input subtitle bytes and parse diagnostics",
+                  saved_input_matches and diagnostics_match,
+                  original_source_imported=bool(original_source_imported),
+                  automatic_ignored_events=len(import_diagnostics.get("ignored_ass_events", [])))
         catalog = characters.catalog(asset["id"])
         names_complete = all(p.get("name_cn") and p.get("name_ja") and p.get("name_en")
                              for p in catalog["profiles"])
@@ -342,6 +364,11 @@ async def verify(args: argparse.Namespace) -> dict:
                 "imported_cues": len(cues), "external_tracks": tracks, "roster_count": len(catalog["profiles"]),
                 "names_complete": bool(names_complete), "scope_id": catalog["scope_id"],
                 "derived_subtitle": any(track["derived_subtitle"] for track in tracks),
+                "saved_input_subtitle_bytes_preserved": saved_input_matches,
+                "unmodified_source_subtitle_imported": original_source_imported,
+                "subtitle_import_diagnostics": import_diagnostics,
+                "subtitle_import_warnings": asset.get("subtitle_import_warnings", []),
+                "import_diagnostics_match_source_parse": diagnostics_match,
                 "multilingual_names_in_aliases": names_searchable,
                 "imported_matches_prepared_subtitle": imported_matches}
         report["episodes"].append(item)
@@ -359,7 +386,14 @@ async def verify(args: argparse.Namespace) -> dict:
                                    "rejected_ass_files": len(rejected_tracks),
                                    "explicit_filter_enabled": args.filter_invalid_ass_events,
                                    "excluded_events": sum(track["source_validation"]["excluded_events"]
-                                                          for track in rejected_tracks)}
+                                                          for item in report["episodes"] for track in item["external_tracks"]),
+                                   "automatic_ignored_events": sum(track["source_validation"]["automatic_ignored_events"]
+                                                          for item in report["episodes"] for track in item["external_tracks"]),
+                                   "explicitly_filtered_events": sum(track["source_validation"]["excluded_events"]
+                                                          for track in rejected_tracks),
+                                   "imported_automatic_ignored_events": sum(
+                                       len(item["subtitle_import_diagnostics"].get("ignored_ass_events", []))
+                                       for item in report["episodes"])}
     if rejected_tracks:
         report["limits"].append("Original ASS import rejected inverted karaoke intervals; only explicitly derived subtitles were imported for affected episodes.")
     first = assets[0]
@@ -393,7 +427,7 @@ def main() -> int:
     parser.add_argument("--vision-times-ms", default="", help="Comma-separated increasing episode-1 times, at most 8 frames")
     parser.add_argument("--resume", action="store_true", help="Reuse only this verification output library")
     parser.add_argument("--filter-invalid-ass-events", action="store_true",
-                        help="Explicitly derive local ASS fixtures omitting only nonpositive-duration events; never modifies original subtitles")
+                        help="Historical fallback: derive labelled ASS fixtures only after strict source rejection; normally unnecessary")
     args = parser.parse_args()
     try:
         args.vision_times_ms = [int(value) for value in args.vision_times_ms.split(",") if value]

@@ -141,14 +141,17 @@ class WorkflowQueueMixin:
                     from .anime_profiles import AnimeProfileStore
                     AnimeProfileStore(self.library).apply_asset(existing["id"], config["anime_profile"],
                                                                config.get("anime_dossier"))
-                items[item_id].update(status="completed", asset_id=existing["id"])
+                items[item_id].update(status="completed", asset_id=existing["id"],
+                                      warnings=existing.get("subtitle_import_warnings", []))
                 self.search.upsert(self.library.records(existing["id"]))
             except Exception as exc:
                 from .jobs import StopJob
                 if isinstance(exc, StopJob):
                     raise
                 if getattr(exc, "asset_id", None):
-                    items[item_id].update(status="existing", asset_id=exc.asset_id, error=None)
+                    asset = self.library.get_asset(exc.asset_id)
+                    items[item_id].update(status="existing", asset_id=exc.asset_id, error=None,
+                                          warnings=asset.get("subtitle_import_warnings", []))
                 else:
                     # Source paths are input-only, not public task error strings.
                     from .jobs import error_message
