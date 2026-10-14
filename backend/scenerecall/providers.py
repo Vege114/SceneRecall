@@ -797,7 +797,8 @@ class ProviderManager:
             for observation in item.spatial_observations:
                 if observation.subject_id not in entity_ids or (observation.object_id and observation.object_id not in entity_ids):
                     raise ValueError("unknown spatial participant")
-            return item.model_dump()
+            from .models import normalize_observation_evidence
+            return normalize_observation_evidence(item.model_dump(), [frame["id"] for frame in frames])
 
         prompt = (
             f"Analyze only visible evidence in chronological frames for [{start_ms},{end_ms}) ms. "

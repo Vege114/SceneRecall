@@ -7,6 +7,8 @@ import sqlite3
 import time
 from contextlib import nullcontext
 
+from pydantic import ValidationError
+
 from . import codex_cli
 from .library import Library, atomic_json, digest, now, read_json, uid
 from .models import AnalysisInput
@@ -40,6 +42,13 @@ def model_identity(profile: dict) -> dict:
 
 
 def error_message(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        details = []
+        for error in exc.errors(include_input=False, include_url=False)[:3]:
+            location = ".".join(str(value) for value in error["loc"])
+            reason = error["msg"].removeprefix("Value error, ")
+            details.append(f"{location}：{reason}" if location else reason)
+        return ("分析结果校验失败：" + "；".join(details))[:300]
     return str(exc)[:300] if isinstance(exc, (ValueError, FileNotFoundError)) else "处理失败，请检查模型连接、素材与依赖后重试"
 
 

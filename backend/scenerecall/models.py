@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -213,6 +214,37 @@ class LocalFilesInput(Contract):
     kind: Literal["video", "subtitle"] = "video"
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=200, ge=1, le=1000)
+
+
+def normalize_observation_evidence(record: dict, frame_ids: list[str]) -> dict:
+    """Close an observation's evidence set over its explicitly cited inputs.
+
+    Only the caller's actual current-frame allowlist can establish provenance.
+    Nested citations may be more detailed than a model's top-level selection;
+    they never authorize evidence from another batch, memory or reference image.
+    """
+    result = copy.deepcopy(record)
+    current = set(frame_ids)
+    cited = set()
+
+    def collect(values):
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise ValueError("画面证据引用必须是当前帧 ID 列表")
+        if not set(values).issubset(current):
+            raise ValueError("深入理解结果引用了本批输入之外的画面证据")
+        cited.update(values)
+
+    collect(result.get("evidence_frame_ids", []))
+    for field in ("entities", "events", "spatial_observations"):
+        items = result.get(field, [])
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise ValueError("画面观察的实体、事件或空间描述格式无效")
+        for item in items:
+            collect(item.get("evidence_frame_ids", []))
+            if field == "spatial_observations" and item.get("frame_id") is not None:
+                collect([item["frame_id"]])
+    result["evidence_frame_ids"] = list(dict.fromkeys(frame_id for frame_id in frame_ids if frame_id in cited))
+    return result
 
 
 class Observation(BaseModel):

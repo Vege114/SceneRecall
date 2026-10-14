@@ -345,6 +345,7 @@ class SceneJobMixin:
 
     async def _scene_call(self, job_id, stage, unit, profile, method, args, *, images=0):
         from .jobs import model_identity
+        from .models import normalize_observation_evidence
         from .scene_preparation import (CONTEXTUAL_VISION_PROMPT_VERSION, SUBTITLE_PREPARATION_PROMPT_VERSION,
                                         VISUAL_PREPARATION_PROMPT_VERSION)
         versions = {"transcript": SUBTITLE_PREPARATION_PROMPT_VERSION,
@@ -363,6 +364,12 @@ class SceneJobMixin:
             frozen = {"args": args, "images": images}
             atomic_json(inputs, frozen)
         args, images = frozen["args"], frozen["images"]
+        def observation_data(data):
+            # Old paid receipts can have sparse root evidence even though every
+            # nested citation belongs to the original request. Normalize a copy
+            # against those frozen inputs without replacing or repaying it.
+            return (normalize_observation_evidence(data, [frame["id"] for frame in args[0]])
+                    if stage == "deep_analysis" else copy.deepcopy(data))
         key = digest([STRATEGY, stage, versions[stage], unit, job["config"]["scene_dependencies"],
                       model_identity(profile), canonical(args)])
         output = run / "scene-receipts" / f"{key}.json"
@@ -374,7 +381,7 @@ class SceneJobMixin:
         if receipt is not None:
             self._account_scene_receipt(job_id, receipt)
             self._scene_metric(job_id, stage, cache=1)
-            return copy.deepcopy(receipt["data"])
+            return observation_data(receipt["data"])
         split_path = run / "scene-splits" / f"{key}.json"
         split = read_json(split_path) if stage == "preparation" else None
         if split is not None:
@@ -406,7 +413,7 @@ class SceneJobMixin:
                        "elapsed_ms": round((time.monotonic() - started) * 1000)}
             atomic_json(output, receipt)
             self._account_scene_receipt(job_id, receipt)
-            return copy.deepcopy(result.data)
+            return observation_data(result.data)
         try:
             return await finish_on_cancel(perform())
         except Exception:
@@ -845,7 +852,7 @@ class SceneJobMixin:
         return [{**registry[fid], "id": fid, "path": str(paths[fid])} for fid in frame_ids]
 
     async def _deepen_scene(self, job_id, chunk, frames, cues, memory):
-        from .models import Observation
+        from .models import Observation, normalize_observation_evidence
         job = self.checkpoint(job_id)
         config, asset_id = job["config"], job["asset_id"]
         profile = config["profile_snapshots"]["vision"]
@@ -913,6 +920,7 @@ class SceneJobMixin:
             part_path = target.parent / "parts" / chunk["id"] / f"{index}.json"
             part = read_json(part_path)
             if part is not None:
+                part = normalize_observation_evidence(part, [frame["id"] for frame in current])
                 Observation.model_validate(part)
                 if (part.get("asset_id") != asset_id or part.get("run_id") != job["run_id"]
                         or part.get("id") != chunk["id"] or part.get("start_ms") != start or part.get("end_ms") != end

@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 
 from scenerecall import codex_cli
+from scenerecall.models import Observation
 from scenerecall.providers import MAX_OUTPUT_TOKENS, ProviderError, ProviderManager
 from scenerecall.scene_preparation import (
     CONTEXTUAL_VISION_PROMPT_VERSION, MAX_PREPARATION_OUTPUT_TOKENS, MAX_SCENE_CONTEXT_BYTES,
@@ -271,7 +272,8 @@ async def test_compact_contextual_observation_accepts_all_characters_changes_and
     assert result.data["events"] == [{"target_ids": [], **event} for event in data["events"]]
     assert result.data["spatial_observations"] == data["spatial_observations"]
     assert result.data["uncertainties"] == data["uncertainties"]
-    assert result.data["evidence_frame_ids"] == ["frame-0", "frame-2"]
+    assert result.data["evidence_frame_ids"] == ["frame-0", "frame-1", "frame-2"]
+    assert data["evidence_frame_ids"] == ["frame-0", "frame-2"]
 
 
 @pytest.mark.asyncio
@@ -285,6 +287,45 @@ async def test_compact_contextual_observation_retains_searchable_grouped_static_
     assert group["description"] == data["entities"][-1]["description"]
     assert group["evidence_frame_ids"] == ["frame-1"]
     assert not group["is_character"] and group["character_id"] is None
+
+
+@pytest.mark.parametrize("part", ["entities", "events", "spatial_observations"])
+@pytest.mark.parametrize("provider_type", ["openai_compatible", "codex_cli"])
+@pytest.mark.asyncio
+async def test_sparse_item_evidence_is_preserved_in_durable_provider_observation(
+        tmp_path, monkeypatch, part, provider_type):
+    data = {"summary": "画面中有一盏灯", "entities": [], "events": [], "spatial_observations": [],
+            "uncertainties": [], "evidence_frame_ids": ["frame-0"]}
+    if part == "entities":
+        data[part] = [{"id": "lamp", "kind": "object", "description": "灯",
+                       "evidence_frame_ids": ["frame-1"]}]
+    elif part == "events":
+        data[part] = [{"action": "灯亮起", "start_ms": 1000, "end_ms": 1000,
+                       "evidence_frame_ids": ["frame-1"]}]
+    else:
+        data["entities"] = [{"id": "lamp", "kind": "object", "description": "灯",
+                              "evidence_frame_ids": ["frame-0"]}]
+        data[part] = [{"subject_id": "lamp", "relation": "位于左侧",
+                       "evidence_frame_ids": ["frame-1"]}]
+    original = deepcopy(data)
+    calls = []
+
+    async def complete(*args, **kwargs):
+        calls.append(args)
+        return codex_cli.CodexCLIResult(json.dumps(data),
+                                        {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
+
+    monkeypatch.setattr(codex_cli, "complete", complete)
+    providers = manager(tmp_path, lambda request: reply(data), provider_type=provider_type)
+    result = await providers.analyze("scene", images(tmp_path, 3), 0, 3000, story_context={})
+    assert result.data["evidence_frame_ids"] == ["frame-0", "frame-1"]
+    assert result.data[part][0]["evidence_frame_ids"] == ["frame-1"]
+    assert result.request_count == 1 and len(calls) == int(provider_type == "codex_cli")
+    assert result.usage["total_tokens"] == (15 if provider_type == "codex_cli" else 30)
+    assert data == original
+    durable = Observation.model_validate({**result.data, "id": "observation", "asset_id": "asset",
+        "run_id": "run", "window_id": "window", "shot_id": "shot", "start_ms": 0, "end_ms": 3000})
+    assert durable.evidence_frame_ids == ["frame-0", "frame-1"]
 
 
 @pytest.mark.parametrize("part", ["entities", "events", "spatial_observations"])
