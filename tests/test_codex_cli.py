@@ -46,6 +46,10 @@ else:
               "image_data": [base64_encode(image.read_bytes()) for image in images],
               "image_modes": [image.stat().st_mode & 0o777 for image in images],
               "instructions": Path(json.loads(instructions)).read_text()}
+    if "--output-schema" in args:
+        schema_path = Path(args[args.index("--output-schema") + 1])
+        record["output_schema"] = json.loads(schema_path.read_text())
+        record["schema_mode"] = schema_path.stat().st_mode & 0o777
     with log.open("a") as handle:
         handle.write(json.dumps(record) + "\\n")
     scenario = config.get("scenario", "success")
@@ -85,6 +89,7 @@ else:
                 "base64_encode(image.read_bytes())", "__import__('base64').b64encode(image.read_bytes()).decode()"))
     script.chmod(0o700)
     monkeypatch.setenv("SCENERECALL_CODEX_PATH", str(script))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
     def configure(**values):
         configuration.write_text(json.dumps(values))
@@ -159,6 +164,39 @@ async def test_text_stdin_isolation_and_final_message_usage(cli, monkeypatch):
     assert call["env"]["CODEX_HOME"] == "/tmp/example-codex-home"
     assert not any(name in call["env"] for name in ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "CODEX_THREAD_ID"])
     assert not Path(call["cwd"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_output_schema_is_passed_as_private_temporary_file_and_removed(cli):
+    _, calls = cli
+    schema = {"type": "object", "properties": {"frame_id": {"type": "string", "enum": ["current-frame"]}},
+              "required": ["frame_id"], "additionalProperties": False}
+    result = await codex_cli.complete("Return JSON", "fixture", "", 5, output_schema=schema)
+    [call] = calls()
+    assert call["output_schema"] == schema and call["schema_mode"] == 0o600
+    path = Path(call["args"][call["args"].index("--output-schema") + 1])
+    assert path.parent.resolve() == Path(call["cwd"]).resolve() and not path.exists()
+    assert result.request_count == 1 and result.usage["total_tokens"] == 109
+
+
+@pytest.mark.parametrize("schema", [[], {}, {"type": "string"}, {"type": "object", "invalid": float("nan")},
+                                    {"type": "object", "invalid": object()}])
+@pytest.mark.asyncio
+async def test_invalid_output_schema_is_rejected_before_model_admission(cli, schema):
+    _, calls = cli
+    with pytest.raises(CodexCLIError, match="输出结构") as caught:
+        await codex_cli.complete("Return JSON", "fixture", "", 5, output_schema=schema)
+    assert caught.value.request_count == 0 and not calls()
+
+
+@pytest.mark.asyncio
+async def test_oversized_output_schema_is_rejected_before_model_admission(cli, monkeypatch):
+    _, calls = cli
+    monkeypatch.setattr(codex_cli, "MAX_SCHEMA_BYTES", 32)
+    with pytest.raises(CodexCLIError, match="输出结构") as caught:
+        await codex_cli.complete("Return JSON", "fixture", "", 5,
+                                 output_schema={"type": "object", "description": "x" * 64})
+    assert caught.value.request_count == 0 and not calls()
 
 
 @pytest.mark.asyncio
@@ -313,3 +351,137 @@ async def test_text_and_image_limits_reject_before_model_start(cli, monkeypatch)
     with pytest.raises(CodexCLIError, match="大小超过"):
         await codex_cli.complete("instruction", [image], "", 5)
     assert not calls()
+
+
+@pytest.fixture
+def model_cache(cli):
+    directory = Path(os.environ["CODEX_HOME"])
+    directory.mkdir()
+    path = directory / "models_cache.json"
+    metadata = {
+        "fetched_at": "2026-10-13T02:00:00Z",
+        "identity": {"account": "private-account-metadata"},
+        "models": [
+            {"slug": "model-small", "display_name": "Small", "visibility": "list",
+             "supported_in_api": False, "default_reasoning_level": "medium",
+             "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}]},
+            {"slug": "model-large", "display_name": "Large", "visibility": "list",
+             "default_reasoning_level": "high",
+             "supported_reasoning_levels": [{"effort": "high"}, {"effort": "ultra"}]},
+            {"slug": "model-hidden", "display_name": "Hidden", "visibility": "hide",
+             "supported_reasoning_levels": [{"effort": "low"}]},
+        ],
+    }
+    path.write_text(json.dumps(metadata))
+    return path, metadata
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_uses_visible_cached_metadata_without_reading_credentials(cli, model_cache):
+    _, calls = cli
+    path, _ = model_cache
+    (path.parent / "auth.json").write_text("secret-credential")
+    result = await codex_cli.model_catalog()
+    assert result["models"] == [
+        {"id": "model-small", "name": "Small", "reasoning_efforts": ["low", "medium"],
+         "default_reasoning_effort": "medium"},
+        {"id": "model-large", "name": "Large", "reasoning_efforts": ["high", "ultra"],
+         "default_reasoning_effort": "high"},
+    ]
+    assert result["source"] == "local_cache" and result["fetched_at"] == "2026-10-13T02:00:00Z"
+    assert result["default_model"] is None
+    assert "缓存" in result["message"]
+    assert "private-account" not in json.dumps(result) and "secret-credential" not in json.dumps(result)
+    assert not calls()
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_reads_updated_cache_without_stale_process_state(model_cache):
+    path, metadata = model_cache
+    await codex_cli.model_catalog()
+    metadata["models"][0]["supported_reasoning_levels"].append({"effort": "xhigh"})
+    path.write_text(json.dumps(metadata))
+    result = await codex_cli.model_catalog()
+    assert result["models"][0]["reasoning_efforts"] == ["low", "medium", "xhigh"]
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_defends_against_invalid_entries(model_cache):
+    path, metadata = model_cache
+    metadata["fetched_at"] = "private-secret"
+    metadata["models"] = [None, [], {"visibility": "list", "slug": "--config=bad"},
+                          {"visibility": "list", "slug": "valid", "display_name": {},
+                           "supported_reasoning_levels": [None, {}, {"effort": []}, {"effort": "private-secret"},
+                                                          {"effort": "low"}, {"effort": "low"}],
+                           "default_reasoning_level": "max"},
+                          {"visibility": "list", "slug": "valid"}]
+    path.write_text(json.dumps(metadata))
+    result = await codex_cli.model_catalog()
+    assert result["models"] == [{"id": "valid", "name": "valid", "reasoning_efforts": ["low"],
+                                  "default_reasoning_effort": None}]
+    assert result["fetched_at"] is None
+    assert "private-secret" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("payload", [None, b"private-secret", b"[]", b'{"models":{}}', b'{"models":[]}'])
+@pytest.mark.asyncio
+async def test_model_catalog_missing_or_invalid_cache_falls_back_to_cli_defaults(cli, tmp_path, payload):
+    directory = tmp_path / "codex-home"
+    directory.mkdir()
+    if payload is not None:
+        (directory / "models_cache.json").write_bytes(payload)
+    result = await codex_cli.model_catalog()
+    assert result["models"] == [] and result["default_model"] is None and result["source"] == "unavailable"
+    assert "默认" in result["message"] and "private-secret" not in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_size_is_bounded(model_cache, monkeypatch):
+    monkeypatch.setattr(codex_cli, "MAX_CATALOG_BYTES", 32)
+    assert (await codex_cli.model_catalog())["models"] == []
+
+
+@pytest.mark.asyncio
+async def test_model_catalog_unavailable_without_compatible_authenticated_cli(cli, model_cache):
+    configure, _ = cli
+    configure(login="secret-login-output", login_code=1)
+    result = await codex_cli.model_catalog()
+    assert result["models"] == [] and result["source"] == "unavailable"
+    assert "secret" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_reaches_cli_as_safe_config_and_preserves_isolation(cli, model_cache):
+    _, calls = cli
+    await codex_cli.complete("Return JSON", "prompt", "model-large", 5, reasoning_effort="ultra")
+    [call] = calls()
+    assert 'model_reasoning_effort="ultra"' in call["args"]
+    assert call["args"][call["args"].index('model_reasoning_effort="ultra"') - 1] == "-c"
+    assert call["args"][call["args"].index("-m") + 1] == "model-large"
+    assert set(codex_cli._REQUIRED_FLAGS) - {"--image"} <= set(call["args"])
+
+
+@pytest.mark.parametrize("effort", [None, ""])
+@pytest.mark.asyncio
+async def test_unselected_reasoning_effort_preserves_cli_default(cli, effort):
+    _, calls = cli
+    await codex_cli.complete("instruction", "prompt", "", 5, reasoning_effort=effort)
+    assert not any(arg.startswith("model_reasoning_effort=") for arg in calls()[0]["args"])
+
+
+@pytest.mark.parametrize("effort", ["ultra", "high", 'low"\nmodel_provider="custom"', "$(touch bad)", [], True])
+@pytest.mark.asyncio
+async def test_invalid_or_unsupported_reasoning_rejected_before_model_start(cli, model_cache, effort):
+    _, calls = cli
+    with pytest.raises(CodexCLIError, match="思考等级") as error:
+        await codex_cli.complete("instruction", "prompt", "model-small", 5, reasoning_effort=effort)
+    assert error.value.request_count == 0 and not calls()
+
+
+@pytest.mark.parametrize("model", ["", "legacy-model"])
+def test_reasoning_validation_preserves_default_and_unknown_models(model_cache, model):
+    codex_cli.validate_reasoning_effort(model, "ultra")
+
+
+def test_reasoning_validation_allows_known_effort_when_cache_is_unavailable(cli):
+    codex_cli.validate_reasoning_effort("model-small", "high")

@@ -5,7 +5,7 @@ import pytest
 from PIL import Image
 
 from scenerecall.jobs import JobQueue, StopJob, canonical_ocr_frames, model_identity
-from scenerecall.library import Library, read_json
+from scenerecall.library import Library, atomic_json, read_json
 from scenerecall.models import AnalysisInput, AssetInput
 from scenerecall.providers import AIResult, ProviderError
 from scenerecall.search import SearchEngine
@@ -145,6 +145,8 @@ async def test_force_retry_only_retries_failed_window_and_frame_batches_are_cach
     queue.providers.fail_window = 1000
     request = AnalysisInput(asset_id=asset["id"], stages=["vision"], window_ms=1000, force=True, max_requests=100)
     _, config = queue.validate(request, {"bindings": {"vision": "test"}})
+    # This exercises persisted pre-keyframe tasks and their already-paid cache.
+    config["sampling_strategy"] = "uniform-v1"
     job = queue.add("analysis", config, asset["id"])
     await queue.execute(job["id"])
     assert queue.get(job["id"])["status"] == "partial"
@@ -224,7 +226,20 @@ def test_codex_estimate_keeps_subscription_cost_unknown(worker):
     queue, asset, _extractions = worker
     # Even stale API rates must not turn subscription use into a dollar estimate.
     queue.providers.profile.update(provider_type="codex_cli", base_url="", model="")
-    request = AnalysisInput(asset_id=asset["id"], stages=["vision", "subtitle"])
+    frame = {"id": "estimate_frame", "at_ms": 1000, "pts": 1, "time_base": [1, 1],
+             "source_pts": 1, "source_time_base": [1, 1], "shot_id": "estimate_shot", "reason": "stable_pose"}
+    plan = {"id": "plan_estimate", "plan_id": "plan_estimate", "asset_id": asset["id"],
+            "fingerprint": asset["fingerprint"], "start_ms": 0, "end_ms": asset["duration_ms"],
+            "status": "completed", "algorithm": "content-keyframes-v1", "frames": [frame],
+            "shots": [{"id": "estimate_shot", "start_ms": 0, "end_ms": 4000}],
+            "batches": [{"id": "estimate_batch", "shot_id": "estimate_shot", "start_ms": 0,
+                         "end_ms": 4000, "frame_ids": [frame["id"]]}]}
+    preview = queue.library.asset_dir(asset["id"]) / "frames" / "estimate_frame.jpg"
+    preview.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (32, 32), "blue").save(preview)
+    queue.library.register_frame(asset["id"], {**frame, "path": str(preview)})
+    atomic_json(queue._plan_path(asset["id"], plan["id"]), plan)
+    request = AnalysisInput(asset_id=asset["id"], stages=["vision", "subtitle"], keyframe_plan_id=plan["id"])
     estimate = queue.estimate(request, {"bindings": {"vision": "test", "subtitle": "test"}})
     assert estimate["estimated_requests"] == 2
     assert estimate["cost_estimate"] is None

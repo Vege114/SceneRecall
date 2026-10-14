@@ -22,7 +22,7 @@ import jieba
 from .providers import ProviderError, ProviderManager
 
 jieba.setLogLevel(logging.WARNING)
-ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character"}
+ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character", "project_id", "anime_id", "folder_id", "tag"}
 STOP_WORDS = {
     "的", "了", "在", "是", "有", "和", "与", "及", "或", "吗", "呢", "啊", "吧", "着", "地", "得",
     "我", "你", "他", "她", "它", "我们", "你们", "他们", "那个", "这个", "这些", "那些", "哪个",
@@ -124,6 +124,9 @@ class SearchEngine:
                     signature TEXT NOT NULL, text_hash TEXT NOT NULL, vector TEXT NOT NULL,
                     PRIMARY KEY(signature,text_hash)
                 );
+                CREATE TABLE IF NOT EXISTS build_checkpoints (
+                    kind TEXT PRIMARY KEY, records_digest TEXT NOT NULL
+                );
             """)
 
     @staticmethod
@@ -132,7 +135,7 @@ class SearchEngine:
         for record in records:
             if not isinstance(record.get("id"), str) or not record["id"] or record["id"] in seen:
                 raise ValueError("搜索记录 ID 缺失或重复")
-            if not record.get("asset_id") or record.get("kind") not in {"visual", "subtitle"}:
+            if not record.get("asset_id") or record.get("kind") not in {"visual", "subtitle", "scene"}:
                 raise ValueError("搜索记录缺少媒体或证据类型")
             if not isinstance(record.get("text"), str):
                 raise ValueError("搜索记录正文无效")  # noqa: TRY004 - API exposes validation errors consistently
@@ -178,7 +181,62 @@ class SearchEngine:
                     "SELECT data FROM records WHERE asset_id=? AND kind='subtitle' AND is_context=0", (asset,))]
                 for context in _context_records(source):
                     self._write_record(db, context)
+            db.execute("DELETE FROM build_checkpoints")
             self._generation += 1
+
+    def remove_assets(self, asset_ids):
+        """Remove evidence immediately and invalidate any in-flight publication."""
+        with self._lock, self._db() as db:
+            for asset_id in asset_ids:
+                db.execute("DELETE FROM evidence_fts WHERE id IN (SELECT id FROM records WHERE asset_id=?)", (asset_id,))
+                db.execute("DELETE FROM records WHERE asset_id=?", (asset_id,))
+            db.execute("DELETE FROM build_checkpoints")
+            self._generation += 1
+
+    def sync_asset(self, records: list[dict], asset_id: str | None = None) -> dict:
+        """Publish one asset projection, touching only changed rows and contexts.
+
+        Unlike upsert this removes records retired by resegmentation. The optional
+        asset ID permits publishing an empty projection without guessing ownership.
+        """
+        self._validate_records(records)
+        assets = {record["asset_id"] for record in records}
+        if asset_id is not None:
+            assets.add(asset_id)
+        if len(assets) != 1:
+            raise ValueError("增量同步必须指定单个视频资产")
+        owner = next(iter(assets))
+        incoming = {record["id"]: record for record in records}
+        changed_count = removed_count = context_count = 0
+        with self._lock, self._db() as db:
+            previous = {row["id"]: json.loads(row["data"]) for row in db.execute(
+                "SELECT id,data FROM records WHERE asset_id=? AND is_context=0", (owner,))}
+            for identity in previous.keys() - incoming.keys():
+                db.execute("DELETE FROM evidence_fts WHERE id=?", (identity,))
+                db.execute("DELETE FROM records WHERE id=?", (identity,))
+                removed_count += 1
+            for identity, record in incoming.items():
+                if previous.get(identity) != record:
+                    self._write_record(db, record)
+                    changed_count += 1
+            old_subtitles = {identity: row for identity, row in previous.items() if row["kind"] == "subtitle"}
+            new_subtitles = {identity: row for identity, row in incoming.items() if row["kind"] == "subtitle"}
+            if old_subtitles != new_subtitles:
+                old_contexts = {row["id"]: json.loads(row["data"]) for row in db.execute(
+                    "SELECT id,data FROM records WHERE asset_id=? AND is_context=1", (owner,))}
+                new_contexts = {row["id"]: row for row in _context_records(list(new_subtitles.values()))}
+                for identity in old_contexts.keys() - new_contexts.keys():
+                    db.execute("DELETE FROM evidence_fts WHERE id=?", (identity,))
+                    db.execute("DELETE FROM records WHERE id=?", (identity,))
+                    context_count += 1
+                for identity, row in new_contexts.items():
+                    if old_contexts.get(identity) != row:
+                        self._write_record(db, row)
+                        context_count += 1
+            if changed_count or removed_count or context_count:
+                db.execute("DELETE FROM build_checkpoints")
+                self._generation += 1
+        return {"upserted": changed_count, "removed": removed_count, "contexts_changed": context_count}
 
     def _signature(self, profile_id: str) -> str:
         profile = self.providers.get(profile_id)
@@ -194,16 +252,30 @@ class SearchEngine:
                 await result
 
     async def rebuild(self, records: list[dict], embedding_profile_id: str | None = None,
-                      *, before_batch: Callable | None = None, on_batch: Callable | None = None) -> dict:
+                      *, before_batch: Callable | None = None, on_batch: Callable | None = None,
+                      embed_batch: Callable | None = None) -> dict:
         self._validate_records(records)
         generation = self._generation
         all_records = records + _context_records(records)
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         count, cost, cost_known, cache_hits = 0, 0.0, True, 0
         namespace = None
+        records_digest = self._records_digest(all_records)
+        signature = self._signature(embedding_profile_id) if embedding_profile_id else None
+        with self._lock, self._db() as db:
+            completed = {row[0]: row[1] for row in db.execute("SELECT kind,records_digest FROM build_checkpoints")}
+            lexical_ready = (completed.get("lexical") == records_digest
+                and db.execute("SELECT COUNT(*) FROM records").fetchone()[0] == len(all_records)
+                and db.execute("SELECT COUNT(*) FROM evidence_fts").fetchone()[0] == len(all_records))
+            vector_ready = bool(signature and completed.get("vector:" + signature) == records_digest
+                and db.execute("SELECT 1 FROM namespaces WHERE signature=?", (signature,)).fetchone())
+        if lexical_ready and (not signature or vector_ready):
+            return {"records": len(records), "contexts": len(all_records) - len(records),
+                    "embedding_profile_id": embedding_profile_id,
+                    "cache_hits": len({_text_hash(record) for record in all_records}) if signature else 0,
+                    "request_count": 0, "usage": usage, "cost": 0.0, "resumed": True}
         if embedding_profile_id and all_records:
             import lancedb
-            signature = self._signature(embedding_profile_id)
             profile = self.providers.get(embedding_profile_id)
             vector_by_hash = {}
             with self._db() as db:
@@ -216,7 +288,9 @@ class SearchEngine:
                 batch = missing[offset:offset + 64]
                 await self._callback(before_batch, len(batch))
                 try:
-                    result = await self.providers.embed(embedding_profile_id, [text for _, text in batch])
+                    texts = [text for _, text in batch]
+                    result = (await embed_batch(texts) if embed_batch else
+                              await self.providers.embed(embedding_profile_id, texts))
                 except ProviderError as exc:
                     await self._callback(on_batch, exc)
                     raise
@@ -254,16 +328,30 @@ class SearchEngine:
                 "embedding_profile_id": embedding_profile_id, "cache_hits": cache_hits,
                 "request_count": count, "usage": usage, "cost": cost if cost_known else None}
 
+    @staticmethod
+    def _records_digest(records: list[dict]) -> str:
+        return hashlib.sha256(json.dumps(sorted(records, key=lambda row: row["id"]),
+            ensure_ascii=False, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
     def _publish(self, records: list[dict], namespace: tuple | None, generation: int) -> None:
         with self._lock, self._db() as db:
             if self._generation != generation:
                 raise ValueError("索引构建期间资料发生变化，请重试重建；原索引已保留")
-            db.execute("DELETE FROM records")
-            db.execute("DELETE FROM evidence_fts")
-            for record in records:
-                self._write_record(db, record)
+            records_digest = self._records_digest(records)
+            checkpoint = db.execute("SELECT records_digest FROM build_checkpoints WHERE kind='lexical'").fetchone()
+            if (not checkpoint or checkpoint[0] != records_digest
+                    or db.execute("SELECT COUNT(*) FROM records").fetchone()[0] != len(records)
+                    or db.execute("SELECT COUNT(*) FROM evidence_fts").fetchone()[0] != len(records)):
+                db.execute("DELETE FROM records")
+                db.execute("DELETE FROM evidence_fts")
+                for record in records:
+                    self._write_record(db, record)
+                db.execute("DELETE FROM build_checkpoints")
+                db.execute("INSERT INTO build_checkpoints VALUES ('lexical',?)", (records_digest,))
             if namespace:
                 db.execute("INSERT OR REPLACE INTO namespaces VALUES (?,?,?,?,?,?,?)", namespace)
+                db.execute("INSERT OR REPLACE INTO build_checkpoints VALUES (?,?)",
+                           ("vector:" + namespace[0], records_digest))
             self._generation += 1
 
     def status(self) -> dict:
@@ -283,6 +371,13 @@ class SearchEngine:
             if key == "character":
                 clauses.append("EXISTS (SELECT 1 FROM json_each(r.characters) WHERE value=?)")
                 params.append(normalize(str(value)))
+            elif key in {"project_id", "anime_id"}:
+                clauses.append(f"json_extract(r.data, '$.{key}')=?")
+                params.append(value)
+            elif key in {"folder_id", "tag"}:
+                field = "folder_ids" if key == "folder_id" else "tags"
+                clauses.append(f"EXISTS (SELECT 1 FROM json_each(r.data, '$.{field}') WHERE value=?)")
+                params.append(value)
             else:
                 clauses.append(f"r.{key}=?")
                 params.append(value)
@@ -407,9 +502,13 @@ class SearchEngine:
                 for judgment in judgments:
                     if judgment["id"] not in by_id or judgment["match_type"] == "none":
                         continue
-                    reranked.append({**by_id[judgment["id"]], "score": judgment["score"],
-                                     "match_type": judgment["match_type"],
-                                     "match_reason": "依据记录核对全部条件" if judgment["match_type"] == "full"
+                    candidate = by_id[judgment["id"]]
+                    match_type = judgment["match_type"]
+                    if candidate.get("context_stale") and match_type == "full":
+                        match_type = "partial"
+                    reranked.append({**candidate, "score": judgment["score"],
+                                     "match_type": match_type,
+                                     "match_reason": "依据记录核对全部条件" if match_type == "full"
                                      else "记录仅支持部分查询条件"})
                 candidates = sorted(reranked, key=lambda row: row["score"], reverse=True)
             except ProviderError as exc:

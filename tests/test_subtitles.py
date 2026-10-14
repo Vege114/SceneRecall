@@ -1,7 +1,7 @@
 
 import pytest
 from PIL import Image
-from scenerecall.subtitles import SubtitleError, candidate_frames, merge_ocr_frames, parse_subtitles
+from scenerecall.subtitles import SubtitleError, candidate_frames, merge_ocr_frames, parse_container_subtitles, parse_subtitles
 
 
 def subtitle_file(tmp_path, text, suffix="srt"):
@@ -53,6 +53,55 @@ def test_ass_formatting_comments_and_bilingual_are_preserved(tmp_path):
     cues = parse_subtitles(path, 5000)
     assert [c["text"] for c in cues] == ["回来", "戻って！"]
     assert all(c["end_ms"] == 2000 for c in cues)
+
+
+def ass_file(tmp_path, events):
+    return subtitle_file(tmp_path, "[Script Info]\nScriptType: v4.00+\n\n[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" + events, "ass")
+
+
+@pytest.mark.parametrize("parser", [parse_subtitles, parse_container_subtitles])
+def test_ass_nonpositive_events_are_audited_without_inventing_dialogue_or_rewriting_source(tmp_path, parser):
+    path = ass_file(tmp_path,
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,回来\\N戻って！\n"
+        "Dialogue: 0,0:00:03.00,0:00:02.00,OP_fx,,0,0,0,,{\\k20}反向特效\n"
+        "Dialogue: 0,0:00:04.00,0:00:04.00,OP_fx,,0,0,0,,瞬间特效\n"
+        "Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,有效台词\n")
+    original = path.read_bytes()
+    diagnostics = {}
+    cues = parser(path, 5000, 100, diagnostics=diagnostics)
+    assert [(c["start_ms"], c["end_ms"], c["text"]) for c in cues] == [
+        (1100, 2100, "回来"), (1100, 2100, "戻って！"), (3100, 4100, "有效台词")]
+    assert [c["source_cue_index"] for c in cues] == [0, 0, 3]
+    assert diagnostics["ignored_ass_events"] == [
+        {"source_cue_index": 1, "start_ms": 3000, "end_ms": 2000, "style": "OP_fx", "reason": "non_positive_duration"},
+        {"source_cue_index": 2, "start_ms": 4000, "end_ms": 4000, "style": "OP_fx", "reason": "non_positive_duration"}]
+    assert path.read_bytes() == original
+    assert parser(path, 5000, 100) == cues
+
+
+@pytest.mark.parametrize("parser", [parse_subtitles, parse_container_subtitles])
+def test_ass_drawing_and_empty_events_ignore_timing_but_mixed_text_is_preserved(tmp_path, parser):
+    path = ass_file(tmp_path,
+        "Dialogue: 0,0:00:08.00,0:00:09.00,Default,,0,0,0,,{\\p1}m 0 0 l 10 10\n"
+        "Dialogue: 0,0:00:08.00,0:00:09.00,Default,,0,0,0,,\n"
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,{\\p1}m 0 0 l 10 10{\\p0}真实台词\n")
+    cues = parser(path, 5000)
+    assert [c["text"] for c in cues] == ["真实台词"]
+
+
+@pytest.mark.parametrize("parser", [parse_subtitles, parse_container_subtitles])
+def test_ass_without_any_playable_text_still_fails(tmp_path, parser):
+    path = ass_file(tmp_path, "Dialogue: 0,0:00:02.00,0:00:01.00,OP_fx,,0,0,0,,反向特效\n")
+    with pytest.raises(SubtitleError, match="不包含可用"):
+        parser(path, 5000)
+
+
+@pytest.mark.parametrize("timing,offset", [("0:00:04.00,0:00:06.00", 0), ("0:00:00.00,0:00:01.00", -100)])
+def test_ass_visible_out_of_range_or_wrong_offset_still_fails(tmp_path, timing, offset):
+    path = ass_file(tmp_path, f"Dialogue: 0,{timing},Default,,0,0,0,,有效台词但时间错误\n")
+    with pytest.raises(SubtitleError, match="超出视频范围"):
+        parse_subtitles(path, 5000, offset)
 
 
 def frame(at, *lines, end=None):

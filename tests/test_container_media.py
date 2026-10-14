@@ -177,10 +177,8 @@ def test_container_cue_boundaries_empty_and_mixed_drawing_are_explicit(tmp_path)
 
 
 @pytest.mark.parametrize("start,end", [("0:00:03.00", "0:00:04.00"),
-                                        ("-0:00:02.00", "-0:00:01.00"),
-                                        ("0:00:01.00", "0:00:01.00"),
-                                        ("0:00:02.00", "0:00:01.00")])
-def test_completely_outside_or_bad_visible_cues_fail_instead_of_partial_success(tmp_path, start, end):
+                                        ("-0:00:02.00", "-0:00:01.00")])
+def test_completely_outside_visible_cues_fail_instead_of_partial_success(tmp_path, start, end):
     path = tmp_path / "bad.ass"
     path.write_text(ASS_HEADER + dialogue("0:00:00.50", "0:00:00.80", "Valid")
                     + dialogue(start, end, "Invalid"), encoding="utf-8")

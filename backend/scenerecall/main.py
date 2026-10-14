@@ -7,6 +7,8 @@ import mimetypes
 import os
 import secrets
 import shutil
+import zipfile
+from contextlib import nullcontext
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,15 +22,19 @@ from .characters import CharacterStore, StaleCharacterRevision
 from .jobs import JobQueue
 from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
 from .models import (
-    AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput,
-    CharacterMergeInput, CharacterReanalysisInput, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
+    AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput, ConcurrencyInput,
+    CharacterMergeInput, CharacterReanalysisInput, DeepenInput, ExecutionOptions, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
+from .native_picker import FilePickerBusy, FilePickerInput, FilePickerUnavailable, RestoreLocalInput, local_file, pick_local_files
 from .providers import ProviderManager
 from .search import SearchEngine
+from .scenes import SceneStore
 
-DEFAULTS = {"bindings": {k: None for k in ("vision", "subtitle", "embedding", "query", "decision", "answer")},
+DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", "embedding", "query", "decision", "answer")},
             "defaults": {"window_ms": 6000, "frames_per_window": 4, "subtitle_fps": 2,
-                         "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None}}
+                         "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None,
+                         "execution": {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel",
+                                       "max_concurrency": 16}}}
 
 
 def create_app(data_dir: Path | None = None, start_worker=True, providers=None, token=None, allowed_ports=None):
@@ -36,6 +42,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     library = Library(Path(root))
     characters = CharacterStore(library)
     providers = providers or ProviderManager(library.root / "private")
+    from .concurrency import recover_concurrency
+    with getattr(providers, "_lock", nullcontext()):
+        recover_concurrency(library.root / "private")
     search = SearchEngine(library.root / "indexes", providers)
     queue = JobQueue(library, providers, search)
     session_token = token or secrets.token_urlsafe(32)
@@ -98,9 +107,15 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return JSONResponse({"detail": "资料或文件不存在，请检查输入路径或重新定位原视频"}, status_code=404)
 
     def settings():
-        value = read_json(library.root / "private" / "settings.json", {})
+        from .concurrency import recover_concurrency
+        with getattr(providers, "_lock", nullcontext()):
+            recover_concurrency(library.root / "private")
+            value = read_json(library.root / "private" / "settings.json", {})
+        defaults = {**DEFAULTS["defaults"], **value.get("defaults", {})}
+        defaults["execution"] = ExecutionOptions.model_validate({
+            **DEFAULTS["defaults"]["execution"], **defaults.get("execution", {})}).model_dump()
         return {"bindings": {**DEFAULTS["bindings"], **value.get("bindings", {})},
-                "defaults": {**DEFAULTS["defaults"], **value.get("defaults", {})}}
+                "defaults": defaults}
 
     def enrich(record):
         record = dict(record)
@@ -112,12 +127,26 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return record
 
     def public_job(job):
-        return {**{key: value for key, value in job.items() if key not in {"config", "checkpoints"}},
+        return {**{key: value for key, value in job.items() if key not in {
+                    "config", "checkpoints", "pending_scene_receipt", "scene_receipts", "inflight_calls", "inflight_attempts"}},
+                **({"sampling_strategy": job["config"].get("sampling_strategy", "uniform-v1")}
+                   if job["type"] == "analysis" and "vision" in job["config"].get("stages", []) else {}),
+                **({"chunk_id": job["config"]["deepen_chunk_id"]} if job["config"].get("deepen_chunk_id") else {}),
+                "task_models": {stage: {"provider_type": profile.get("provider_type", "openai_compatible"),
+                    "profile_id": profile["id"], "model": profile.get("model", ""),
+                    "reasoning_effort": profile.get("reasoning_effort")}
+                    for stage, profile in job["config"].get("profile_snapshots", {}).items()},
+                **({"execution": ExecutionOptions.model_validate(job["config"].get("execution", {})).model_dump(),
+                    "stages": job["config"].get("stages", []),
+                    "analysis_strategy": job["config"].get("analysis_strategy", "content-keyframes-v1")}
+                   if job["type"] == "analysis" else {}),
                 "budget": {"max_requests": job["config"].get("max_requests", 1000), "max_cost": job["config"].get("max_cost")}}
 
     def asset_view(asset):
         asset = dict(asset)
         observations = library.observations(asset["id"])
+        scenes = SceneStore(library).list(asset["id"])
+        observations = scenes or observations
         if observations and observations[0].get("evidence_frame_ids"):
             asset["thumbnail_url"] = f"/api/assets/{asset['id']}/frames/{observations[0]['evidence_frame_ids'][0]}"
         asset["observation_count"] = len(observations)
@@ -161,9 +190,16 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 raise ValueError(f"所选模型未声明 {capability} 能力")
         defaults = {**current["defaults"], **payload.get("defaults", {})}
         AnalysisInput(asset_id="validation", **defaults)
+        defaults["execution"] = ExecutionOptions.model_validate({
+            **current["defaults"]["execution"], **defaults["execution"]}).model_dump()
         result = {"bindings": bindings, "defaults": defaults}
         atomic_json(library.root / "private" / "settings.json", result)
         return result
+
+    @app.put("/api/concurrency")
+    async def put_concurrency(payload: ConcurrencyInput):
+        from .concurrency import save_concurrency
+        return save_concurrency(library, providers, payload, settings)
 
     @app.get("/api/profiles")
     async def profiles():
@@ -172,6 +208,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.get("/api/codex/status")
     async def codex_status():
         return await codex_cli.status()
+
+    @app.get("/api/codex/models")
+    async def codex_models():
+        return await codex_cli.model_catalog()
 
     @app.post("/api/profiles")
     async def profile_save(payload: dict = Body(...)):
@@ -194,6 +234,13 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         result = await providers.test(profile_id, payload.get("capability", "query"))
         return {"ok": True, "message": "连接与所选能力测试通过", "usage": result.usage, "request_count": result.request_count}
 
+    from .workflow_api import register_workflow_routes
+    from .organization_api import register_organization_routes
+    from .bangumi_api import register_bangumi_routes
+    register_workflow_routes(app, library, queue, settings, public_job)
+    register_organization_routes(app, library, queue, search)
+    register_bangumi_routes(app, library, search)
+
     @app.get("/api/assets")
     async def assets():
         return [asset_view(a) for a in library.list_assets()]
@@ -201,6 +248,20 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.post("/api/media/subtitle-tracks")
     async def media_subtitle_tracks(payload: SubtitleProbeInput):
         return await asyncio.to_thread(subtitle_track_info, Path(payload.video_path))
+
+    @app.post("/api/media/subtitle-detection")
+    async def media_subtitle_detection(payload: SubtitleProbeInput):
+        from .subtitle_detection import detect_subtitle_sources
+        return await asyncio.to_thread(detect_subtitle_sources, Path(payload.video_path))
+
+    @app.post("/api/local-files/pick")
+    async def local_files_pick(payload: FilePickerInput):
+        try:
+            return await asyncio.to_thread(pick_local_files, payload)
+        except FilePickerBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except FilePickerUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
 
     @app.post("/api/assets")
     async def asset_register(payload: AssetInput):
@@ -228,9 +289,33 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         projection = {r["id"]: r for r in library.records(asset_id)}
         observations = [{**r, "model_summary": r["summary"],
                          **{k: projection[r["id"]][k] for k in ("summary", "entities", "review_status", "note", "favorite") if r["id"] in projection},
-                         "asset_id": asset_id} for r in library.observations(asset_id)]
+                         "asset_id": asset_id} for r in library.observations(asset_id) if r["id"] in projection]
         return {"asset": asset, "observations": [enrich(r) for r in observations], "subtitles": library.subtitles(asset_id),
+                "scenes": [enrich(r) for r in projection.values() if r.get("kind") == "scene"],
                 "annotations": library.annotations(asset_id), "runs": library.runs(asset_id)}
+
+    @app.post("/api/assets/{asset_id}/chunks/{chunk_id}/deepen/estimate")
+    async def scene_deepen_estimate(asset_id: str, chunk_id: str, payload: DeepenInput):
+        config, chunk = queue.deepen_config(asset_id, chunk_id, payload, settings())
+        return queue.estimate_deepen(config, chunk)
+
+    @app.post("/api/assets/{asset_id}/chunks/{chunk_id}/deepen")
+    async def scene_deepen(asset_id: str, chunk_id: str, payload: DeepenInput):
+        with library.lock:
+            config, _ = queue.deepen_config(asset_id, chunk_id, payload, settings())
+            # A double click reuses the queued/running operation for this revision.
+            existing = next((job for job in queue.list() if job.get("asset_id") == asset_id
+                and job["status"] in {"queued", "running", "pausing"}
+                and job["config"].get("deepen_chunk_id") == chunk_id
+                and job["config"].get("deepen_revision") == config["deepen_revision"]), None)
+            if existing:
+                from .jobs import model_identity
+                previous_profile = existing["config"]["profile_snapshots"]["vision"]
+                chosen_profile = config["profile_snapshots"]["vision"]
+                if (previous_profile["id"] != chosen_profile["id"]
+                        or model_identity(previous_profile) != model_identity(chosen_profile)):
+                    raise ValueError("该片段已有使用其他模型选择的待处理任务，请先完成或取消该任务再重新提交")
+            return public_job(existing or queue.add("analysis", config, asset_id))
 
     @app.post("/api/assets/{asset_id}/relocate")
     async def relocate(asset_id: str, payload: dict = Body(...)):
@@ -308,6 +393,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     raise ValueError(f"「{asset['title']}」原视频离线或已变化，请先定位原文件再重新识别")
                 request = AnalysisInput(**{**current["defaults"], "asset_id": asset["id"],
                     "stages": ["vision"], "start_ms": 0, "end_ms": asset["duration_ms"], "force": True,
+                    "keyframe_plan_id": payload.keyframe_plan_ids.get(asset["id"]),
+                    "model_overrides": payload.model_overrides,
+                    "execution": (payload.execution.model_dump() if payload.execution is not None
+                                  else current["defaults"]["execution"]),
                     "max_requests": payload.max_requests, "max_cost": payload.max_cost})
                 _, config = queue.validate(request, current)
                 config["character_reanalysis"] = True
@@ -326,6 +415,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.get("/api/assets/{asset_id}/frames/{frame_id}")
     async def frame(asset_id: str, frame_id: str):
+        library.get_asset(asset_id)
         return FileResponse(library.frame_path(asset_id, frame_id), media_type="image/jpeg")
 
     @app.post("/api/assets/{asset_id}/proxy")
@@ -339,8 +429,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.post("/api/jobs")
     async def job_start(payload: AnalysisInput):
-        asset, config = queue.validate(payload, settings())
-        return public_job(queue.add("analysis", config, asset["id"]))
+        with library.lock:
+            asset, config = queue.validate(payload, settings())
+            return public_job(queue.add("analysis", config, asset["id"]))
 
     @app.get("/api/jobs")
     async def jobs():
@@ -368,6 +459,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 canonical = actual_records[record["id"]]
                 changed |= canonical["text"] != record.get("text")
                 ranking = {k: record[k] for k in ("score", "match_type", "match_reason", "evidence_ids") if k in record}
+                if canonical.get("context_stale") and ranking.get("match_type") == "full":
+                    ranking.update(match_type="partial", match_reason="前序理解已更新，当前片段的上下文待刷新")
+                    changed = True
                 results.append(enrich({**canonical, **ranking}))
             elif record.get("source_ids") and all(rid in actual_records for rid in record["source_ids"]):
                 sources = [actual_records[rid] for rid in record["source_ids"]]
@@ -377,6 +471,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 changed |= text != record.get("text")
                 results.append(enrich({**record, "text": text, "summary": text, "subtitle_text": text,
                                        "start_ms": min(r["start_ms"] for r in sources), "end_ms": max(r["end_ms"] for r in sources)}))
+            else:
+                changed = True
         if changed:
             result["explanation"] = None
             result.setdefault("degraded", []).append("资料已有新修正，已显示最新原文；请重建索引更新排序")
@@ -443,12 +539,23 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             with path.open("wb") as out:
                 while chunk := await file.read(1024*1024):
                     out.write(chunk)
-            result = await asyncio.to_thread(library.restore, path)
-            await search.rebuild(library.records())
-            return result
+            return await restore_archive(path)
         finally:
             path.unlink(missing_ok=True)
             await file.close()
+
+    async def restore_archive(path):
+        try:
+            result = await asyncio.to_thread(library.restore, path)
+        except zipfile.BadZipFile as exc:
+            raise ValueError("所选文件不是有效的 ZIP 备份") from exc
+        await search.rebuild(library.records())
+        return result
+
+    @app.post("/api/backups/restore-local")
+    async def restore_local(payload: RestoreLocalInput):
+        path = await asyncio.to_thread(local_file, payload.path, "backup")
+        return await restore_archive(path)
 
     frontend = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if frontend.exists():

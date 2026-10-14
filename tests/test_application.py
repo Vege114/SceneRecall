@@ -74,6 +74,28 @@ def register(library, synthetic, mode="external"):
                                        subtitle_path=str(sub) if mode == "external" else None))
 
 
+def test_repeat_import_keeps_independent_subtitles_and_annotations(tmp_path, synthetic):
+    library = Library(tmp_path / "library")
+    original = register(library, synthetic)
+    first_cue = library.records(original["id"])[0]
+    library.annotate(original["id"], {"record_id": first_cue["id"], "favorite": True, "note": "原档案笔记"})
+    copy = tmp_path / "same-content.mp4"
+    shutil.copy2(synthetic[0], copy)
+    alternate = tmp_path / "alternate.srt"
+    alternate.write_text("1\n00:00:00,000 --> 00:00:01,000\n另一版字幕\n", encoding="utf-8")
+    imported = library.register(AssetInput(video_path=str(copy), title=original["title"], subtitle_mode="external",
+                                           subtitle_path=str(alternate)))
+    assert imported["id"] != original["id"]
+    assert imported["fingerprint"] == original["fingerprint"]
+    assert [record["text"] for record in library.records(imported["id"])] == ["另一版字幕"]
+    assert [record["text"] for record in library.records(original["id"])] == ["现在出发", "前往月球"]
+    assert library.collections()[0]["asset_id"] == original["id"]
+    assert library.collections()[0]["note"] == "原档案笔记"
+    assert library.source_path(imported["id"]) == copy
+    assert library.source_path(original["id"]) == synthetic[0]
+    assert len(library.list_assets()) == 2
+
+
 def test_api_auth_subtitles_search_and_range(tmp_path, synthetic):
     app = create_app(tmp_path / "library", start_worker=False, providers=TestProviders(), token="test-token")
     with TestClient(app) as client:

@@ -17,9 +17,10 @@ from scenerecall.search import SearchEngine
 
 
 def character(frame_id, character_id=None, *, kind="person", description="黑色短发，蓝色外套", entity_id="person"):
-    return {"id": entity_id, "kind": kind, "name": None, "description": description,
-            "is_character": True, "character_id": character_id, "match_confidence": .92 if character_id else 0,
-            "match_reason": "稳定的发型与面部轮廓一致" if character_id else "当前没有匹配的已有档案",
+    name = "合成葵" if entity_id == "person" else "合成猫" if entity_id == "cat" else f"合成{entity_id}"
+    return {"id": entity_id, "kind": kind, "name": None if character_id else name, "description": description,
+            "is_character": True, "character_id": character_id, "match_confidence": .92,
+            "match_reason": "稳定的发型与面部轮廓一致" if character_id else f"当前画面姓名牌显示{name}",
             "observed_traits": [description], "evidence_frame_ids": [frame_id],
             "portrait_frame_id": frame_id, "portrait_box": [0, 0, .5, 1]}
 
@@ -42,6 +43,32 @@ def cast_worker(tmp_path, monkeypatch):
         return frames
 
     monkeypatch.setattr("scenerecall.media.extract_frames", extract)
+
+    def scan_keyframes(path, start, end, checkpoint=None, progress=None):
+        # Three explicit content batches isolate identity behavior from detection.
+        # Real decoding/selection is covered by test_keyframes, never this fake file.
+        shots, frames, batches = [], [], []
+        for at in range(start, end, 1000):
+            stop = min(end, at + 1000)
+            shot = {"id": f"cast_shot_{at}", "start_ms": at, "end_ms": stop}
+            shots.append(shot)
+            selected = [{"id": f"cast_frame_{when}", "shot_id": shot["id"], "at_ms": when,
+                         "pts": when, "time_base": [1, 1000], "source_pts": when,
+                         "source_time_base": [1, 1000], "reason": "stable_pose"}
+                        for when in (at + 250, at + 750) if when < stop]
+            frames.extend(selected)
+            batches.append({**shot, "id": f"cast_batch_{at}", "shot_id": shot["id"],
+                            "frame_ids": [frame["id"] for frame in selected]})
+        if checkpoint:
+            checkpoint()
+        return {"algorithm": "content-keyframes-v1", "shots": shots, "frames": frames, "batches": batches}
+
+    def extract_keyframes(path, frames, outputs, checkpoint=None):
+        result = extract(path, [frame["at_ms"] for frame in frames], outputs)
+        return [{**planned, **actual} for planned, actual in zip(frames, result, strict=True)]
+
+    monkeypatch.setattr("scenerecall.media.scan_keyframes", scan_keyframes)
+    monkeypatch.setattr("scenerecall.media.extract_keyframes", extract_keyframes)
     state = {"contexts": [], "payloads": [], "callback": None}
 
     def handler(request):
@@ -109,7 +136,7 @@ async def test_cross_shot_cast_reuses_id_enriches_and_adds_animated_character(ca
                          if part["type"] == "image_url")
     with Image.open(io.BytesIO(base64.b64decode(reference_url.split(",", 1)[1]))) as reference:
         assert reference.size == (16, 32)
-    assert all(record["provenance"]["prompt_version"] == "scenerecall-0.2.0" for record in observations)
+    assert all(record["provenance"]["prompt_version"] == "scenerecall-0.3.0" for record in observations)
     assert all(record["character_revision"] == 0 for record in observations)
 
 
@@ -175,8 +202,8 @@ async def test_inflight_human_edit_discards_stale_response_and_stops_remaining_w
     assert len(queue.library.observations(asset["id"])) == 1
     assert queue.characters.catalog(asset["id"])["profiles"][0]["name"] == "人工名称"
     state["callback"] = None
-    queue.control(job["id"], "retry")
-    await queue.execute(job["id"])
+    with pytest.raises(ValueError, match="新版档案重新识别"):
+        queue.control(job["id"], "retry")
     assert queue.get(job["id"])["status"] == "failed" and len(state["contexts"]) == 2
 
 
@@ -224,7 +251,8 @@ async def test_malformed_character_match_is_rejected_without_registry_changes(ca
     assert queue.library.observations(asset["id"]) == []
 
 
-def test_context_cost_includes_dossier_text_and_references_and_bounds_large_input(cast_worker):
+@pytest.mark.asyncio
+async def test_context_cost_includes_dossier_text_and_references_and_bounds_large_input(cast_worker):
     queue, asset, _state = cast_worker
     profile = queue.providers.get("vision")
     base = queue.estimated_call_cost(profile, frames=2)
@@ -232,7 +260,11 @@ def test_context_cost_includes_dossier_text_and_references_and_bounds_large_inpu
     assert extended - base == pytest.approx((4096 + 10000) / 1_000_000)
     with pytest.raises(ProviderError, match="角色档案上下文"):
         ProviderManager.character_context_text({"profiles": [{"notes": "a" * MAX_CHARACTER_CONTEXT_BYTES}]})
-    estimate = queue.estimate(AnalysisInput(asset_id=asset["id"]), {"bindings": {"vision": "vision"}})
+    plan = queue.ensure_plan(asset["id"])
+    await queue.execute(plan["job_id"])
+    assert queue.get(plan["job_id"])["status"] == "completed"
+    estimate = queue.estimate(AnalysisInput(asset_id=asset["id"], keyframe_plan_id=plan["id"]),
+                              {"bindings": {"vision": "vision"}})
     assert any("参考图" in warning and "费用" in warning for warning in estimate["warnings"])
 
 
@@ -275,6 +307,35 @@ async def test_large_cast_keeps_every_dossier_but_bounds_reference_images(cast_w
 
 
 @pytest.mark.asyncio
+async def test_bangumi_observation_rejects_freeform_names_outside_dossier_projection(cast_worker, monkeypatch):
+    from scenerecall.anime_profiles import AnimeProfileStore
+    queue, asset, state = cast_worker
+    AnimeProfileStore(queue.library).apply_asset(asset["id"], {"mode": "bangumi", "subject_id": 100}, {
+        "source": "bangumi", "fetched_at": "2026-10-14T00:00:00Z", "subject": {"id": 100, "name": "Synthetic anime"},
+        "characters": [{"id": 200, "name": "Aoi", "name_cn": "小葵", "description": "黑色短发，蓝色外套"}]})
+
+    async def no_sleep(delay):
+        pass
+
+    monkeypatch.setattr("scenerecall.providers.asyncio.sleep", no_sleep)
+
+    def add_name(data, context, at):
+        data["entities"][0].update(name="额外姓名", match_reason="当前画面胸牌写着额外姓名")
+
+    state["callback"] = add_name
+    job = await run_cast(queue, asset)
+    assert job["status"] == "partial"
+    assert queue.library.observations(asset["id"]) == []
+    assert [profile["name"] for profile in queue.characters.catalog(asset["id"])["profiles"]] == ["小葵"]
+
+
+def test_bangumi_structured_output_forbids_freeform_names():
+    from scenerecall.providers import _vision_output_schema
+    schema = _vision_output_schema({"frame_one"}, {"character_one"}, 0, 1000, named_identities=False)
+    assert schema["$defs"]["Entity"]["properties"]["name"] == {"type": "null"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("crash_point", ["after_registry", "after_immutable_observation"])
 async def test_crash_between_character_and_observation_publication_replays_staged_result(cast_worker, monkeypatch, crash_point):
     queue, asset, state = cast_worker
@@ -297,8 +358,10 @@ async def test_crash_between_character_and_observation_publication_replays_stage
             faults.setattr("scenerecall.library.atomic_json", interrupted_pointer)
         with pytest.raises(asyncio.CancelledError):
             await queue.execute(job["id"])
-    profiles_before = queue.characters.context(asset["id"])["profiles"]
+    profiles_before = queue.characters.catalog(asset["id"])["profiles"]
     assert len(profiles_before) == 1 and len(state["contexts"]) == 1
+    # Unpublished evidence must not leak into subsequent AI identity context.
+    assert queue.characters.context(asset["id"])["profiles"] == []
     assert queue.library.observations(asset["id"]) == []
     restarted = JobQueue(queue.library, queue.providers, queue.search)
     await restarted.execute(job["id"])

@@ -126,12 +126,17 @@ def _text_cues(text: str, suffix: str, container: bool = False) -> list[tuple[in
     return cues
 
 
-def parse_subtitles(path: Path, duration_ms: int, offset_ms: int = 0) -> list[dict]:
-    """Read external subtitles, strictly rejecting cues outside the asset timeline."""
-    return _parse_subtitles(path, duration_ms, offset_ms, container=False)
+def parse_subtitles(path: Path, duration_ms: int, offset_ms: int = 0, *, diagnostics: dict | None = None) -> list[dict]:
+    """Read external dialogue, strictly rejecting visible cues outside the timeline.
+
+    ASS renderers ignore nonpositive-duration events. Record those omissions
+    separately without changing the source or inventing a duration for them.
+    """
+    return _parse_subtitles(path, duration_ms, offset_ms, container=False, diagnostics=diagnostics)
 
 
-def parse_container_subtitles(path: Path, duration_ms: int, offset_ms: int = 0) -> list[dict]:
+def parse_container_subtitles(path: Path, duration_ms: int, offset_ms: int = 0, *,
+                              diagnostics: dict | None = None) -> list[dict]:
     """Read an extracted track on the playback timeline.
 
     Empty/clear-screen and drawing-only events are not dialogue. Visible cues
@@ -139,7 +144,13 @@ def parse_container_subtitles(path: Path, duration_ms: int, offset_ms: int = 0) 
     their pre-clip times. Completely out-of-range or invalid visible cues fail
     explicitly, so a wrong track/origin cannot silently produce partial success.
     """
-    return _parse_subtitles(path, duration_ms, offset_ms, container=True)
+    return _parse_subtitles(path, duration_ms, offset_ms, container=True, diagnostics=diagnostics)
+
+
+def import_warnings(diagnostics: dict) -> list[str]:
+    count = len(diagnostics.get("ignored_ass_events", []))
+    return ([f"已忽略 {count} 个无可播放时长的 ASS 事件（结束时间不晚于开始时间）；"
+             "其余字幕正常导入，原字幕文件已完整保留。"] if count else [])
 
 
 def _ass_plain(cue: Any, styles: dict) -> str:
@@ -153,7 +164,10 @@ def _ass_plain(cue: Any, styles: dict) -> str:
     return _plain(text.replace(r"\N", "\n").replace(r"\n", "\n").replace(r"\h", " "))
 
 
-def _parse_subtitles(path: Path, duration_ms: int, offset_ms: int, container: bool) -> list[dict]:
+def _parse_subtitles(path: Path, duration_ms: int, offset_ms: int, container: bool,
+                     diagnostics: dict | None = None) -> list[dict]:
+    diagnostics = diagnostics if diagnostics is not None else {}
+    diagnostics["ignored_ass_events"] = []
     if path is None or not str(path).strip():
         raise SubtitleError("外挂字幕模式必须提供字幕文件。")
     path = Path(path).expanduser()
@@ -173,8 +187,8 @@ def _parse_subtitles(path: Path, duration_ms: int, offset_ms: int, container: bo
             raise SubtitleError("ASS 字幕缺少有效的 Events/Format 段。")
         try:
             parsed = pysubs2.SSAFile.from_string(text, format_="ass")
-            cues = [(int(cue.start), int(cue.end), _ass_plain(cue, parsed.styles))
-                    for cue in parsed if not cue.is_comment and (container or not cue.is_drawing)]
+            events = [cue for cue in parsed if not cue.is_comment]
+            cues = [(int(cue.start), int(cue.end), _ass_plain(cue, parsed.styles)) for cue in events]
         except Exception as exc:
             raise SubtitleError("ASS 字幕无法解析。") from exc
         dialogue_count = len(re.findall(r"^Dialogue:", text, re.MULTILINE))
@@ -184,8 +198,12 @@ def _parse_subtitles(path: Path, duration_ms: int, offset_ms: int, container: bo
         cues = _text_cues(text, suffix, container)
     records = []
     for index, (start, end, content) in enumerate(cues):
+        if suffix == ".ass" and end <= start:
+            diagnostics["ignored_ass_events"].append({"source_cue_index": index, "start_ms": start,
+                "end_ms": end, "style": events[index].style, "reason": "non_positive_duration"})
+            continue
         start, end = start + offset_ms, end + offset_ms
-        if container and not content.strip():
+        if (container or suffix == ".ass") and not content.strip():
             # mov_text clear-screen packets and ASS drawing/empty events can
             # legitimately have zero duration and should not invalidate a track.
             continue

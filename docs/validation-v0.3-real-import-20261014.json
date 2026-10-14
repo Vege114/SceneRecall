@@ -1,0 +1,42 @@
+{
+  "date": "2026-10-14",
+  "version": "0.3.0",
+  "status": "passed",
+  "fixture": "Original twelve-episode Starlight sources; cached Bangumi dossier #214265",
+  "isolation": "Temporary library removed after test; running user library untouched",
+  "original_video_count": 12,
+  "original_subtitle_count": 12,
+  "initial_imported_assets": 12,
+  "initial_animation_groups": 1,
+  "episodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "all_assets_animation_kind": true,
+  "same_source_active_reimport": "independent asset",
+  "same_source_archived_reimport": "independent asset; archived original stays archived",
+  "archived_original_restore": "preserves both later imports",
+  "request_replay": "returns the same import job without extra assets",
+  "search_result_counts": {
+    "global": 40,
+    "project": 41,
+    "animation": 41,
+    "episode": 49
+  },
+  "search_scope_assertions": "passed",
+  "model_calls": 0,
+  "bangumi_network_calls": 0,
+  "video_and_subtitle_snapshots_unchanged": true,
+  "video_and_subtitle_sha256_unchanged": true,
+  "imported_subtitle_records": 8074
+}

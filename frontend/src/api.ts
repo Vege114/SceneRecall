@@ -45,3 +45,5 @@ export function friendlyDate(value?: string): string {
 }
 export function message(error: unknown): string { return error instanceof Error ? error.message : '操作失败，请重试。'; }
 export function assetLink(id: string, atMs?: number): string { return `#/asset/${encodeURIComponent(id)}${atMs !== undefined ? `?t=${atMs}` : ''}`; }
+export function subtitleLink(assetId: string, cueId: string, atMs = 0): string { return `${assetLink(assetId, atMs)}&cue=${encodeURIComponent(cueId)}`; }
+export function sceneLink(assetId: string, chunkId: string, atMs = 0): string { return `${assetLink(assetId, atMs)}&chunk=${encodeURIComponent(chunkId)}`; }

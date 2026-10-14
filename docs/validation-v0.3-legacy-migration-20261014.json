@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-14",
+  "version": "0.3.0",
+  "status": "passed",
+  "fixture": "Read-only copies of the real legacy catalog, immutable manifests and cast registries",
+  "original_archived_starlight_assets": 12,
+  "inferred_episodes": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12
+  ],
+  "inferred_starlight_animation_groups": 1,
+  "all_starlight_assets_animation_kind": true,
+  "all_trash_entries_restored": true,
+  "restored_starlight_assets": 12,
+  "restored_starlight_animation_groups": 1,
+  "original_user_library_bytes_unchanged": true,
+  "copied_immutable_manifest_bytes_unchanged": true,
+  "model_calls": 0,
+  "media_copied": false
+}

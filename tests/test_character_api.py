@@ -44,14 +44,15 @@ def seed_episode(library, asset_id, episode, series="合成剧集"):
 
 def seed_appearance(app, asset_id, character_id=None, second_person=False):
     entities = [{"id": "person1", "kind": "person", "description": "戴红围巾的短发人物",
-                 "name": None, "character_id": character_id,
-                 "match_confidence": 0.95 if character_id else 0,
-                 "match_reason": "红围巾和面部外观一致" if character_id else "首次出现",
+                 "name": "合成岚", "character_id": character_id,
+                 "match_confidence": 0.95,
+                 "match_reason": "红围巾和面部外观一致" if character_id else "当前画面胸牌显示合成岚",
                  "portrait_frame_id": "frame_test", "portrait_box": [0.25, 0, 0.5, 1],
                  "evidence_frame_ids": ["frame_test"]}]
     if second_person:
         entities.append({**entities[0], "id": "person2", "description": "戴圆眼镜的长发人物",
-                         "character_id": None, "match_confidence": 0})
+                         "name": "合成葵", "character_id": None, "match_confidence": .95,
+                         "match_reason": "当前画面胸牌显示合成葵"})
     record = {"id": f"obs_{asset_id}", "asset_id": asset_id, "run_id": "run_test",
               "window_id": "window_test", "shot_id": "shot_test", "start_ms": 0, "end_ms": 6000,
               "summary": "人物在街边交谈", "entities": entities, "evidence_frame_ids": ["frame_test"]}

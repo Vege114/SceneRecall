@@ -18,6 +18,11 @@ from .models import AssetInput, Observation
 SCHEMA = "1.0"
 
 
+class DeletedAssetError(ValueError):
+    def __init__(self):
+        super().__init__("该导入条目已生成的档案在回收站；如需再次导入，请新建导入批次")
+
+
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -31,7 +36,7 @@ def digest(value) -> str:
 
 
 def safe_id(value: str) -> str:
-    if not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,180}", value) or value in {".", ".."}:
+    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,180}", value) or value in {".", ".."}:
         raise ValueError("无效的记录 ID")
     return value
 
@@ -150,11 +155,16 @@ class Library:
         if not (self.root / "library.json").exists():
             atomic_json(self.root / "library.json", {"schema_version": SCHEMA, "id": uid("library"), "created_at": now()})
         read_json(self.root / "library.json")
+        from .organization import OrganizationStore
+        self.organization = OrganizationStore(self)
+        from .deletions import DeletionStore
+        self.deletions = DeletionStore(self)
+        self.deletions.reconcile_sources()
 
     def asset_dir(self, asset_id: str) -> Path:
         return self.root / "assets" / safe_id(asset_id)
 
-    def get_asset(self, asset_id: str) -> dict:
+    def get_asset(self, asset_id: str, *, include_deleted=False) -> dict:
         result = read_json(self.asset_dir(asset_id) / "manifest.json")
         if result is None:
             raise FileNotFoundError("未找到视频资产")
@@ -171,9 +181,10 @@ class Library:
         container = self._container_pointer(asset_id)
         if container:
             result.update(subtitle_mode="container", subtitle_stream_index=container["stream_index"],
-                          subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"])
+                          subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"],
+                          subtitle_import_warnings=container.get("warnings", []))
             result.pop("subtitle_fallback_reason", None)
-        return result
+        return self.organization.project_asset(result, include_deleted=include_deleted)
 
     def source_path(self, asset_id: str) -> Path | None:
         item = read_json(self.root / "private" / "media-locations.json", {}).get(safe_id(asset_id))
@@ -184,14 +195,25 @@ class Library:
             raise ValueError("原视频离线或文件已变化，请先重新定位并校验原片")
         return self.source_path(asset_id)
 
-    def list_assets(self) -> list[dict]:
-        return sorted([self.get_asset(p.parent.name) for p in (self.root / "assets").glob("*/manifest.json")],
+    def list_assets(self, *, include_deleted=False) -> list[dict]:
+        assets = [self.get_asset(p.parent.name, include_deleted=True) for p in (self.root / "assets").glob("*/manifest.json")]
+        return sorted([asset for asset in assets if include_deleted or not asset["deleted"]],
                       key=lambda a: a["created_at"], reverse=True)
 
-    def register(self, payload: AssetInput) -> dict:
+    def register(self, payload: AssetInput, *, import_item_key: str | None = None) -> dict:
         from .media import fingerprint, probe, subtitle_tracks
-        from .subtitles import parse_subtitles
+        from .subtitles import import_warnings, parse_subtitles
 
+        if import_item_key:
+            for asset in self.list_assets(include_deleted=True):
+                if asset.get("import_item_key") == import_item_key:
+                    if asset["deleted"]:
+                        raise DeletedAssetError()
+                    return asset
+        explicit_project = "project_id" in payload.model_fields_set
+        if explicit_project and payload.project_id is not None:
+            if not any(project["id"] == payload.project_id for project in self.organization.projects()):
+                raise ValueError("项目不存在")
         source = Path(payload.video_path).expanduser().resolve(strict=True)
         if not source.is_file():
             raise ValueError("视频路径必须指向文件")
@@ -199,32 +221,56 @@ class Library:
         metadata = probe(source)
         tracks = subtitle_tracks(metadata)
         cues = []
+        subtitle_diagnostics = {}
         sub_path = None
         container = None
         mode = payload.subtitle_mode
         fallback = None
         if mode in {"auto", "container"}:
-            if mode == "auto" and not tracks and payload.subtitle_stream_index is None:
-                if payload.subtitle_offset_ms:
-                    raise ValueError("未检测到容器字幕轨，无法应用文字轨时间偏移")
-                mode = "embedded"
-                fallback = "未检测到容器字幕轨；仅在画面有烧录字幕时，可绑定字幕视觉模型后运行 OCR。音轨转写暂不支持。"
+            if mode == "auto" and recommended_subtitle_track(tracks) is None and payload.subtitle_stream_index is None:
+                from .subtitle_detection import detect_subtitle_sources
+
+                detection = detect_subtitle_sources(source, metadata=metadata)
+                if detection["recommended_mode"] == "external":
+                    mode = "external"
+                    sub_path = Path(detection["recommended_subtitle_path"])
+                elif tracks:
+                    # Bitmap soft tracks cannot be read by OCR of the video
+                    # frame; do not silently select that unrelated workflow.
+                    select_subtitle_track(tracks)
+                else:
+                    if payload.subtitle_offset_ms:
+                        raise ValueError("未检测到可用文字字幕，无法应用字幕时间偏移")
+                    mode = "embedded"
+                    fallback = detection["reason"] + "；仅在画面有烧录字幕时，可绑定字幕视觉模型后运行 OCR。音轨转写暂不支持。"
+                    if detection["warnings"]:
+                        fallback += " " + " ".join(detection["warnings"])
             else:
                 track = select_subtitle_track(tracks, payload.subtitle_stream_index)
                 container = self._extract_container(source, metadata, track, payload.subtitle_offset_ms)
                 mode = "container"
-        if payload.subtitle_mode == "external":
-            sub_path = Path(payload.subtitle_path).expanduser().resolve(strict=True)
-            cues = parse_subtitles(sub_path, metadata["duration_ms"], payload.subtitle_offset_ms)
+        if mode == "external":
+            sub_path = sub_path or Path(payload.subtitle_path).expanduser().resolve(strict=True)
+            cues = parse_subtitles(sub_path, metadata["duration_ms"], payload.subtitle_offset_ms,
+                                   diagnostics=subtitle_diagnostics)
             if not cues:
                 raise ValueError("字幕文件没有有效字幕")
         checksum = fingerprint(source)
         if source_snapshot(source) != snapshot:
             raise ValueError("视频在导入期间被修改，请重新导入")
         with self.lock:
-            for asset in self.list_assets():
-                if asset["fingerprint"] == checksum:
-                    raise ValueError("该视频已在资料库中，可重新定位原文件或重跑识别")
+            if explicit_project and payload.project_id is not None:
+                self.organization.get_project(payload.project_id)
+            if import_item_key:
+                for asset in self.list_assets(include_deleted=True):
+                    if asset.get("import_item_key") == import_item_key:
+                        if asset["deleted"]:
+                            raise DeletedAssetError()
+                        return asset
+            # The fingerprint validates source integrity; it is not an import
+            # identity. New imports get independent evidence and may reference
+            # the same unchanged source as active or archived assets. Only an
+            # already committed item in this task is reused after a retry/crash.
             asset_id = uid("asset")
             title = payload.title.strip() or source.stem
             identity = [title, payload.kind, payload.series, payload.season, payload.episode]
@@ -235,7 +281,14 @@ class Library:
                      "version": payload.version, "fingerprint": checksum, "file_name": source.name,
                      "subtitle_mode": mode, "subtitle_import_mode": payload.subtitle_mode,
                      "subtitle_offset_ms": payload.subtitle_offset_ms, "subtitle_tracks": tracks,
+                     "subtitle_import_warnings": container["warnings"] if container else import_warnings(subtitle_diagnostics),
                      "created_at": now(), "status": "ready"}
+            if explicit_project:
+                asset["project_id"] = payload.project_id
+                if payload.project_id is None:
+                    asset["character_scope_id"] = "cast_" + asset_id
+            if import_item_key:
+                asset["import_item_key"] = import_item_key
             if fallback:
                 asset["subtitle_fallback_reason"] = fallback
             # Complete all asset files in staging before the asset becomes
@@ -249,6 +302,7 @@ class Library:
                     cues = [{**c, "schema_version": SCHEMA, "asset_id": asset_id,
                              "id": "cue_" + digest([asset_id, c["id"]]), "source": "external"} for c in cues]
                     atomic_jsonl(directory / "subtitles" / "external.jsonl", cues)
+                    atomic_json(directory / "subtitles" / "import-diagnostics.json", subtitle_diagnostics)
                 active = {"schema_version": SCHEMA, "observations": {}, "subtitle_runs": {}}
                 if container:
                     pointer = self._write_container(asset, container, payload.subtitle_offset_ms, directory=directory)
@@ -266,14 +320,16 @@ class Library:
     @staticmethod
     def _extract_container(source: Path, metadata: dict, track: dict, offset_ms: int) -> dict:
         from .media import extract_subtitle_track
-        from .subtitles import parse_container_subtitles
+        from .subtitles import import_warnings, parse_container_subtitles
 
         with tempfile.TemporaryDirectory(prefix="scenerecall-subtitles-") as temporary:
             output = extract_subtitle_track(source, track["index"], Path(temporary) / "track", metadata=metadata)
-            cues = parse_container_subtitles(output, metadata["duration_ms"], offset_ms)
+            diagnostics = {}
+            cues = parse_container_subtitles(output, metadata["duration_ms"], offset_ms, diagnostics=diagnostics)
             if not cues:
                 raise ValueError("所选容器字幕轨没有可用的字幕文字")
-            return {"track": track, "cues": cues, "suffix": output.suffix.lower(), "original": output.read_bytes()}
+            return {"track": track, "cues": cues, "suffix": output.suffix.lower(), "original": output.read_bytes(),
+                    "diagnostics": diagnostics, "warnings": import_warnings(diagnostics)}
 
     def _write_container(self, asset: dict, extracted: dict, offset_ms: int, directory: Path | None = None) -> dict:
         asset_id, track, run_id = asset["id"], extracted["track"], uid("run")
@@ -294,12 +350,15 @@ class Library:
         atomic_jsonl(directory / relative, cues)
         pointer = {"path": str(relative), "original_path": str(original), "run_id": run_id,
                    "stream_index": track["index"], "track": track, "offset_ms": offset_ms,
+                   "warnings": extracted.get("warnings", []),
                    "extraction_version": 1}
+        atomic_json(directory / "analyses" / run_id / "subtitle-import-diagnostics.json", extracted.get("diagnostics", {}))
         atomic_json(directory / "analyses" / run_id / "run.json", {
             "schema_version": SCHEMA, "id": run_id, "asset_id": asset_id,
             "stage": "subtitle", "source": "container", "status": "completed",
             "created_at": now(), "request_count": 0, "cost": 0,
-            "subtitle_track": track, "subtitle_offset_ms": offset_ms, "subtitle_count": len(cues)})
+            "subtitle_track": track, "subtitle_offset_ms": offset_ms, "subtitle_count": len(cues),
+            "subtitle_import_warnings": extracted.get("warnings", [])})
         return pointer
 
     def extract_subtitles(self, asset_id: str, stream_index: int | None = None, offset_ms: int = 0) -> dict:
@@ -327,7 +386,8 @@ class Library:
             atomic_json(self.asset_dir(asset_id) / "active-analysis.json", active)
             manifest = read_json(self.asset_dir(asset_id) / "manifest.json")
             manifest.update(subtitle_mode="container", subtitle_stream_index=track["index"], subtitle_track=track,
-                            subtitle_tracks=tracks, subtitle_offset_ms=offset_ms)
+                            subtitle_tracks=tracks, subtitle_offset_ms=offset_ms,
+                            subtitle_import_warnings=extracted.get("warnings", []))
             manifest.pop("subtitle_fallback_reason", None)
             atomic_json(self.asset_dir(asset_id) / "manifest.json", manifest)
         return self.get_asset(asset_id)
@@ -396,8 +456,7 @@ class Library:
         record = Observation.model_validate(value).model_dump()
         if record["end_ms"] > asset["duration_ms"] or record["asset_id"] != asset_id:
             raise ValueError("记录不属于当前视频时间轴")
-        for frame_id in record["evidence_frame_ids"]:
-            self.frame_path(asset_id, frame_id)
+        self.frame_paths(asset_id, record["evidence_frame_ids"])
         relative = Path("analyses") / safe_id(record["run_id"]) / "observations" / f"{safe_id(record['id'])}.json"
         with self.lock:
             existing = read_json(self.asset_dir(asset_id) / relative)
@@ -471,25 +530,128 @@ class Library:
         return frame
 
     def frame_path(self, asset_id: str, frame_id: str) -> Path:
-        registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
-        value = registry.get(safe_id(frame_id))
-        if not value:
-            raise FileNotFoundError("证据帧不存在")
-        path = confined_path(self.asset_dir(asset_id), value["path"])
-        if not path.is_file():
-            raise FileNotFoundError("证据帧文件不存在")
-        return path
+        return self.frame_paths(asset_id, [frame_id])[frame_id]
+
+    def frame_paths(self, asset_id: str, frame_ids: list[str], *, registry: dict | None = None) -> dict[str, Path]:
+        """Resolve one operation's frames using one registry snapshot, never a persistent cache."""
+        directory = self.asset_dir(asset_id)
+        if registry is None:
+            registry = read_json(directory / "frames" / "registry.json", {})
+        paths = {}
+        for frame_id in frame_ids:
+            value = registry.get(safe_id(frame_id))
+            if not value:
+                raise FileNotFoundError("证据帧不存在")
+            path = confined_path(directory, value["path"])
+            if not path.is_file():
+                raise FileNotFoundError("证据帧文件不存在")
+            paths[frame_id] = path
+        return paths
+
+    def validate_keyframe_plan(self, asset_id: str, plan: dict, expected_id: str | None = None) -> dict:
+        """Validate saved plans without opening the source video or invoking a model."""
+        from fractions import Fraction
+        asset = self.get_asset(asset_id, include_deleted=True)
+        try:
+            if (not isinstance(plan, dict) or plan.get("asset_id") != asset_id
+                    or plan.get("fingerprint") != asset["fingerprint"]
+                    or (expected_id is not None and plan.get("id") != expected_id)
+                    or plan.get("plan_id", plan.get("id")) != plan.get("id")
+                    or not isinstance(plan.get("algorithm"), str) or not plan["algorithm"]):
+                raise ValueError("关键帧计划身份或来源无效")
+            safe_id(plan["id"])
+            start, end = plan["start_ms"], plan["end_ms"]
+            if type(start) is not int or type(end) is not int or not 0 <= start < end <= asset["duration_ms"]:
+                raise ValueError("关键帧计划时间范围无效")
+            if plan.get("status") == "pending":
+                if any(plan.get(key) for key in ("shots", "frames", "batches")):
+                    raise ValueError("未完成的关键帧计划不能包含有效帧引用")
+                return plan
+            if plan.get("status") != "completed":
+                raise ValueError("关键帧计划状态无效")
+            if any(not isinstance(plan.get(key), list) or not plan[key] for key in ("shots", "frames", "batches")):
+                raise ValueError("关键帧计划缺少镜头、帧或分析批次")
+            shots = {}
+            last_end = start
+            for shot in plan["shots"]:
+                identity = safe_id(shot["id"])
+                a, b = shot["start_ms"], shot["end_ms"]
+                if (identity in shots or type(a) is not int or type(b) is not int
+                        or not last_end <= a < b <= end):
+                    raise ValueError("关键帧镜头范围无效")
+                shots[identity] = shot
+                last_end = b
+            frames = {}
+            previous_time = None
+            stored_origin = asset.get("start_time_seconds", str(asset.get("start_time_ms", 0) / 1000))
+            origin = Fraction(plan.get("source_start_time_seconds", stored_origin))
+            if "start_time_seconds" in asset:
+                if origin != Fraction(asset["start_time_seconds"]):
+                    raise ValueError("关键帧计划与视频的精确起始时间不一致")
+            elif round(origin * 1000) != asset.get("start_time_ms", 0):
+                raise ValueError("关键帧计划与视频的起始时间不一致")
+            registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
+            self.frame_paths(asset_id, [frame["id"] for frame in plan["frames"]], registry=registry)
+            for frame in plan["frames"]:
+                identity = safe_id(frame["id"])
+                if identity in frames or frame["shot_id"] not in shots:
+                    raise ValueError("关键帧 ID 重复或镜头引用无效")
+                for field in ("time_base", "source_time_base"):
+                    base = frame[field]
+                    if not isinstance(base, list) or len(base) != 2 or any(type(number) is not int or number <= 0 for number in base):
+                        raise ValueError("关键帧时间基无效")
+                if any(type(frame[field]) is not int for field in ("pts", "source_pts", "at_ms")):
+                    raise ValueError("关键帧时间戳无效")
+                timestamp = frame["pts"] * Fraction(*frame["time_base"])
+                source_time = frame["source_pts"] * Fraction(*frame["source_time_base"])
+                shot = shots[frame["shot_id"]]
+                if (timestamp != source_time - origin or round(timestamp * 1000) != frame["at_ms"]
+                        or not Fraction(start, 1000) <= timestamp < Fraction(end, 1000)
+                        or not shot["start_ms"] <= frame["at_ms"] < shot["end_ms"]
+                        or (previous_time is not None and timestamp <= previous_time)):
+                    raise ValueError("关键帧时间戳与镜头不一致")
+                if registry[identity].get("at_ms") != frame["at_ms"]:
+                    raise ValueError("关键帧计划与已保存证据帧不一致")
+                frames[identity] = frame
+                previous_time = timestamp
+            referenced, batch_ids = [], set()
+            last_end = start
+            for batch in plan["batches"]:
+                identity = safe_id(batch["id"])
+                a, b = batch["start_ms"], batch["end_ms"]
+                shot = shots.get(batch["shot_id"])
+                ids = batch["frame_ids"]
+                if (identity in batch_ids or type(a) is not int or type(b) is not int or not shot
+                        or not last_end <= a < b <= end
+                        or not shot["start_ms"] <= a < b <= shot["end_ms"]
+                        or not isinstance(ids, list) or not 1 <= len(ids) <= 8):
+                    raise ValueError("关键帧分析批次无效")
+                for frame_id in ids:
+                    frame = frames.get(frame_id)
+                    if frame is None or frame["shot_id"] != batch["shot_id"] or not a <= frame["at_ms"] < b:
+                        raise ValueError("关键帧批次引用了无效证据")
+                referenced.extend(ids)
+                batch_ids.add(identity)
+                last_end = b
+            if referenced != list(frames):
+                raise ValueError("关键帧批次遗漏、重复或打乱了证据帧")
+            return plan
+        except (KeyError, TypeError, ZeroDivisionError, OverflowError) as exc:
+            raise ValueError("关键帧计划格式无效") from exc
 
     def annotations(self, asset_id: str) -> list[dict]:
+        from .scenes import SceneStore
         annotations = sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")], key=lambda a: a["updated_at"])
-        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)}
+        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id) + SceneStore(self).list(asset_id)}
         for annotation in annotations:
             record = records.get(annotation["record_id"])
             annotation["needs_reassociation"] = record is None or bool(annotation.get("character_name") and annotation.get("base_run_id") != record.get("run_id"))
         return annotations
 
     def annotate(self, asset_id: str, payload: dict) -> dict:
-        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)}
+        from .scenes import SceneStore
+        self.get_asset(asset_id)
+        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id) + SceneStore(self).list(asset_id)}
         if payload["record_id"] not in records:
             historical = next((r for r in self.collections() if r["asset_id"] == asset_id and r["record_id"] == payload["record_id"]), None)
             if not historical or set(payload) - {"record_id", "favorite", "note"}:
@@ -506,17 +668,29 @@ class Library:
             annotation = {**previous, **payload, "schema_version": SCHEMA, "id": annotation_id,
                           "asset_id": asset_id, "updated_at": now(), "base_run_id": record.get("run_id")}
             atomic_json(path, annotation)
+            def semantic(value):
+                return (value.get("summary"), (value.get("entity_id"), value.get("character_name"), value.get("aliases"))
+                        if value.get("character_name") else None)
+            if semantic(previous) != semantic(annotation):
+                SceneStore(self).mark_dependents_stale(asset_id, record["start_ms"], "前序证据的人工解释已变化")
             return annotation
 
     def records(self, asset_id: str | None = None) -> list[dict]:
         from .characters import CharacterStore
+        from .scenes import SceneStore
         characters = CharacterStore(self)
         result = []
         for asset in [self.get_asset(asset_id)] if asset_id else self.list_assets():
             annotations = self.annotations(asset["id"])
             observations = characters.decorate_observations(asset["id"], self.observations(asset["id"]))
-            for record in observations + self.subtitles(asset["id"]):
+            scenes = characters.decorate_observations(asset["id"], SceneStore(self).list(asset["id"]))
+            # Original observations stay immutable and collectible, but are not
+            # duplicated as search hits where a new scene plan replaced them.
+            observations = [row for row in observations if not any(
+                scene["start_ms"] < row["end_ms"] and scene["end_ms"] > row["start_ms"] for scene in scenes)]
+            for record in observations + scenes + self.subtitles(asset["id"]):
                 is_visual = "summary" in record
+                is_scene = "chunk_id" in record
                 related = [a for a in annotations if a["record_id"] == record["id"]]
                 text = record.get("summary", record.get("text", ""))
                 favorite, note, user_confirmed = False, "", False
@@ -539,6 +713,9 @@ class Library:
                                 entity["character_name"] = annotation["character_name"]
                                 entity["aliases"] = annotation.get("aliases") or []
                 description = text
+                if is_scene:
+                    description += " " + " ".join(fact["text"] for field in ("visual_facts", "dialogue_facts", "inferences")
+                                                  for fact in record.get(field, []))
                 # An unreadable cue remains visible for repair but is not searchable content.
                 if not text.strip():
                     continue
@@ -552,19 +729,25 @@ class Library:
                     description += " " + " ".join(names)
                 frames = record.get("evidence_frame_ids", [])
                 result.append({"id": record["id"], "record_id": record["id"], "asset_id": asset["id"],
+                               **{key: asset.get(key) for key in ("project_id", "project_name", "anime_id", "anime_title",
+                                                                 "folder_id", "folder_ids", "tags")},
                                "work_id": asset["work_id"], "title": asset["title"], "series": asset.get("series", ""),
                                "season": asset.get("season"), "episode": asset.get("episode"), "version": asset["version"],
-                               "kind": "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
+                               "kind": "scene" if is_scene else "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
                                "end_ms": record["end_ms"], "text": description.strip(), "summary": text,
                                "subtitle_text": text if not is_visual else None, "language": record.get("language"),
                                "thumbnail": frames[0] if frames else None, "evidence_frame_ids": frames,
                                **{key: record[key] for key in ("source_stream_index", "source_codec", "source_language",
                                    "source_title", "offset_ms", "timing_clipped", "source_start_ms", "source_end_ms")
                                   if key in record},
-                               "source": record.get("source", "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
+                               "source": record.get("source", "scene" if is_scene else "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
                                "entities": entities, "events": record.get("events", []),
                                "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
-                               "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", [])})
+                               "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", []),
+                               **({key: record.get(key) for key in ("chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
+                                   "visual_facts", "dialogue_facts", "inferences", "representative_frame_ids",
+                                   "understanding_level", "needs_deep", "reason", "provenance", "dependencies",
+                                   "context_stale", "stale_reasons")} if is_scene else {})})
         return result
 
     def save_run(self, asset_id: str, run_id: str, data: dict):
@@ -591,19 +774,31 @@ class Library:
                     base = self.asset_dir(asset["id"]) / "analyses" / safe_id(run_id)
                     record = read_json(base / "observations" / f"{safe_id(rid)}.json")
                     if record is None:
+                        record = read_json(base / "scenes" / f"{safe_id(rid)}.deep.json")
+                    if record is None:
+                        record = read_json(base / "scenes" / f"{safe_id(rid)}.json")
+                    if record is None:
                         record = next((c for c in read_jsonl(base / "subtitles.jsonl") if c["id"] == rid), None)
                 if record is None:
                     continue
+                if "summary" in record:
+                    from .characters import CharacterStore
+                    record = CharacterStore(self).decorate_observations(asset["id"], [record])[0]
                 text = annotation.get("summary", record.get("summary", record.get("text", "")))
                 frames = record.get("evidence_frame_ids", [])
                 result.append({"id": rid, "record_id": rid, "asset_id": asset["id"], "work_id": asset["work_id"],
+                               **{key: asset.get(key) for key in ("project_id", "project_name", "folder_id", "folder_ids", "tags")},
                                "title": asset["title"], "series": asset.get("series"), "season": asset.get("season"),
                                "episode": asset.get("episode"), "version": asset["version"], "start_ms": record["start_ms"],
-                               "end_ms": record["end_ms"], "kind": "visual" if "summary" in record else "subtitle",
+                               "end_ms": record["end_ms"], "kind": "scene" if "chunk_id" in record else "visual" if "summary" in record else "subtitle",
                                "text": text, "summary": text, "note": annotation.get("note", ""), "favorite": True,
                                "source": record.get("source", "vision"), "review_status": "historical",
                                "is_historical": True, "run_id": run_id, "evidence_frame_ids": frames,
-                               "thumbnail": frames[0] if frames else None})
+                               "entities": record.get("entities", []), "events": record.get("events", []),
+                               "thumbnail": frames[0] if frames else None,
+                               **({key: record.get(key) for key in ("chunk_id", "visual_facts", "dialogue_facts", "inferences",
+                                   "subtitle_ids", "frame_ids", "understanding_level", "provenance")}
+                                  if "chunk_id" in record else {})})
         return result
 
     def backup(self, include_media: bool = False) -> dict:
@@ -611,14 +806,17 @@ class Library:
         target = self.root / "runtime" / "backups" / f"{backup_id}.zip"
         target.parent.mkdir(parents=True, exist_ok=True)
         with self.lock, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-            for top in ("library.json", "works", "assets", "collections"):
+            self.organization.migrate()
+            for top in ("library.json", "works", "assets", "collections", "organization"):
                 item = self.root / top
                 for path in [item] if item.is_file() else item.rglob("*"):
                     if path.is_file() and not path.is_symlink() and path.suffix != ".tmp" and "/proxy/" not in str(path):
                         archive.write(path, path.relative_to(self.root))
             if include_media:
-                for asset in self.list_assets():
-                    path = self.require_source(asset["id"])
+                for asset in self.list_assets(include_deleted=True):
+                    if asset["deleted"] and not asset["source_available"]:
+                        continue
+                    path = self.source_path(asset["id"]) if asset["deleted"] else self.require_source(asset["id"])
                     archive.write(path, f"media/{asset['id']}{path.suffix}", compress_type=zipfile.ZIP_STORED)
         return {"id": backup_id, "download_url": f"/api/backups/{backup_id}", "includes_media": include_media}
 
@@ -636,7 +834,7 @@ class Library:
                     relative = PurePosixPath(info.filename)
                     if relative.is_absolute() or ".." in relative.parts or "\\" in info.filename or not relative.parts:
                         raise ValueError("备份含非法路径")
-                    if relative.parts[0] not in {"library.json", "works", "assets", "collections", "media"}:
+                    if relative.parts[0] not in {"library.json", "works", "assets", "collections", "media", "organization"}:
                         raise ValueError("备份包含非资料文件")
                     if (info.external_attr >> 16) & 0o170000 == 0o120000:
                         raise ValueError("备份不允许符号链接")
@@ -648,19 +846,21 @@ class Library:
                 read_jsonl(file)
             # Validate the entire reference graph before committing any imported file.
             restored = Library(staging)
+            restored.organization.validate()
             for manifest in (staging / "assets").glob("*/manifest.json"):
                 if read_json(manifest).get("id") != manifest.parent.name:
                     raise ValueError("资产清单 ID 与目录不一致")
-            for asset in restored.list_assets():
+            for asset in restored.list_assets(include_deleted=True):
                 asset_id = safe_id(asset["id"])
                 if not (staging / "assets" / asset_id / "manifest.json").is_file():
                     raise ValueError("资产清单 ID 与目录不一致")
+                registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
+                restored.frame_paths(asset_id, list(registry), registry=registry)
                 for observation in restored.observations(asset_id):
                     checked = Observation.model_validate(observation)
                     if checked.asset_id != asset_id or checked.end_ms > asset["duration_ms"]:
                         raise ValueError("备份识别记录时间轴无效")
-                    for frame_id in checked.evidence_frame_ids:
-                        restored.frame_path(asset_id, frame_id)
+                    restored.frame_paths(asset_id, checked.evidence_frame_ids, registry=registry)
                 for cue in restored.subtitles(asset_id):
                     if not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"]:
                         raise ValueError("备份字幕时间轴无效")
@@ -680,32 +880,36 @@ class Library:
                     for cue in read_jsonl(old_path):
                         if not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"]:
                             raise ValueError("备份历史字幕时间轴无效")
-                registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
-                for frame_id in registry:
-                    restored.frame_path(asset_id, frame_id)
+                for path in restored.asset_dir(asset_id).glob("keyframe-plans/*.json"):
+                    restored.validate_keyframe_plan(asset_id, read_json(path), path.stem)
+                from .scenes import SceneStore
+                SceneStore(restored).validate_all(asset_id)
             from .characters import CharacterStore
             CharacterStore(restored).validate_all()
-            paths = [p for p in staging.rglob("*") if p.is_file() and p.name != "library.json"]
+            paths = [p for p in staging.rglob("*") if p.is_file() and p.name != "library.json"
+                     and p != restored.organization.path]
             from .media import fingerprint
             for path in (staging / "media").glob("*"):
-                asset = restored.get_asset(path.stem)
+                asset = restored.get_asset(path.stem, include_deleted=True)
                 if fingerprint(path) != asset["fingerprint"]:
                     raise ValueError("备份中的视频内容与资产指纹不一致")
             with self.lock:
+                merged_organization = self.organization.merge_catalog(restored.organization._read())
                 for path in paths:
-                    target = self.root / path.relative_to(staging)
-                    if target.exists() and not same_contents(target, path):
+                    target = confined_path(self.root, str(path.relative_to(staging)))
+                    if target.exists() and (not target.is_file() or not same_contents(target, path)):
                         raise ValueError(f"恢复冲突，未覆盖现有文件: {path.relative_to(staging)}")
-                for path in paths:
-                    target = self.root / path.relative_to(staging)
-                    if not target.exists():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        os.replace(path, target)
                 locations = read_json(self.root / "private" / "media-locations.json", {})
                 for path in (self.root / "media").glob("*"):
                     if path.stem.startswith("asset_"):
                         locations[path.stem] = source_snapshot(path)
-                atomic_json(self.root / "private" / "media-locations.json", locations)
+                for source in (staging / "media").glob("*"):
+                    target = self.root / "media" / source.name
+                    snapshot = source_snapshot(target if target.exists() else source)
+                    locations[source.stem] = {**snapshot, "path": str(target)}
+                self.organization.commit_restore(staging, paths, merged_organization, locations)
             return {"restored_files": len(paths), "message": "资料已恢复；元数据备份中的原视频可能需要重新定位"}
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            pending = read_json(self.organization.journal, {})
+            if pending.get("staging") != str(staging.relative_to(self.root)):
+                shutil.rmtree(staging, ignore_errors=True)

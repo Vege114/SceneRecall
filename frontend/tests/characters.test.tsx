@@ -34,6 +34,23 @@ function mockFetch(handler: (url: string, options?: RequestInit) => unknown | Pr
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
 describe('Cross-shot character dossiers', () => {
+  it('shows sourced multilingual names, distinguishes transliteration and searches English names', async () => {
+    const multilingual = { ...first, name_cn: '小夏', name_ja: '夏未央', name_en: 'Natsu Mio',
+      aliases: ['小夏', '夏未央', 'Natsu Mio', '夏同学'],
+      name_variants: [{ name: 'Natsu Mio', language: 'ja-Latn', kind: 'transliteration', source: 'kana_transliteration', source_url: 'https://bgm.tv/character/7' }] };
+    mockFetch(() => ({ ...library, profiles: [multilingual, second] }));
+    const { user } = setup();
+    const card = within(await screen.findByRole('article', { name: '小夏的角色档案' }));
+    expect(card.getByText('中文')).toBeTruthy();
+    expect(card.getByText('日文')).toBeTruthy();
+    expect(card.getByText('罗马字（按假名转写）')).toBeTruthy();
+    expect(card.getAllByText('Natsu Mio')).toHaveLength(1);
+    expect(card.getByText('又名 夏同学')).toBeTruthy();
+    await user.type(screen.getByRole('textbox', { name: '搜索角色档案' }), 'natsu');
+    expect(screen.queryByRole('article', { name: '绿围巾少女的角色档案' })).toBeNull();
+    expect(screen.getByRole('article', { name: '小夏的角色档案' })).toBeTruthy();
+  });
+
   it('shows evidence, searches aliases and opens appearances in the current or another episode', async () => {
     mockFetch(); const { user, onSeek } = setup();
     await screen.findByText('2 份角色档案');
@@ -174,7 +191,7 @@ describe('Cross-shot character dossiers', () => {
 
 describe('Reinterpret video with revised dossiers', () => {
   it('estimates every selected episode, invalidates stale budgets and submits the dossier revision', async () => {
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? estimate : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job-one' }, { id: 'job-two' }], revision: 7 } : library);
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-test', status: 'completed', frames: [], frame_count: 1 } : url.endsWith('/estimate') ? estimate : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job-one' }, { id: 'job-two' }], revision: 7 } : library);
     const { user, context: app } = setup();
     await user.click(await screen.findByRole('button', { name: '按新版档案重新识别' }));
     const dialog = within(screen.getByRole('dialog', { name: '按新版档案重新识别' }));
@@ -193,7 +210,7 @@ describe('Reinterpret video with revised dossiers', () => {
     await user.click(start);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const call = fetch.mock.calls.find((entry) => entry[0].endsWith('/reanalyze'))!;
-    expect(JSON.parse(call[1]!.body as string)).toEqual({ scope: 'series', max_requests: 50, max_cost: null, expected_revision: 7 });
+    expect(JSON.parse(call[1]!.body as string)).toEqual({ execution: DEFAULTS.execution, scope: 'series', max_requests: 50, max_cost: null, expected_revision: 7, keyframe_plan_ids: { [asset.id]: 'plan-test', [episodeTwo.id]: 'plan-test' } });
     expect(app.refresh).toHaveBeenCalledOnce();
   });
 
@@ -210,7 +227,7 @@ describe('Reinterpret video with revised dossiers', () => {
   });
 
   it('disables money budgets for Codex and hides the series option for a single video', async () => {
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? { ...estimate, cost_estimate: null } : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job' }], revision: 7 } : { ...library, assets: [asset] });
+    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-test', status: 'completed', frames: [], frame_count: 1 } : url.endsWith('/estimate') ? { ...estimate, cost_estimate: null } : url.endsWith('/reanalyze') ? { jobs: [{ id: 'job' }], revision: 7 } : { ...library, assets: [asset] });
     const app = context(); app.bootstrap.provider_profiles[0].provider_type = 'codex_cli'; app.bootstrap.settings.defaults = { ...DEFAULTS, max_cost: 10 };
     const { user } = setup(app);
     await user.click(await screen.findByRole('button', { name: '按新版档案重新识别' }));
@@ -220,6 +237,6 @@ describe('Reinterpret video with revised dossiers', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole('button', { name: '开始重新识别' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(fetch.mock.calls.filter((entry) => entry[1]?.method === 'POST').map((entry) => JSON.parse(entry[1]!.body as string).max_cost)).toEqual([null, null]);
+    expect(fetch.mock.calls.filter((entry) => entry[1]?.method === 'POST' && entry[0] !== '/api/keyframe-plans').map((entry) => JSON.parse(entry[1]!.body as string).max_cost)).toEqual([null, null]);
   });
 });
