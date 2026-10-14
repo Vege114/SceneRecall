@@ -69,12 +69,12 @@ class SceneStore:
         return sorted(result, key=lambda row: (row["start_ms"], row["end_ms"]))
 
     def list(self, asset_id: str, include_stale: bool = True) -> list[dict]:
-        self.library.get_asset(asset_id, include_deleted=True)
+        asset = self.library.get_asset(asset_id, include_deleted=True)
         rows = self._raw(asset_id)
         if not rows:
             return []
         annotations = self._annotations(asset_id)
-        cache = {(asset_id, "annotations"): annotations}
+        cache = {(asset_id, "annotations"): annotations, (asset_id, "asset_info"): asset}
         result = []
         for row in rows:
             row = self._project_semantics(asset_id, row, annotations)
@@ -115,8 +115,13 @@ class SceneStore:
                     if (source_asset, "annotations") not in cache:
                         cache[source_asset, "annotations"] = self._annotations(source_asset)
                     source = self._project_semantics(source_asset, source, cache[source_asset, "annotations"])
-                source_info = self.library.get_asset(source_asset)
-                target_info = self.library.get_asset(asset_id, include_deleted=True)
+                for info_asset_id in (source_asset, asset_id):
+                    if (info_asset_id, "asset_info") not in cache:
+                        cache[info_asset_id, "asset_info"] = self.library.get_asset(info_asset_id, include_deleted=True)
+                source_info = cache[source_asset, "asset_info"]
+                target_info = cache[asset_id, "asset_info"]
+                if source_info.get("deleted"):
+                    raise FileNotFoundError("前序视频已在回收站")
                 if (source is None or (dependency.get("revision_digest") and dependency["revision_digest"] != self.revision_digest(source))
                         or source_info.get("anime_id") != target_info.get("anime_id")
                         or self._stale_reasons(source_asset, source, cache, visiting)):

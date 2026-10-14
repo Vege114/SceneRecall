@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-15",
+  "status": "passed",
+  "fixture": "Disposable copy of current user JSON evidence",
+  "catalog_bytes": 6288318,
+  "copied_evidence_files": 2290,
+  "active_assets": 1,
+  "records": 3333,
+  "favorites": 0,
+  "record_entities": 766,
+  "measurements": {
+    "list_assets": {
+      "seconds": 0.0192,
+      "catalog_json_reads": 1,
+      "total_json_text_reads": 31
+    },
+    "records": {
+      "seconds": 0.562,
+      "catalog_json_reads": 6,
+      "total_json_text_reads": 914
+    },
+    "collections": {
+      "seconds": 0.5989,
+      "catalog_json_reads": 7,
+      "total_json_text_reads": 945
+    },
+    "bootstrap": {
+      "seconds": 1.4179,
+      "catalog_json_reads": 14,
+      "total_json_text_reads": 1890
+    }
+  },
+  "bootstrap_statistics_match_full_projections": true,
+  "source_manifests_sha256_unchanged": true,
+  "model_calls": 0,
+  "media_copied": false,
+  "source_media_opened": false,
+  "private_settings_copied": false,
+  "isolation": "Only temporary-library writes; temporary library removed after validation"
+}

@@ -433,13 +433,15 @@ class CharacterStore:
                 atomic_json(self._path(scope), registry)
             return registry
 
-    def _assets(self, scope: str) -> list[dict]:
-        return sorted([asset for asset in self.library.list_assets() if scope_id(asset) == scope],
+    def _assets(self, scope: str, *, catalog=None) -> list[dict]:
+        return sorted([asset for asset in self.library.list_assets(_catalog=catalog) if scope_id(asset) == scope],
                       key=lambda a: (a.get("season") or 0, a.get("episode") or 0, a["created_at"], a["id"]))
 
     def catalog(self, asset_id: str) -> dict:
         with self.library.lock:
-            asset = self.library.get_asset(asset_id)
+            organization = self.library.organization._read()
+            asset = self.library.get_asset(asset_id, _catalog=organization)
+            membership_revision = asset.get("membership_revision", 0)
             scope = scope_id(asset)
             registry = self._read(scope)
             archive = asset.get("anime_profile")
@@ -451,7 +453,7 @@ class CharacterStore:
                 if upgraded != registry:
                     atomic_json(self._path(scope), upgraded)
                     registry = upgraded
-            assets = self._assets(scope)
+            assets = self._assets(scope, catalog=organization)
             policy = self.cast_policy(registry, asset.get("anime_profile"))
             profiles = {identity: copy.deepcopy(profile) for identity, profile in registry["profiles"].items()
                         if self.profile_allowed(profile, policy)}
@@ -476,7 +478,7 @@ class CharacterStore:
                 for record in sorted(observations + scenes, key=lambda row: (row["start_ms"], row["end_ms"], row["id"])):
                     for entity in record.get("entities", []):
                         resolved = self.library.organization.resolve_reference(
-                            asset["id"], record, entity.get("character_id"), registry)
+                            asset["id"], record, entity.get("character_id"), registry, catalog=organization)
                         if resolved not in profiles:
                             continue
                         frames = entity.get("evidence_frame_ids") or record.get("evidence_frame_ids", [])
@@ -497,7 +499,7 @@ class CharacterStore:
             return {"scope_id": scope, "revision": registry["revision"],
                     "profiles": list(profiles.values()), "assets": assets,
                     "cast_policy": policy,
-                    "membership_revision": self.library.get_asset(asset_id).get("membership_revision", 0)}
+                    "membership_revision": membership_revision}
 
     def context(self, asset_id: str) -> dict:
         with self.library.lock:
@@ -785,16 +787,18 @@ class CharacterStore:
             return next(profile for profile in self.catalog(asset_id)["profiles"] if profile["id"] == target)
 
     def decorate_observations(self, asset_id: str, records: list[dict]) -> list[dict]:
-        asset = self.library.get_asset(asset_id)
-        scope = scope_id(asset)
         with self.library.lock:
+            organization = self.library.organization._read()
+            asset = self.library.get_asset(asset_id, _catalog=organization)
+            scope = scope_id(asset)
             registry = self._read(scope)
             policy = self.cast_policy(registry, asset.get("anime_profile"))
             result = copy.deepcopy(records)
             for record in result:
                 for entity in record.get("entities", []):
                     original = entity.get("character_id")
-                    resolved = self.library.organization.resolve_reference(asset_id, record, original, registry)
+                    resolved = self.library.organization.resolve_reference(asset_id, record, original, registry,
+                                                                           catalog=organization)
                     if resolved and not self.profile_allowed(registry["profiles"][resolved], policy):
                         resolved = None
                     if resolved:

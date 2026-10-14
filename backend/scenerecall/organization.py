@@ -285,9 +285,9 @@ class OrganizationStore:
         member.update(metadata, anime_profile=copy.deepcopy(profile or {"mode": "scratch"}),
                       anime_profile_inherited=profile is not None and not asset.get("anime_profile"))
 
-    def project_asset(self, asset, *, include_deleted=False):
+    def project_asset(self, asset, *, include_deleted=False, catalog=None):
         with self.library.lock:
-            catalog = self._read()
+            catalog = self._read() if catalog is None else catalog
             if asset["id"] not in catalog["assets"]:
                 self._add_asset(catalog, asset)
                 self._commit(catalog)

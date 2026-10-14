@@ -164,7 +164,7 @@ class Library:
     def asset_dir(self, asset_id: str) -> Path:
         return self.root / "assets" / safe_id(asset_id)
 
-    def get_asset(self, asset_id: str, *, include_deleted=False) -> dict:
+    def get_asset(self, asset_id: str, *, include_deleted=False, _catalog=None) -> dict:
         result = read_json(self.asset_dir(asset_id) / "manifest.json")
         if result is None:
             raise FileNotFoundError("未找到视频资产")
@@ -184,7 +184,7 @@ class Library:
                           subtitle_track=container["track"], subtitle_offset_ms=container["offset_ms"],
                           subtitle_import_warnings=container.get("warnings", []))
             result.pop("subtitle_fallback_reason", None)
-        return self.organization.project_asset(result, include_deleted=include_deleted)
+        return self.organization.project_asset(result, include_deleted=include_deleted, catalog=_catalog)
 
     def source_path(self, asset_id: str) -> Path | None:
         item = read_json(self.root / "private" / "media-locations.json", {}).get(safe_id(asset_id))
@@ -195,10 +195,15 @@ class Library:
             raise ValueError("原视频离线或文件已变化，请先重新定位并校验原片")
         return self.source_path(asset_id)
 
-    def list_assets(self, *, include_deleted=False) -> list[dict]:
-        assets = [self.get_asset(p.parent.name, include_deleted=True) for p in (self.root / "assets").glob("*/manifest.json")]
-        return sorted([asset for asset in assets if include_deleted or not asset["deleted"]],
-                      key=lambda a: a["created_at"], reverse=True)
+    def list_assets(self, *, include_deleted=False, _catalog=None) -> list[dict]:
+        # One request owns this snapshot; subsequent requests still read disk,
+        # and every mutation/recovery retains the catalog's existing lock.
+        with self.lock:
+            catalog = self.organization._read() if _catalog is None else _catalog
+            assets = [self.get_asset(p.parent.name, include_deleted=True, _catalog=catalog)
+                      for p in (self.root / "assets").glob("*/manifest.json")]
+            return sorted([asset for asset in assets if include_deleted or not asset["deleted"]],
+                          key=lambda a: a["created_at"], reverse=True)
 
     def register(self, payload: AssetInput, *, import_item_key: str | None = None) -> dict:
         from .media import fingerprint, probe, subtitle_tracks
@@ -642,6 +647,8 @@ class Library:
     def annotations(self, asset_id: str) -> list[dict]:
         from .scenes import SceneStore
         annotations = sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")], key=lambda a: a["updated_at"])
+        if not annotations:
+            return []
         records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id) + SceneStore(self).list(asset_id)}
         for annotation in annotations:
             record = records.get(annotation["record_id"])

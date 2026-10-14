@@ -167,7 +167,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return response
 
     @app.get("/api/bootstrap")
-    async def bootstrap():
+    def bootstrap():
+        # File-backed projections run in FastAPI's worker pool, so a large
+        # library cannot monopolize the event loop or stall /api/health.
         assets = library.list_assets()
         return {"library_path": str(library.root), "settings": settings(), "provider_profiles": providers.list(),
                 "stats": {"assets": len(assets), "records": len(library.records()),
@@ -176,7 +178,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 "version": __version__}
 
     @app.get("/api/settings")
-    async def get_settings():
+    def get_settings():
         return settings()
 
     @app.put("/api/settings")
@@ -202,7 +204,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return save_concurrency(library, providers, payload, settings)
 
     @app.get("/api/profiles")
-    async def profiles():
+    def profiles():
         return providers.list()
 
     @app.get("/api/codex/status")
@@ -242,7 +244,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     register_bangumi_routes(app, library, search)
 
     @app.get("/api/assets")
-    async def assets():
+    def assets():
         return [asset_view(a) for a in library.list_assets()]
 
     @app.post("/api/media/subtitle-tracks")
@@ -273,7 +275,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.get("/api/assets/{asset_id}/subtitle-tracks")
     async def asset_subtitle_tracks(asset_id: str):
-        source = library.require_source(asset_id)
+        source = await asyncio.to_thread(library.require_source, asset_id)
         return await asyncio.to_thread(subtitle_track_info, source)
 
     @app.post("/api/assets/{asset_id}/subtitles/extract")
@@ -284,7 +286,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return asset_view(asset)
 
     @app.get("/api/assets/{asset_id}")
-    async def asset_detail(asset_id: str):
+    def asset_detail(asset_id: str):
         asset = asset_view(library.get_asset(asset_id))
         projection = {r["id"]: r for r in library.records(asset_id)}
         observations = [{**r, "model_summary": r["summary"],
@@ -327,11 +329,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             search.upsert(library.records(related["id"]))
 
     @app.get("/api/assets/{asset_id}/characters")
-    async def character_catalog(asset_id: str):
+    def character_catalog(asset_id: str):
         return characters.catalog(asset_id)
 
     @app.get("/api/assets/{asset_id}/characters/{character_id}/portrait")
-    async def character_portrait(asset_id: str, character_id: str):
+    def character_portrait(asset_id: str, character_id: str):
         from PIL import Image, ImageOps
 
         with library.lock:
@@ -405,7 +407,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return {"jobs": jobs, "revision": catalog["revision"], "scope_id": catalog["scope_id"]}
 
     @app.get("/api/assets/{asset_id}/media")
-    async def media(asset_id: str):
+    def media(asset_id: str):
         library.get_asset(asset_id)
         proxy = library.asset_dir(asset_id) / "proxy" / "playback.mp4"
         path = proxy if proxy.exists() else library.require_source(asset_id)
@@ -414,7 +416,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return FileResponse(path, media_type=mimetypes.guess_type(path.name)[0] or "video/mp4")
 
     @app.get("/api/assets/{asset_id}/frames/{frame_id}")
-    async def frame(asset_id: str, frame_id: str):
+    def frame(asset_id: str, frame_id: str):
         library.get_asset(asset_id)
         return FileResponse(library.frame_path(asset_id, frame_id), media_type="image/jpeg")
 
@@ -434,11 +436,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             return public_job(queue.add("analysis", config, asset["id"]))
 
     @app.get("/api/jobs")
-    async def jobs():
+    def jobs():
         return [public_job(j) for j in queue.list()]
 
     @app.get("/api/jobs/{job_id}")
-    async def job_get(job_id: str):
+    def job_get(job_id: str):
         return public_job(queue.get(job_id))
 
     @app.post("/api/jobs/{job_id}/{action}")
@@ -479,7 +481,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return {**result, "results": results}
 
     @app.get("/api/index/status")
-    async def index_status():
+    def index_status():
         return search.status()
 
     @app.post("/api/index/rebuild")
@@ -497,11 +499,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return value
 
     @app.get("/api/collections")
-    async def collections():
+    def collections():
         return [enrich(r) for r in library.collections()]
 
     @app.get("/api/export/citations")
-    async def citations(format: str = "markdown"):
+    def citations(format: str = "markdown"):
         records = library.collections()
         if format == "json":
             return JSONResponse(records, headers={"Content-Disposition": 'attachment; filename="scenerecall-citations.json"'})
@@ -526,7 +528,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return await asyncio.to_thread(library.backup, bool(payload.get("include_media")))
 
     @app.get("/api/backups/{backup_id}")
-    async def backup_download(backup_id: str):
+    def backup_download(backup_id: str):
         path = library.root / "runtime" / "backups" / f"{safe_id(backup_id)}.zip"
         if not path.is_file():
             raise FileNotFoundError("备份不存在")

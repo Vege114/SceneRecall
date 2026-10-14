@@ -66,14 +66,14 @@ def register_organization_routes(app, library, queue, search):
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
     async def refresh():
-        await search.rebuild(library.records())
+        await search.rebuild(await asyncio.to_thread(library.records))
 
     @app.get("/api/projects")
-    async def projects():
+    def projects():
         return organization.projects()
 
     @app.get("/api/anime")
-    async def anime(project_id: str | None = None):
+    def anime(project_id: str | None = None):
         if project_id:
             organization.get_project(project_id)
         return organization.anime(project_id)
@@ -104,7 +104,7 @@ def register_organization_routes(app, library, queue, search):
         return {"deleted_id": project_id, **result}
 
     @app.get("/api/folders")
-    async def folders():
+    def folders():
         return organization.folders()
 
     @app.post("/api/folders")
@@ -144,7 +144,7 @@ def register_organization_routes(app, library, queue, search):
         return result
 
     @app.get("/api/trash")
-    async def trash():
+    def trash():
         return deletions.list()
 
     @app.post("/api/trash/{trash_id}/restore")
