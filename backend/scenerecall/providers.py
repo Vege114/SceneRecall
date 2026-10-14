@@ -644,6 +644,8 @@ class ProviderManager:
         if context is None:
             return ""
         value = {key: context.get(key) for key in ("scope_id", "revision", "profiles")}
+        if context.get("work_summary"):
+            value["work_summary"] = context["work_summary"]
         text = json.dumps(value, ensure_ascii=False, allow_nan=False)
         if len(text.encode("utf-8")) > MAX_CHARACTER_CONTEXT_BYTES:
             raise ProviderError("角色档案上下文超过单次识别上限，请精简档案描述或合并重复档案后重新分析")
@@ -688,8 +690,10 @@ class ProviderManager:
             "cues say), and tentative inferences (cite supporting core frames and/or cues). Cited cues must "
             "overlap their chunk in time: boundaries are the next chunk's first frame, with the batch's supplied "
             "start_ms/end_ms as outer bounds. Dialogue and memory "
-            "cannot prove a visible action, identify a speaker, or establish a relationship. Respect human character "
-            "corrections; do not invent identities. The summary should preserve these source distinctions. "
+            "cannot prove a visible action, identify a speaker, or establish a relationship. "
+            "External Bangumi biographies and work summaries are prior reference data, never evidence of "
+            "events in current frames. Their names may suggest candidates but cannot confirm identities. "
+            "Respect human character corrections; do not invent identities. The summary should preserve these source distinctions. "
             "Choose 1–8 representative_frame_ids, including first and last and important changes. Set needs_deep "
             "with a reason for complex interactions/actions, unclear identity, tiny/obscured detail, contradictory "
             "evidence, or more important changes than representative frames can retain. Simple static or repetitive "
@@ -800,7 +804,10 @@ class ProviderManager:
             "Write descriptions in Chinese; never identify real-world actors or invent character names. "
             "Entity IDs are local to this observation; character_id is a persistent dossier ID. name must be null. "
             "FIRST compare each character against ALL supplied existing dossiers, honoring user-edited names, "
-            "aliases, descriptions and notes. Match by stable visible appearance across shots, pose, lighting and "
+            "aliases, descriptions and notes. "
+            "External Bangumi biographies and work summaries are prior reference data; never treat them as "
+            "current observations or use biography alone to confirm identity, actions or relationships. "
+            "Match by stable visible appearance across shots, pose, lighting and "
             "costume changes; a costume or background similarity alone is insufficient. Human corrections in "
             "edited_fields take precedence over any contradictory old machine appearance/observed_traits; "
             "honor explicitly corrected descriptions and notes, but never invent visible evidence to agree with them. "

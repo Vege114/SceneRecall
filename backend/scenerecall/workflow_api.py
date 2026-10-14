@@ -68,7 +68,11 @@ def register_workflow_routes(app, library, queue, settings, public_job):
 
     @app.post("/api/imports")
     async def create_import(payload: ImportInput):
-        return public_job(queue.add_import(payload))
+        existing = queue.existing_import(payload)
+        if existing:
+            return public_job(existing)
+        dossiers = await app.state.bangumi.prepare_import(payload)
+        return public_job(queue.add_import(payload, anime_dossiers=dossiers))
 
     @app.get("/api/imports/{job_id}")
     async def get_import(job_id: str):
@@ -76,12 +80,30 @@ def register_workflow_routes(app, library, queue, settings, public_job):
         if job["type"] != "import":
             raise ValueError("这不是导入任务")
         projects = {item.get("project_id") for item in job["config"]["items"]}
-        return {"job": public_job(job), "items": job["config"]["items"],
+        return {"job": public_job(job), "items": [
+                    {key: value for key, value in item.items() if key != "anime_dossier"}
+                    for item in job["config"]["items"]],
                 "project_id": next(iter(projects)) if len(projects) == 1 else None}
 
     @app.post("/api/imports/{job_id}/retry")
     async def retry_import(job_id: str, payload: ImportRetryInput):
-        return public_job(queue.retry_import(job_id, payload))
+        original = queue.get(job_id)
+        if original["type"] != "import" or original["status"] not in {"failed", "partial", "cancelled", "paused"}:
+            raise ValueError("只能修正已停止导入任务中的失败项")
+        configs = {item["item_id"]: item for item in original["config"]["items"]}
+        new_selections = []
+        for item in payload.items:
+            old = configs.get(item.item_id)
+            if old is not None and not old.get("anime_profile") and item.anime_profile:
+                values = item.model_dump(exclude_unset=True)
+                if "project_id" not in values and "project_id" in old:
+                    values["project_id"] = old["project_id"]
+                new_selections.append(values)
+        dossiers = {}
+        if new_selections:
+            migration = ImportInput(request_id=job_id, items=new_selections)
+            dossiers = await app.state.bangumi.prepare_import(migration)
+        return public_job(queue.retry_import(job_id, payload, anime_dossiers=dossiers))
 
     @app.post("/api/keyframe-plans")
     async def create_plan(payload: KeyframePlanInput):

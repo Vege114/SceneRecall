@@ -188,6 +188,7 @@ class OrganizationStore:
                 "project_name": project["name"] if project else None,
                 "series": project["name"] if project else asset.get("series", ""),
                 "folder_id": folder_id, "folder_ids": ancestors, "tags": project["tags"] if project else [],
+                "anime_profile": project.get("anime_profile") if project else membership.get("anime_profile"),
                 "deleted": bool(membership.get("trash_id")), "trash_id": membership.get("trash_id")}
 
     def projects(self):
@@ -286,7 +287,8 @@ class OrganizationStore:
         return result
 
     def assign(self, asset_ids, project_id, queue=None, *, delete_project_id=None, _defer=False):
-        from .characters import CharacterStore
+        from .characters import CharacterStore, external_sources
+        from .anime_profiles import merge_dossier, profile_key
         with self.library.lock:
             self.migrate()
             catalog = self._read()
@@ -298,6 +300,26 @@ class OrganizationStore:
             if any(asset_id not in catalog["assets"] or catalog["assets"][asset_id].get("trash_id") for asset_id in ids):
                 raise FileNotFoundError("视频不存在")
             ids = [asset_id for asset_id in ids if catalog["assets"][asset_id]["project_id"] != project_id]
+            # Validate/inherit the archive before copying any cast or publishing
+            # membership. All episodes in a project share one show identity.
+            source_archives = {}
+            for asset_id in ids:
+                member = catalog["assets"][asset_id]
+                source_project = catalog["projects"].get(member["project_id"])
+                profile = source_project.get("anime_profile") if source_project else member.get("anime_profile")
+                source_archives[asset_id] = copy.deepcopy(profile)
+                if profile and project_id:
+                    project = catalog["projects"][project_id]
+                    if project["kind"] != "animation":
+                        raise OrganizationConflict("带有动画档案的视频须移入动画项目，或移至未归类")
+                    previous = project.get("anime_profile")
+                    if (previous and previous["mode"] == profile["mode"] == "bangumi"
+                            and profile_key(previous) != profile_key(profile)):
+                        raise OrganizationConflict("源视频与目标项目使用不同 Bangumi 条目，请分别归入对应作品项目")
+                    if not previous or (previous["mode"] == "scratch" and profile["mode"] == "bangumi"):
+                        project["anime_profile"] = copy.deepcopy(profile)
+                    elif previous["mode"] == profile["mode"] == "bangumi":
+                        previous["dossier"] = merge_dossier(previous["dossier"], profile["dossier"])
             destination = catalog["projects"][project_id]["character_scope_id"] if project_id else None
             scopes = {catalog["assets"][asset_id]["character_scope_id"] for asset_id in ids}
             if destination:
@@ -340,9 +362,18 @@ class OrganizationStore:
                                 profile = copy.deepcopy(old_registries[source_scope]["profiles"][source_id])
                                 lineage = self._identity_lineage(store, source_scope, source_id, profile)
                                 known = False
+                                for external in external_sources(profile):
+                                    source_key = str(external["character_id"])
+                                    mapping = target.get("external_bindings", {}).get("bangumi", {})
+                                    if source_key in mapping:
+                                        target_id = store._resolve(target, mapping[source_key], strict=True)
+                                        known = True
+                                        break
                                 # Returning a copied role to its original project
                                 # must reuse that project's human decisions.
                                 for origin in lineage:
+                                    if known:
+                                        break
                                     scope, identity = origin["scope_id"], origin["character_id"]
                                     if scope == target_scope:
                                         target_id = store._resolve(target, identity, strict=True)
@@ -360,12 +391,48 @@ class OrganizationStore:
                                     profile.update(id=target_id, representative=None, identity_origins=lineage,
                                                    imported_from={"scope_id": source_scope, "character_id": source_id})
                                     target["profiles"][target_id] = profile
+                                    store._remember_external_identity(target, profile)
                                 imported[source_id] = target_id
                         bindings.setdefault(original_scope, {})[original_id] = target_id
+                # Initial external roles have no observations yet. Carry their
+                # edited profiles and identity decisions as well as the dossier.
+                source_registry = old_registries[source_scope]
+                for source_id, source_profile in source_registry["profiles"].items():
+                    if not external_sources(source_profile):
+                        continue
+                    imported = imports.setdefault(source_scope, {})
+                    if source_id in imported:
+                        continue
+                    target_id, known = None, False
+                    for external in external_sources(source_profile):
+                        mapping = target.get("external_bindings", {}).get("bangumi", {})
+                        identity = str(external["character_id"])
+                        if identity in mapping:
+                            target_id = store._resolve(target, mapping[identity], strict=True)
+                            known = True
+                            break
+                    if not known:
+                        target_id = "character_" + digest([target_scope, source_scope, source_id])
+                        profile = copy.deepcopy(source_profile)
+                        lineage = self._identity_lineage(store, source_scope, source_id, profile)
+                        profile.update(id=target_id, representative=None, identity_origins=lineage,
+                                       imported_from={"scope_id": source_scope, "character_id": source_id})
+                        target["profiles"][target_id] = profile
+                        store._remember_external_identity(target, profile)
+                    imported[source_id] = target_id
+                for identity, source_id in source_registry.get("external_bindings", {}).get("bangumi", {}).items():
+                    if store._resolve(source_registry, source_id, strict=True) is None:
+                        target.setdefault("external_bindings", {}).setdefault("bangumi", {}).setdefault(identity, None)
                 catalog["assets"][asset_id] = {**old, "project_id": project_id,
                     "character_scope_id": target_scope, "membership_revision": old["membership_revision"] + 1,
                     "bindings": bindings,
                     "previous_scopes": list(dict.fromkeys([*old.get("previous_scopes", []), source_scope]))}
+                if not project_id and source_archives[asset_id]:
+                    catalog["assets"][asset_id]["anime_profile"] = source_archives[asset_id]
+                archive = (catalog["projects"][project_id].get("anime_profile") if project_id
+                           else catalog["assets"][asset_id].get("anime_profile"))
+                if archive and archive["mode"] == "bangumi":
+                    registries[target_scope] = store.seed_registry(target, archive["dossier"])
             if delete_project_id is not None:
                 if delete_project_id not in catalog["projects"]:
                     raise FileNotFoundError("项目不存在")
@@ -406,6 +473,8 @@ class OrganizationStore:
                 visited.add(parent)
                 parent = catalog["folders"][parent].get("parent_id")
         for project_id, project in catalog["projects"].items():
+            from .anime_profiles import validate_profile
+            validate_profile(project.get("anime_profile"))
             safe_id(project_id)
             if project.get("id") != project_id or project.get("kind") not in {"movie", "animation", "series"}:
                 raise ValueError("项目 ID 或类型无效")
@@ -415,6 +484,8 @@ class OrganizationStore:
             if project.get("folder_id") is not None and project["folder_id"] not in catalog["folders"]:
                 raise ValueError("项目文件夹不存在")
         for asset_id, membership in catalog["assets"].items():
+            from .anime_profiles import validate_profile
+            validate_profile(membership.get("anime_profile"))
             safe_id(asset_id)
             if check_assets and not (self.library.asset_dir(asset_id) / "manifest.json").is_file():
                 raise ValueError("项目引用的视频不存在")

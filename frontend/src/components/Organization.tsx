@@ -5,6 +5,7 @@ import { useApp } from '../context';
 import type { AssetKind, Folder, Project } from '../types';
 import { Alert, Field, Modal, Spinner } from './ui';
 import DeleteModal from './DeleteModal';
+import { AnimeArchivePreview } from './AnimeArchive';
 
 export function folderLabel(id: string, folders: Folder[]): string {
   const names: string[] = []; const seen = new Set<string>(); let current: string | null = id;
@@ -25,6 +26,7 @@ export default function Organization({ projectId, folderId, onProject, onFolder 
     <div className="section-row"><div><h2>剧集与项目</h2><p className="helper">一部动画一个项目；用文件夹和标签整理多部作品。</p></div><div className="button-row"><button type="button" className="button secondary small" onClick={() => setEditor({ type: 'folder' })}><FolderPlus size={15} />新建文件夹</button><button type="button" className="button secondary small" onClick={() => setEditor({ type: 'project' })}><Plus size={15} />新建项目</button></div></div>
     <div className="organization-controls"><Field label="文件夹"><select value={folderId} onChange={(event) => { onFolder(event.target.value); onProject('all'); }}><option value="">全部文件夹</option>{folders.map((entry) => <option key={entry.id} value={entry.id}>{folderLabel(entry.id, folders)}</option>)}</select></Field><Field label="项目"><select value={projectId} onChange={(event) => onProject(event.target.value)}><option value="all">全部项目</option><option value="unassigned">未归类视频</option>{projects.filter((entry) => !folderId || inFolder(entry.folder_id, folderId, folders)).map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.asset_count} 个视频</option>)}</select></Field></div>
     {(selected || folder) && <div className="section-row"><div className="project-tags"><strong>{selected?.name || (folder && folderLabel(folder.id, folders))}</strong>{selected?.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div><div className="button-row">{selected && <><button className="text-button" onClick={() => setEditor({ type: 'project', entity: selected })}><Pencil size={14} />编辑项目与标签</button><button className="text-button" onClick={() => { setDeleting({ type: 'project', id: selected.id, name: selected.name }); }}><Trash2 size={14} />删除项目</button></>}{folder && <><button className="text-button" onClick={() => setEditor({ type: 'folder', entity: folder })}>编辑文件夹</button><button className="text-button" onClick={() => { setDeleting({ type: 'folder', id: folder.id, name: folder.name }); }}>删除文件夹</button></>}</div></div>}
+    {selected?.anime_profile && <div className="project-anime-archive"><AnimeArchivePreview profile={selected.anime_profile} /></div>}
     {editor && <OrganizationEditor type={editor.type} entity={editor.entity} folderId={folderId} onClose={() => setEditor(null)} onSaved={(id) => { if (editor.type === 'project') onProject(id); else onFolder(id); setEditor(null); }} />}
     {deleting && <DeleteModal target={{ kind: deleting.type, id: deleting.id, name: deleting.name }} onClose={() => setDeleting(null)} onDeleted={() => { if (deleting.type === 'project') onProject('all'); else { onFolder(''); onProject('all'); } setDeleting(null); }} />}
   </section>;

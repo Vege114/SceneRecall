@@ -5,6 +5,7 @@ import zipfile
 import pytest
 
 from scenerecall.characters import CharacterStore
+from scenerecall.anime_profiles import AnimeProfileStore
 from scenerecall.library import Library, atomic_json, read_json
 from scenerecall.organization import OrganizationConflict
 
@@ -366,3 +367,157 @@ def test_keyframe_plan_preserves_precise_origin_for_legacy_rounded_manifest(libr
     atomic_json(manifest_path, manifest)
     with pytest.raises(ValueError, match="精确起始时间"):
         library.validate_keyframe_plan("asset_one", plan)
+
+
+def bangumi_archive(subject_id=100):
+    return {"source": "bangumi", "fetched_at": "2026-10-14T00:00:00Z",
+            "subject": {"id": subject_id, "name": f"Synthetic anime {subject_id}", "name_cn": "测试动画",
+                        "url": f"https://bgm.tv/subject/{subject_id}", "summary": "作品的先验资料"},
+            "characters": [{"id": 200 + index, "name": f"Role {index}", "name_cn": f"条目角色 {index}",
+                            "aliases": [f"原作别名 {index}"], "description": f"角色 {index} 的条目资料",
+                            "url": f"https://bgm.tv/character/{200 + index}", "image_url": None}
+                           for index in range(2)]}
+
+
+def test_standalone_bangumi_move_inherits_archive_and_zero_appearance_cast(library):
+    asset = seed(library, "asset_standalone", series="")
+    assert asset["project_id"] is None
+    archive = bangumi_archive()
+    profiles = AnimeProfileStore(library)
+    profiles.apply_asset(asset["id"], {"mode": "bangumi", "subject_id": 100}, archive)
+    store = CharacterStore(library)
+    unseen_role = store.catalog(asset["id"])["profiles"][0]
+    store.update(asset["id"], unseen_role["id"], {"name": "出场前的人工姓名", "notes": "未识别前的人工作品设定"})
+    original = store.catalog(asset["id"])
+    destination = library.organization.save_project({"name": "新动画项目", "kind": "animation"})
+    library.organization.assign([asset["id"]], destination["id"])
+    assert library.get_asset(asset["id"])["anime_profile"] == {"mode": "bangumi", "dossier": archive}
+    assert library.organization.get_project(destination["id"])["anime_profile"]["dossier"] == archive
+    moved = store.catalog(asset["id"])
+    assert {profile["name"] for profile in moved["profiles"]} == {profile["name"] for profile in original["profiles"]}
+    assert len(moved["profiles"]) == 2 and all(profile["appearance_count"] == 0 for profile in moved["profiles"])
+    corrected = next(profile for profile in moved["profiles"] if profile["name"] == "出场前的人工姓名")
+    assert corrected["notes"] == "未识别前的人工作品设定" and corrected["user_edited"]
+    assert all(profile["representative"] is None for profile in moved["profiles"])
+    assert store.context(asset["id"])["work_summary"]["id"] == 100
+    store.validate_all()
+
+
+def test_same_bangumi_identity_move_reuses_destination_decisions_without_duplicate_cast(library):
+    source_asset = seed(library, "asset_standalone", series="")
+    target_asset = seed(library, "asset_target", series="目标动画")
+    profiles = AnimeProfileStore(library)
+    archive = bangumi_archive()
+    selection = {"mode": "bangumi", "subject_id": 100}
+    profiles.apply_asset(source_asset["id"], selection, archive)
+    profiles.apply_project(target_asset["project_id"], selection, archive)
+    store = CharacterStore(library)
+    source_role = next(profile for profile in store.catalog(source_asset["id"])["profiles"]
+                       if profile["external_source"]["character_id"] == 200)
+    target_role = next(profile for profile in store.catalog(target_asset["id"])["profiles"]
+                       if profile["external_source"]["character_id"] == 200)
+    assert source_role["id"] != target_role["id"]
+    appearance(library, store, source_asset["id"], character_id=source_role["id"])
+    store.update(source_asset["id"], source_role["id"], {"name": "来源人工姓名", "notes": "来源笔记"})
+    store.update(target_asset["id"], target_role["id"], {"name": "目标人工姓名", "notes": "目标笔记",
+                                                         "description": "目标人工描述", "appearance": ["目标人工外观"]})
+    originals = {path: path.read_bytes() for path in library.asset_dir(source_asset["id"]).glob("analyses/*/observations/*.json")}
+    library.organization.assign([source_asset["id"]], target_asset["project_id"])
+    moved = store.catalog(source_asset["id"])
+    assert len(moved["profiles"]) == 2
+    current = next(profile for profile in moved["profiles"] if profile["id"] == target_role["id"])
+    assert current["name"] == "目标人工姓名" and current["notes"] == "目标笔记"
+    assert current["description"] == "目标人工描述" and current["appearance"] == ["目标人工外观"]
+    assert current["appearance_count"] == 1
+    assert store._read(source_asset["character_scope_id"])["profiles"][source_role["id"]]["name"] == "来源人工姓名"
+    projected = store.decorate_observations(source_asset["id"], library.observations(source_asset["id"]))
+    assert projected[0]["entities"][0]["character_id"] == target_role["id"]
+    assert all(path.read_bytes() == data for path, data in originals.items())
+    store.validate_all()
+
+
+def test_bangumi_move_to_different_subject_rejects_before_any_catalog_or_cast_write(library):
+    source_asset = seed(library, "asset_standalone", series="")
+    destination = library.organization.save_project({"name": "另一个条目", "kind": "animation"})
+    profiles = AnimeProfileStore(library)
+    profiles.apply_asset(source_asset["id"], {"mode": "bangumi", "subject_id": 100}, bangumi_archive())
+    profiles.apply_project(destination["id"], {"mode": "bangumi", "subject_id": 101}, bangumi_archive(101))
+    catalog_before = library.organization.path.read_bytes()
+    casts_before = {path: path.read_bytes() for path in (library.root / "works").glob("*/characters.json")}
+    with pytest.raises(ValueError):
+        library.organization.assign([source_asset["id"]], destination["id"])
+    assert library.organization.path.read_bytes() == catalog_before
+    assert all(path.read_bytes() == data for path, data in casts_before.items())
+    assert library.get_asset(source_asset["id"])["project_id"] is None
+
+
+def test_bound_project_move_to_unassigned_preserves_dossier_cast_and_backup(library, tmp_path):
+    source_asset = library.get_asset("asset_one")
+    archive = bangumi_archive()
+    profiles = AnimeProfileStore(library)
+    profiles.apply_project(source_asset["project_id"], {"mode": "bangumi", "subject_id": 100}, archive)
+    store = CharacterStore(library)
+    source_role = store.catalog(source_asset["id"])["profiles"][0]
+    appearance(library, store, character_id=source_role["id"])
+    originals = {path: path.read_bytes() for path in library.asset_dir(source_asset["id"]).glob("analyses/*/observations/*.json")}
+    library.organization.assign([source_asset["id"]], None)
+    current_asset = library.get_asset(source_asset["id"])
+    current_cast = store.catalog(source_asset["id"])
+    assert current_asset["project_id"] is None
+    assert current_asset["anime_profile"] == {"mode": "bangumi", "dossier": archive}
+    assert len(current_cast["profiles"]) == 2
+    assert sorted(profile["appearance_count"] for profile in current_cast["profiles"]) == [0, 1]
+    assert all(path.read_bytes() == data for path, data in originals.items())
+    store.validate_all()
+    backup = library.backup()
+    restored = Library(tmp_path / "restored_bangumi_move")
+    restored.restore(library.root / "runtime" / "backups" / f"{backup['id']}.zip")
+    assert restored.get_asset(source_asset["id"])["anime_profile"] == current_asset["anime_profile"]
+    assert CharacterStore(restored).catalog(source_asset["id"]) == current_cast
+    assert restored.records() == library.records()
+    assert restored.organization.projects() == library.organization.projects()
+
+
+@pytest.mark.parametrize("decision", ["merge", "delete"])
+def test_bangumi_move_honors_destination_identity_merge_or_deletion(library, decision):
+    source_asset = seed(library, "asset_standalone", series="")
+    target_asset = seed(library, "asset_target", series="目标动画")
+    profiles = AnimeProfileStore(library)
+    selection = {"mode": "bangumi", "subject_id": 100}
+    archive = bangumi_archive()
+    profiles.apply_asset(source_asset["id"], selection, archive)
+    profiles.apply_project(target_asset["project_id"], selection, archive)
+    store = CharacterStore(library)
+    source_role = next(profile for profile in store.catalog(source_asset["id"])["profiles"]
+                       if profile["external_source"]["character_id"] == 200)
+    target_roles = {profile["external_source"]["character_id"]: profile["id"]
+                    for profile in store.catalog(target_asset["id"])["profiles"]}
+    appearance(library, store, source_asset["id"], character_id=source_role["id"])
+    expected_id = None
+    if decision == "merge":
+        expected_id = target_roles[201]
+        store.update(target_asset["id"], expected_id, {"name": "目标合并姓名"})
+        store.merge(target_asset["id"], target_roles[200], expected_id)
+    else:
+        store.delete(target_asset["id"], target_roles[200])
+    library.organization.assign([source_asset["id"]], target_asset["project_id"])
+    assert len(store.catalog(source_asset["id"])["profiles"]) == 1
+    projected = store.decorate_observations(source_asset["id"], library.observations(source_asset["id"]))
+    assert projected[0]["entities"][0]["character_id"] == expected_id
+    if expected_id:
+        assert store.catalog(source_asset["id"])["profiles"][0]["name"] == "目标合并姓名"
+    store.validate_all()
+
+
+def test_bangumi_move_to_new_project_keeps_source_deletion_effective(library):
+    asset = seed(library, "asset_standalone", series="")
+    profiles = AnimeProfileStore(library)
+    profiles.apply_asset(asset["id"], {"mode": "bangumi", "subject_id": 100}, bangumi_archive())
+    store = CharacterStore(library)
+    deleted_role = next(profile for profile in store.catalog(asset["id"])["profiles"]
+                        if profile["external_source"]["character_id"] == 200)
+    store.delete(asset["id"], deleted_role["id"])
+    destination = library.organization.save_project({"name": "新动画项目", "kind": "animation"})
+    library.organization.assign([asset["id"]], destination["id"])
+    assert [profile["external_source"]["character_id"] for profile in store.catalog(asset["id"])["profiles"]] == [201]
+    store.validate_all()

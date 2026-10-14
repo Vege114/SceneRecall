@@ -234,8 +234,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     from .workflow_api import register_workflow_routes
     from .organization_api import register_organization_routes
+    from .bangumi_api import register_bangumi_routes
     register_workflow_routes(app, library, queue, settings, public_job)
     register_organization_routes(app, library, queue, search)
+    register_bangumi_routes(app, library, search)
 
     @app.get("/api/assets")
     async def assets():

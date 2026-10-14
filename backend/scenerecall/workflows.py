@@ -33,7 +33,13 @@ class WorkflowQueueMixin:
         db.execute("INSERT INTO requests VALUES (?,?,?,?)",
                    (kind, request_id, digest(payload), json.dumps(result)))
 
-    def add_import(self, request):
+    def existing_import(self, request):
+        with self.connect() as db:
+            result = self._existing_request(db, "import", request.request_id,
+                                            request.model_dump(exclude_unset=True))
+        return self.get(result["job_id"]) if result else None
+
+    def add_import(self, request, *, anime_dossiers=None):
         payload = request.model_dump(exclude_unset=True)
         ids = [safe_id(item.item_id) for item in request.items]
         if len(set(ids)) != len(ids):
@@ -51,6 +57,11 @@ class WorkflowQueueMixin:
                 # Validate the destination before a persistent task is published.
                 if value.get("project_id"):
                     self.library.organization.get_project(value["project_id"])
+                if (value.get("anime_profile") or {}).get("mode") == "bangumi":
+                    dossier = (anime_dossiers or {}).get(item.item_id)
+                    if not dossier or dossier["subject"]["id"] != value["anime_profile"]["subject_id"]:
+                        raise ValueError("请先读取所选 Bangumi 档案")
+                    value["anime_dossier"] = dossier
                 items.append(value)
             job = self._new_job("import", {"items": items, "request_id": request.request_id})
             job["items"] = [{"item_id": item["item_id"], "name": Path(item["video_path"]).name,
@@ -60,7 +71,7 @@ class WorkflowQueueMixin:
             self._save_request(db, "import", request.request_id, payload, {"job_id": job["id"]})
         return job
 
-    def retry_import(self, job_id, request):
+    def retry_import(self, job_id, request, *, anime_dossiers=None):
         with self.library.lock:
             job = self.get(job_id)
             if job["type"] != "import" or job["status"] not in {"failed", "partial", "cancelled", "paused"}:
@@ -78,9 +89,21 @@ class WorkflowQueueMixin:
                 value = item.model_dump(exclude_unset=True)
                 if "project_id" not in value and "project_id" in configs[item_id]:
                     value["project_id"] = configs[item_id]["project_id"]
+                if "anime_profile" not in value and "anime_profile" in configs[item_id]:
+                    value["anime_profile"] = configs[item_id]["anime_profile"]
+                if configs[item_id].get("anime_profile") and value.get("anime_profile") != configs[item_id]["anime_profile"]:
+                    raise ValueError("重试请沿用本批已保存的动画档案；更换作品请重新导入")
+                if "anime_dossier" in configs[item_id]:
+                    value["anime_dossier"] = configs[item_id]["anime_dossier"]
+                elif (value.get("anime_profile") or {}).get("mode") == "bangumi":
+                    dossier = (anime_dossiers or {}).get(item_id)
+                    if not dossier or dossier["subject"]["id"] != value["anime_profile"]["subject_id"]:
+                        raise ValueError("请先读取所选 Bangumi 档案")
+                    value["anime_dossier"] = dossier
                 if digest([job_id, item_id]) in committed_keys:
                     def normalized(raw):
-                        asset_input = AssetInput.model_validate({key: val for key, val in raw.items() if key != "item_id"})
+                        asset_input = AssetInput.model_validate({key: val for key, val in raw.items()
+                                                               if key not in {"item_id", "anime_profile", "anime_dossier"}})
                         return asset_input.model_dump(), "project_id" in raw
 
                     if normalized(value) != normalized(configs[item_id]):
@@ -111,8 +134,13 @@ class WorkflowQueueMixin:
                     from .library import DeletedAssetError
                     raise DeletedAssetError()
                 if existing is None:
-                    payload = AssetInput.model_validate({key: value for key, value in config.items() if key != "item_id"})
+                    payload = AssetInput.model_validate({key: value for key, value in config.items()
+                                                        if key not in {"item_id", "anime_profile", "anime_dossier"}})
                     existing = await self._local_work(job_id, lambda _check: self.library.register(payload, import_item_key=item_key))
+                if config.get("anime_profile"):
+                    from .anime_profiles import AnimeProfileStore
+                    AnimeProfileStore(self.library).apply_asset(existing["id"], config["anime_profile"],
+                                                               config.get("anime_dossier"))
                 items[item_id].update(status="completed", asset_id=existing["id"])
                 self.search.upsert(self.library.records(existing["id"]))
             except Exception as exc:

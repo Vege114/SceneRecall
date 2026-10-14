@@ -1,5 +1,21 @@
 export type Capability = 'preparation' | 'vision' | 'subtitle' | 'embedding' | 'query' | 'decision' | 'answer';
 export type AssetKind = 'movie' | 'animation' | 'series';
+export interface BangumiSubject {
+  id: number; name: string; name_cn: string; date?: string; summary?: string; image_url?: string; url: string;
+  infobox?: unknown[];
+}
+export interface BangumiCharacter {
+  id: number; name: string; name_cn?: string; aliases?: string[]; description?: string; image_url?: string; url: string; role?: string;
+}
+export interface BangumiDossier {
+  source: 'bangumi'; subject: BangumiSubject; characters: BangumiCharacter[]; fetched_at: string;
+  warnings?: string[];
+}
+export type AnimeProfileSelection = { mode: 'bangumi'; subject_id: number } | { mode: 'scratch' };
+export type AnimeProfile = { mode: 'bangumi'; dossier: BangumiDossier } | { mode: 'scratch' };
+export interface BangumiSearch {
+  status: 'matches' | 'not_found' | 'error'; candidates: BangumiSubject[]; error?: string;
+}
 export type SubtitleMode = 'auto' | 'container' | 'external' | 'embedded';
 export interface SubtitleTrack {
   index: number;
@@ -106,7 +122,7 @@ export interface Bootstrap {
   version: string;
 }
 export interface Folder { id: string; name: string; parent_id: string | null }
-export interface Project { id: string; name: string; kind: AssetKind; folder_id: string | null; tags: string[]; asset_count: number }
+export interface Project { id: string; name: string; kind: AssetKind; folder_id: string | null; tags: string[]; asset_count: number; anime_profile?: AnimeProfile }
 export type DeletionTarget = { kind: 'assets'; asset_ids: string[] } | { kind: 'project' | 'folder'; id: string; name: string };
 export interface DeletionScope {
   title: string; asset_count: number; project_count: number; folder_count: number;
@@ -126,6 +142,7 @@ export interface ImportInput {
   item_id: string; video_path: string; title: string; kind: AssetKind; series: string;
   season: number | null; episode: number | null; version: string;
   subtitle_mode: SubtitleMode; subtitle_path: string | null; subtitle_stream_index?: number | null; subtitle_offset_ms: number;
+  anime_profile?: AnimeProfileSelection;
 }
 export interface ImportItem { item_id: string; name: string; status: string; asset_id?: string; error?: string; input?: ImportInput }
 export interface KeyframePlan {
@@ -134,6 +151,7 @@ export interface KeyframePlan {
   frame_count?: number; batch_count?: number; shots?: unknown[]; batches?: unknown[];
 }
 export interface Asset {
+  anime_profile?: AnimeProfile;
   project_id?: string | null;
   project_name?: string;
   folder_id?: string | null;
@@ -184,6 +202,7 @@ export interface CharacterAppearance {
   frame_ids: string[];
 }
 export interface CharacterProfile {
+  external_source?: { source: 'bangumi'; subject_id: number; character_id: number; url: string; image_url?: string; fetched_at?: string };
   id: string;
   name: string;
   aliases: string[];

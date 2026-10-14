@@ -174,8 +174,20 @@ class KeyframePlanInput(Contract):
     end_ms: int | None = Field(default=None, gt=0)
 
 
+class AnimeProfileSelection(Contract):
+    mode: Literal["bangumi", "scratch"]
+    subject_id: int | None = Field(default=None, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def check_subject(self):
+        if (self.mode == "bangumi") != (self.subject_id is not None):
+            raise ValueError("使用 Bangumi 档案须指定条目；从零建档不能指定条目")
+        return self
+
+
 class ImportItemInput(AssetInput):
     item_id: str = Field(min_length=1, max_length=180)
+    anime_profile: AnimeProfileSelection | None = None
 
 
 class ImportInput(Contract):

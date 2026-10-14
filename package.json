@@ -1,0 +1,11 @@
+{
+  "name": "scenerecall-runtime",
+  "private": true,
+  "description": "Local CLI runtime dependencies for the SceneRecall backend",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@aronnaxlin/bgm-cli": "1.1.7"
+  }
+}
