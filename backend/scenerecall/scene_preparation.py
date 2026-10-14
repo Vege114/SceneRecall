@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 PREPARATION_PROMPT_VERSION = "scene-preparation-v1"
 SUBTITLE_PREPARATION_PROMPT_VERSION = "scene-subtitle-preparation-v1"
 VISUAL_PREPARATION_PROMPT_VERSION = "scene-visual-preparation-v3"
-CONTEXTUAL_VISION_PROMPT_VERSION = "scene-contextual-vision-v4"
+CONTEXTUAL_VISION_PROMPT_VERSION = "scene-contextual-vision-v5"
 RECONCILIATION_PROMPT_VERSION = "scene-reconciliation-v2"
 MAX_CORE_FRAMES = 56
 MAX_CONTEXT_FRAMES = 8

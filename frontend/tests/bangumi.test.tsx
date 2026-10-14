@@ -137,7 +137,7 @@ describe('Bangumi animation import', () => {
     await user.clear(screen.getByLabelText('作品名称')); await user.type(screen.getByLabelText('作品名称'), '另一部动画');
     expect(importButton().disabled).toBe(true);
     await user.click(rows.getByRole('button', { name: /^1/ }));
-    expect(screen.getByText('从零建立档案 · 后续画面识别持续补充人物与作品信息。')).toBeTruthy();
+    expect(screen.getByText('从零建立档案 · 仅为能够确认姓名的人物建档，后续识别补充出场证据。')).toBeTruthy();
     await user.click(rows.getByRole('button', { name: /另一部动画/ })); await user.selectOptions(screen.getByLabelText('作品类型'), 'movie');
     expect(importButton().disabled).toBe(false); await user.click(importButton());
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/imports')).toBe(true));

@@ -14,7 +14,10 @@ def deep_scene(library, asset_id="asset_one", *, start=0, end=10000, run_id="run
     scenes = SceneStore(library)
     initial = scenes.publish(asset_id, run_id, [chunk(start, end)], start, end)[0]
     frame_id = initial["frame_ids"][0]
+    names = ['阿红', '阿青', '阿蓝']
     entities = [{"id": f"person_{index}", "kind": "person", "is_character": True,
+                 "name": None if character_id and index == 0 else names[index],
+                 "match_reason": f"合成字幕明确称呼：{names[index]}",
                  "character_id": character_id if index == 0 else None, "match_confidence": .9,
                  "description": f"红衣人物 {index}", "observed_traits": ["红衣"],
                  "evidence_frame_ids": [frame_id], "portrait_frame_id": frame_id, "portrait_box": [0, 0, .5, 1]}
@@ -138,7 +141,9 @@ def test_character_catalog_replaces_old_observation_covered_by_multiple_deep_chu
     characters = CharacterStore(library)
     legacy = {"id": "legacy", "asset_id": "asset_one", "run_id": "run_old", "window_id": "window", "shot_id": "shot",
               "start_ms": 0, "end_ms": 10000, "summary": "旧版人物观察", "evidence_frame_ids": ["frame_0"],
-              "entities": [{"id": "person", "kind": "person", "description": "红衣", "evidence_frame_ids": ["frame_0"]}]}
+              "entities": [{"id": "person", "kind": "person", "description": "红衣", "name": "阿红",
+                            "match_confidence": .9, "match_reason": "合成字幕明确称呼：阿红",
+                            "evidence_frame_ids": ["frame_0"]}]}
     linked = characters.apply_observation("asset_one", legacy)
     library.save_observation("asset_one", linked)
     identity = linked["entities"][0]["character_id"]

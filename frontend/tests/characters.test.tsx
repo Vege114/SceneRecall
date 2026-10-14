@@ -34,6 +34,23 @@ function mockFetch(handler: (url: string, options?: RequestInit) => unknown | Pr
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
 describe('Cross-shot character dossiers', () => {
+  it('shows sourced multilingual names, distinguishes transliteration and searches English names', async () => {
+    const multilingual = { ...first, name_cn: '小夏', name_ja: '夏未央', name_en: 'Natsu Mio',
+      aliases: ['小夏', '夏未央', 'Natsu Mio', '夏同学'],
+      name_variants: [{ name: 'Natsu Mio', language: 'ja-Latn', kind: 'transliteration', source: 'kana_transliteration', source_url: 'https://bgm.tv/character/7' }] };
+    mockFetch(() => ({ ...library, profiles: [multilingual, second] }));
+    const { user } = setup();
+    const card = within(await screen.findByRole('article', { name: '小夏的角色档案' }));
+    expect(card.getByText('中文')).toBeTruthy();
+    expect(card.getByText('日文')).toBeTruthy();
+    expect(card.getByText('罗马字（按假名转写）')).toBeTruthy();
+    expect(card.getAllByText('Natsu Mio')).toHaveLength(1);
+    expect(card.getByText('又名 夏同学')).toBeTruthy();
+    await user.type(screen.getByRole('textbox', { name: '搜索角色档案' }), 'natsu');
+    expect(screen.queryByRole('article', { name: '绿围巾少女的角色档案' })).toBeNull();
+    expect(screen.getByRole('article', { name: '小夏的角色档案' })).toBeTruthy();
+  });
+
   it('shows evidence, searches aliases and opens appearances in the current or another episode', async () => {
     mockFetch(); const { user, onSeek } = setup();
     await screen.findByText('2 份角色档案');

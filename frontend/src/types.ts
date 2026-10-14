@@ -4,8 +4,12 @@ export interface BangumiSubject {
   id: number; name: string; name_cn: string; date?: string; summary?: string; image_url?: string; url: string;
   infobox?: unknown[];
 }
+export interface CharacterNameVariant {
+  name: string; language: string; kind: string; source: string; source_url: string;
+}
 export interface BangumiCharacter {
-  id: number; name: string; name_cn?: string; aliases?: string[]; description?: string; image_url?: string; url: string; role?: string;
+  id: number; name: string; name_cn?: string; name_ja?: string; name_en?: string; aliases?: string[]; description?: string; image_url?: string; url: string; role?: string;
+  name_variants?: CharacterNameVariant[];
 }
 export interface BangumiDossier {
   source: 'bangumi'; subject: BangumiSubject; characters: BangumiCharacter[]; fetched_at: string;
@@ -205,6 +209,10 @@ export interface CharacterProfile {
   external_source?: { source: 'bangumi'; subject_id: number; character_id: number; url: string; image_url?: string; fetched_at?: string };
   id: string;
   name: string;
+  name_cn?: string;
+  name_ja?: string;
+  name_en?: string;
+  name_variants?: CharacterNameVariant[];
   aliases: string[];
   description: string;
   notes: string;
@@ -218,6 +226,7 @@ export interface CharacterProfile {
 export interface CharacterLibrary {
   scope_id: string;
   revision: number;
+  cast_policy?: { mode: 'bangumi' | 'named_only'; allow_new_profiles: boolean; subject_id?: number; character_ids?: number[]; instruction: string };
   profiles: CharacterProfile[];
   assets: Asset[];
 }

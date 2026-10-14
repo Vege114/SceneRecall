@@ -1014,17 +1014,26 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 existing = {entry["id"]: entry for entry in context["profiles"]}
                 fields = ("id", "name", "aliases", "description", "notes", "appearance", "user_edited",
                           "edited_fields", "representative", "updated_at", "created_at")
+                policy = context.get("cast_policy") or self.characters.cast_policy(registry)
                 transient = {}
                 for identity in recent:
                     stored = registry["profiles"].get(identity)
                     if stored is None:
                         raise ValueError("已完成分批的人物档案已变化，请创建新任务")
-                    entry = {key: copy.deepcopy(stored[key]) for key in fields}
+                    if not self.characters.profile_allowed(stored, policy):
+                        continue
+                    entry = {**copy.deepcopy(existing.get(identity, {})),
+                             **{key: copy.deepcopy(stored[key]) for key in fields}}
+                    for key in ("name_cn", "name_ja", "name_en", "name_variants", "external_source",
+                                "external_sources", "reference_description"):
+                        if key in stored:
+                            entry[key] = copy.deepcopy(stored[key])
                     entry["observed_traits"] = list(stored["appearance"])
                     for field in ("appearance", "observed_traits"):
                         if field not in entry.get("edited_fields", []):
                             entry[field] = entry[field][-8:]
                     transient[identity] = entry
+                recent = [identity for identity in recent if identity in transient]
                 identities = list(dict.fromkeys([*recent, *existing]))[:16]
                 context["profiles"] = [transient.get(identity, existing.get(identity)) for identity in identities]
                 references = {}

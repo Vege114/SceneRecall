@@ -31,10 +31,10 @@ class IdentityProvider:
         self.calls.append({"start_ms": start, "context": deepcopy(context)})
         candidates = [profile for profile in context["profiles"] if "红衣" in profile["description"]]
         matched = candidates[0]["id"] if candidates else None
-        data = {"summary": "红衣人物站立", "entities": [{"id": "person", "kind": "person", "name": None,
+        data = {"summary": "红衣人物站立", "entities": [{"id": "person", "kind": "person", "name": None if matched else "合成葵",
                 "is_character": True, "character_id": matched, "description": "红衣短发人物",
-                "match_confidence": .95 if matched else 0.0,
-                "match_reason": "与参考图外观一致" if matched else "首次出场，无已有档案",
+                "match_confidence": .95,
+                "match_reason": "与参考图外观一致" if matched else "当前画面胸牌显示合成葵",
                 "observed_traits": ["红衣", "短发"], "evidence_frame_ids": [frames[0]["id"]],
                 "portrait_frame_id": frames[0]["id"], "portrait_box": [0, 0, 1, 1]}],
                 "evidence_frame_ids": [frame["id"] for frame in frames], "events": [],
@@ -146,6 +146,39 @@ async def test_saved_part_identity_reused_after_later_part_interruption(worker):
     assert [call["start_ms"] for call in provider.calls] == [0, 24000, 24000]
     assert len({entity["character_id"] for entity in result["entities"]}) == 1
     assert len(queue.characters.catalog(chunk["asset_id"])["profiles"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_anonymous_part_dossier_does_not_reenter_model_context(worker, monkeypatch):
+    queue, provider, job, chunk, frames = worker
+    from scenerecall.library import atomic_json, read_json
+    apply = queue.characters.apply_observation
+    legacy_id = None
+
+    def anonymous_after_first_part(asset_id, record, expected_revision=None):
+        nonlocal legacy_id
+        linked = apply(asset_id, record, expected_revision)
+        if legacy_id is None:
+            legacy_id = linked["entities"][0]["character_id"]
+            registry = queue.characters._read(linked["character_scope_id"])
+            profile = registry["profiles"][legacy_id]
+            profile.update(name="红衣学生", description="红衣学生\n黑色短发", edited_fields=[], user_edited=False)
+            atomic_json(queue.characters._path(registry["scope_id"]), registry)
+        return linked
+
+    monkeypatch.setattr(queue.characters, "apply_observation", anonymous_after_first_part)
+    result = await queue._deepen_scene(job["id"], chunk, frames, [], {})
+    assert len(provider.calls) == 2
+    second = provider.calls[1]["context"]
+    assert legacy_id not in {profile["id"] for profile in second["profiles"]}
+    assert legacy_id not in {reference["character_id"] for reference in second["reference_frames"]}
+    part_path = (queue.library.asset_dir(chunk["asset_id"]) / "analyses" / job["run_id"] /
+                 "scene-deep/parts" / chunk["id"] / "0.json")
+    part = read_json(part_path)
+    assert part["entities"][0]["character_id"] == legacy_id
+    assert part["entities"][0]["evidence_frame_ids"] == [frames[0]["id"]]
+    assert part["entities"][0]["description"] == "红衣短发人物"
+    assert all(entity.get("character_id") != legacy_id for entity in result["entities"])
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,7 @@ from .scene_preparation import (
 from .scene_preparation import PREPARATION_PROMPT_VERSION as PREPARATION_PROMPT_VERSION
 
 CAPABILITIES = {"preparation", "vision", "subtitle", "embedding", "query", "decision", "answer"}
-PROMPT_VERSION = "scenerecall-0.2.0"
+PROMPT_VERSION = "scenerecall-0.3.0"
 # OCR instructions are unchanged; retain already-paid subtitle batch caches.
 SUBTITLE_PROMPT_VERSION = "scenerecall-0.1.0"
 MAX_OUTPUT_TOKENS = 4096
@@ -222,7 +222,7 @@ class Entity(BaseModel):
     kind: Literal["person", "object", "animal", "character", "anthropomorphic_character", "other"] = "person"
     description: str
     position: str = "unknown"
-    name: None = None
+    name: str | None = Field(default=None, min_length=1, max_length=200)
     evidence_frame_ids: list[str] = Field(min_length=1)
     is_character: bool | None = Field(default=None, strict=True)
     character_id: str | None = Field(default=None, min_length=1, max_length=100)
@@ -278,7 +278,8 @@ class VisionObservation(BaseModel):
     evidence_frame_ids: list[str] = Field(min_length=1)
 
 
-def _vision_output_schema(frame_ids: set[str], character_ids: set[str], start_ms: int, end_ms: int) -> dict:
+def _vision_output_schema(frame_ids: set[str], character_ids: set[str], start_ms: int, end_ms: int,
+                          *, named_identities: bool = True) -> dict:
     """Constrain generated citations to complete current-input IDs.
 
     Strict structured output requires every object property, including nullable
@@ -304,6 +305,8 @@ def _vision_output_schema(frame_ids: set[str], character_ids: set[str], start_ms
 
     schema = strict(VisionObservation.model_json_schema())
     entities = schema["$defs"]["Entity"]["properties"]
+    if not named_identities:
+        entities["name"] = {"type": "null"}
     entities["portrait_frame_id"] = {"anyOf": [{"type": "string", "enum": frames}, {"type": "null"}]}
     entities["character_id"] = ({"anyOf": [{"type": "string", "enum": sorted(character_ids)}, {"type": "null"}]}
                                 if character_ids else {"type": "null"})
@@ -777,6 +780,8 @@ class ProviderManager:
         if context is None:
             return ""
         value = {key: context.get(key) for key in ("scope_id", "revision", "profiles")}
+        if context.get("cast_policy"):
+            value["cast_policy"] = context["cast_policy"]
         if context.get("work_summary"):
             value["work_summary"] = context["work_summary"]
         text = json.dumps(value, ensure_ascii=False, allow_nan=False)
@@ -921,6 +926,17 @@ class ProviderManager:
                         raise ValueError("character matches require confident visual evidence")
                 if character_context is not None and eligible and not entity.match_reason.strip():
                     raise ValueError("character decisions must explain visible matching evidence or uncertainty")
+                if entity.name is not None:
+                    if (character_context or {}).get("cast_policy", {}).get("mode") == "bangumi":
+                        raise ValueError("Bangumi observations use only supplied dossier IDs; name must be null")
+                    from .characters import named_identity, normalized
+                    if not eligible or named_identity(entity.name) is None:
+                        raise ValueError("character names must be supported proper identities, not anonymous labels")
+                    name_sources = json.dumps({"description": entity.description, "reason": entity.match_reason,
+                                               "subtitles": subtitle_context, "story": story_context}, ensure_ascii=False)
+                    if (entity.match_confidence < 0.65 or not entity.match_reason.strip()
+                            or normalized(entity.name) not in normalized(name_sources)):
+                        raise ValueError("character names require confident named evidence and an identity explanation")
                 entity.is_character = eligible
             for event in item.events:
                 if not start_ms <= event.start_ms <= event.end_ms <= end_ms or event.start_ms >= end_ms:
@@ -936,7 +952,14 @@ class ProviderManager:
         prompt = (
             f"Analyze only visible evidence in chronological frames for [{start_ms},{end_ms}) ms. "
             "Write descriptions in Chinese; never identify real-world actors or invent character names. "
-            "Entity IDs are local to this observation; character_id is a persistent dossier ID. name must be null. "
+            "Entity IDs are local to this observation; character_id is a persistent dossier ID. "
+            "Follow cast_policy: in Bangumi mode its supplied cast is the complete dossier roster; do not add "
+            "other identities, and leave unmatched people's character_id and name null. In named_only mode, "
+            "name may contain a character's actual proper name only when the supplied current frames, dialogue "
+            "or established story context supports it and its association with this visible character; explain "
+            "the exact name and source in match_reason with match_confidence>=0.65. Otherwise name is null. "
+            "Never use appearance labels, roles, anonymous people, bystanders, crowd members or temporary entity "
+            "IDs as names or new dossier candidates; keep their visible evidence in entities/events. "
             "FIRST compare each character against ALL supplied existing dossiers, honoring user-edited names, "
             "aliases, descriptions and notes. "
             "External Bangumi biographies and work summaries are prior reference data; never treat them as "
@@ -1009,7 +1032,8 @@ class ProviderManager:
         if content:
             content.append({"type": "text", "text": "Current chronological evidence frames follow:"})
         content.extend(self._images(frames))
-        schema = (_vision_output_schema(valid_ids, character_ids, start_ms, end_ms)
+        schema = (_vision_output_schema(valid_ids, character_ids, start_ms, end_ms,
+                                       named_identities=(character_context or {}).get("cast_policy", {}).get("mode") != "bangumi")
                   if self._profile(id, "vision")["provider_type"] == "codex_cli" else None)
         return await self._chat(id, "vision", prompt, content, validate, output_schema=schema)
 

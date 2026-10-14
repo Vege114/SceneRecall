@@ -36,6 +36,8 @@ def observation(asset_id="asset_one", *, number=1, character_id=None, kind="pers
             "window_id": f"window_{number}", "shot_id": "shot_test", "start_ms": (number - 1) * 1000,
             "end_ms": number * 1000, "summary": "人物拿起杯子", "evidence_frame_ids": ["frame_one"],
             "entities": [{"id": "entity_one", "kind": kind, "description": "穿红衣服的人",
+                          "name": f"合成葵{number}", "match_confidence": .95,
+                          "match_reason": f"当前画面胸牌显示合成葵{number}",
                           "character_id": character_id, "evidence_frame_ids": ["frame_one"], **entity}]}
 
 
@@ -343,37 +345,38 @@ def test_bangumi_seed_enriches_recognition_and_preserves_manual_fields_and_ids(c
     assert save(library, store, observation(character_id=character_id, observed_traits=["蓝色外套"]), 1) == character_id
     profile = store.catalog("asset_one")["profiles"][0]
     assert profile["name"] == "小葵" and profile["appearance"] == ["蓝色外套"]
-    assert "条目角色介绍" in profile["description"] and "穿红衣服的人" in profile["description"]
+    assert profile["description"] == bangumi_dossier()["characters"][0]["description"]
     store.update("asset_one", character_id, {"name": "人工葵", "aliases": ["人工别名"],
                  "description": "人工描述", "notes": "人工备注", "appearance": ["人工外观"]})
     changed = bangumi_dossier()
     changed["characters"][0].update(name_cn="新条目名字", aliases=["新别名"], description="新条目描述")
     store.seed_bangumi(scope, changed)
     save(library, store, observation(number=2, character_id=character_id,
-                                     description="模型描述", observed_traits=["模型外观"]), 2)
+                                     description="模型描述", observed_traits=["模型外观"]), 3)
     profile = store.catalog("asset_one")["profiles"][0]
     assert profile["id"] == character_id and profile["name"] == "人工葵"
     assert profile["aliases"] == ["人工别名"] and profile["description"] == "人工描述"
     assert profile["notes"] == "人工备注" and profile["appearance"] == ["人工外观"]
     assert profile["appearance_count"] == 2 and profile["external_source"]["character_id"] == 200
-    assert profile["reference_description"] == bangumi_dossier()["characters"][0]["description"]
+    assert profile["reference_description"] == "新条目描述"
 
 
 def test_bangumi_seed_respects_merges_and_deletion_without_resurrecting_profiles(cast):
     library, store = cast
     local_id = save(library, store, observation())
+    store.update("asset_one", local_id, {"name": "人工确认", "description": "本地证据"})
     scope = store.context("asset_one")["scope_id"]
     registry = store.seed_bangumi(scope, bangumi_dossier())
     external_id = next(profile["id"] for profile in registry["profiles"].values() if profile.get("external_source"))
-    store.update("asset_one", local_id, {"name": "人工确认", "description": "本地证据"})
-    store.merge("asset_one", external_id, local_id)
+    store.update("asset_one", external_id, {"name": "人工确认", "description": "本地证据"})
+    store.merge("asset_one", local_id, external_id)
     before = store._read(scope)
     assert store.seed_bangumi(scope, bangumi_dossier()) == before
     profiles = store.catalog("asset_one")["profiles"]
-    assert len(profiles) == 1 and profiles[0]["id"] == local_id
+    assert len(profiles) == 1 and profiles[0]["id"] == external_id
     assert profiles[0]["name"] == "人工确认" and profiles[0]["description"] == "本地证据"
     assert profiles[0]["external_source"]["character_id"] == 200
-    store.delete("asset_one", local_id)
+    store.delete("asset_one", external_id)
     deleted = store._read(scope)
     assert store.seed_bangumi(scope, bangumi_dossier()) == deleted
     assert store.context("asset_one")["profiles"] == []
@@ -411,8 +414,8 @@ def test_bangumi_reseed_adds_missing_reference_information_without_replacing_loc
     dossier["characters"].append({"id": 201, "name": "New character", "aliases": []})
     seeded = store.seed_bangumi(scope, dossier)
     profile = seeded["profiles"][character_id]
-    assert seeded["revision"] == 2 and profile["name"] == "小葵"
-    assert profile["description"] == "穿红衣服的人"
+    assert seeded["revision"] == 2 and profile["name"] == "条目新名"
+    assert profile["description"] == "新增的角色背景"
     assert profile["appearance"] == ["已看到的蓝衣"]
     assert profile["representative"] == {"asset_id": "asset_one", "frame_id": "frame_one"}
     assert profile["reference_description"] == "新增的角色背景" and "新增别名" in profile["aliases"]
@@ -432,7 +435,7 @@ def test_bangumi_project_work_context_is_bounded_and_reference_only(cast):
     assert context["work_summary"]["name_cn"] == "合成动画"
     assert len(context["work_summary"]["summary"]) == 4000
     assert "supplied video frames" in context["work_summary"]["reference_policy"]
-    assert context["profiles"] == []
+    assert len(context["profiles"]) == 1
 
 
 def test_bangumi_profiles_survive_backup_before_project_has_any_video(cast, tmp_path):
@@ -466,3 +469,162 @@ def test_invalid_bangumi_seed_never_changes_the_registry(cast, defect):
     with pytest.raises(ValueError, match="Bangumi"):
         store.seed_bangumi(scope, dossier)
     assert store._read(scope) == before
+
+
+@pytest.mark.parametrize("name", [None, "人物", "少女", "少女A", "未知角色 3", "红衣少女", "黑色短发女性", "穿蓝衣服的女孩", "entity_12",
+                                  "红衣学生", "戴眼镜的老师", "舞台左侧男生", "woman", "unknown_person", "young girl"])
+def test_anonymous_entities_remain_searchable_evidence_without_a_dossier(cast, name):
+    library, store = cast
+    original = observation(name=name)
+    linked = store.apply_observation("asset_one", original)
+    library.save_observation("asset_one", linked)
+    assert linked["entities"][0]["character_id"] is None
+    assert linked["entities"][0]["description"] == "穿红衣服的人"
+    assert linked["entities"][0]["evidence_frame_ids"] == ["frame_one"]
+    assert store.catalog("asset_one")["profiles"] == []
+    assert library.observations("asset_one")[0]["entities"][0]["id"] == "entity_one"
+
+
+def test_named_identity_requires_confidence_and_a_name_source(cast):
+    _library, store = cast
+    for fields in ({"name": "小葵", "match_confidence": .4, "match_reason": "字幕称呼小葵"},
+                   {"name": "小葵", "match_confidence": .95, "match_reason": "首次出现"},
+                   {"name": "小葵", "match_confidence": .95, "match_reason": ""}):
+        assert store.apply_observation("asset_one", observation(**fields))["entities"][0]["character_id"] is None
+    assert store.catalog("asset_one")["profiles"] == []
+
+
+@pytest.mark.parametrize("name", ["愛城華恋", "爱城华恋", "Karen Aijo", "Aman", "Inman", "Spider-Man"])
+def test_proper_names_in_each_language_can_create_named_only_dossiers(cast, name):
+    _library, store = cast
+    linked = store.apply_observation("asset_one", observation(name=name, match_reason=f"当前画面姓名牌写着{name}"))
+    assert linked["entities"][0]["character_id"]
+    assert store.catalog("asset_one")["profiles"][0]["name"] == name
+
+
+def test_bangumi_roster_blocks_new_named_profiles_and_hides_legacy_roles_without_rewriting_evidence(cast):
+    library, store = cast
+    legacy_id = save(library, store, observation())
+    scope = store.context("asset_one")["scope_id"]
+    immutable = next(library.asset_dir("asset_one").glob("analyses/*/observations/*.json"))
+    original = immutable.read_bytes()
+    store.seed_bangumi(scope, bangumi_dossier())
+    context = store.context("asset_one")
+    assert context["cast_policy"]["mode"] == "bangumi"
+    assert context["cast_policy"]["allow_new_profiles"] is False
+    assert context["cast_policy"]["character_ids"] == [200]
+    assert len(context["profiles"]) == 1
+    assert store.apply_observation("asset_one", observation(number=2))["entities"][0]["character_id"] is None
+    delayed = observation(number=3, character_id=legacy_id)
+    assert store.apply_observation("asset_one", delayed)["entities"][0]["character_id"] is None
+    assert store.decorate_observations("asset_one", [read_json(immutable)])[0]["entities"][0]["character_id"] is None
+    assert immutable.read_bytes() == original
+    assert legacy_id in store._read(scope)["profiles"]
+    for action in (lambda: store.update("asset_one", legacy_id, {"notes": "隐藏角色"}),
+                   lambda: store.delete("asset_one", legacy_id),
+                   lambda: store.portrait_reference("asset_one", legacy_id)):
+        with pytest.raises(FileNotFoundError):
+            action()
+    roster_id = store.catalog("asset_one")["profiles"][0]["id"]
+    before_merge = store._read(scope)
+    with pytest.raises(FileNotFoundError):
+        store.merge("asset_one", roster_id, legacy_id)
+    assert store._read(scope) == before_merge
+    merged = store.merge("asset_one", legacy_id, roster_id)
+    assert merged["id"] == roster_id and merged["name"] == "小葵"
+    assert len(store.catalog("asset_one")["profiles"]) == 1
+    assert store.decorate_observations("asset_one", [read_json(immutable)])[0]["entities"][0]["character_id"] == roster_id
+    assert immutable.read_bytes() == original
+    store.validate_all()
+
+
+def test_refreshed_bangumi_roster_excludes_removed_identity_and_retains_its_raw_evidence(cast):
+    library, store = cast
+    scope = store.context("asset_one")["scope_id"]
+    dossier = bangumi_dossier()
+    dossier["characters"].append({"id": 201, "name": "Nana", "name_cn": "奈奈", "aliases": []})
+    registry = store.seed_bangumi(scope, dossier)
+    removed = next(profile["id"] for profile in registry["profiles"].values()
+                   if profile["external_source"]["character_id"] == 201)
+    save(library, store, observation(character_id=removed), registry["revision"])
+    store.seed_bangumi(scope, bangumi_dossier())
+    assert [profile["external_source"]["character_id"] for profile in store.catalog("asset_one")["profiles"]] == [200]
+    assert store.context("asset_one")["cast_policy"]["character_ids"] == [200]
+    assert store.decorate_observations("asset_one", library.observations("asset_one"))[0]["entities"][0]["character_id"] is None
+    assert library.observations("asset_one")[0]["entities"][0]["character_id"] == removed
+    store.validate_all()
+
+
+def test_legacy_anonymous_dossier_stays_hidden_after_appearance_enrichment(cast):
+    _library, store = cast
+    scope = store.context("asset_one")["scope_id"]
+    registry = store._read(scope)
+    registry["profiles"]["character_legacy"] = {
+        "id": "character_legacy", "name": "站在窗边的人", "aliases": [],
+        "description": "站在窗边的人\n戴红围巾", "notes": "", "appearance": [],
+        "user_edited": False, "edited_fields": [], "created_at": "old", "updated_at": "old", "representative": None}
+    atomic_json(store._path(scope), registry)
+    assert store.catalog("asset_one")["profiles"] == []
+
+
+@pytest.mark.parametrize("refresh", ["seed", "catalog"])
+def test_bangumi_biography_repair_retains_visual_evidence_and_human_description(cast, refresh):
+    library, store = cast
+    dossier = bangumi_dossier()
+    asset = library.get_asset("asset_one")
+    library.organization.save_project({"anime_profile": {"mode": "bangumi", "dossier": dossier}}, asset["project_id"])
+    initial = store.catalog("asset_one")
+    identity = initial["profiles"][0]["id"]
+    save(library, store, observation(character_id=identity, observed_traits=["红衣", "黑色短发"]), initial["revision"])
+    immutable = next(library.asset_dir("asset_one").glob("analyses/*/observations/*.json"))
+    original_evidence = immutable.read_bytes()
+    registry = store._read(initial["scope_id"])
+    registry["profiles"][identity]["description"] += "\n穿红衣服的人\n拿杯子，站在右边"
+    atomic_json(store._path(initial["scope_id"]), registry)
+
+    def refresh_profile():
+        if refresh == "seed":
+            store.seed_bangumi(initial["scope_id"], dossier)
+        return store.catalog("asset_one")["profiles"][0]
+
+    repaired = refresh_profile()
+    official = dossier["characters"][0]["description"]
+    assert repaired["description"] == official
+    assert repaired["reference_description"] == official
+    assert repaired["appearance"] == ["红衣", "黑色短发"]
+    assert repaired["appearance_count"] == 1
+    assert immutable.read_bytes() == original_evidence
+    store.update("asset_one", identity, {"description": "人工确认的角色简介"})
+    protected = refresh_profile()
+    assert protected["description"] == "人工确认的角色简介"
+    assert protected["reference_description"] == official
+    assert immutable.read_bytes() == original_evidence
+
+
+@pytest.mark.parametrize("biography", ["小葵的官方简介", ""])
+def test_merged_bangumi_sources_reseed_primary_names_and_biography_idempotently(cast, biography):
+    library, store = cast
+    dossier = bangumi_dossier()
+    dossier["characters"][0].update(name="葵", name_ja="葵", name_en="Aoi", description=biography)
+    dossier["characters"].append({"id": 201, "name": "奈々", "name_ja": "奈々", "name_cn": "奈奈",
+                                  "name_en": "Nana", "aliases": [], "description": "奈奈的另一份官方简介"})
+    asset = library.get_asset("asset_one")
+    library.organization.save_project({"anime_profile": {"mode": "bangumi", "dossier": dossier}}, asset["project_id"])
+    initial = store.catalog("asset_one")
+    roles = {profile["external_source"]["character_id"]: profile["id"] for profile in initial["profiles"]}
+    store.merge("asset_one", roles[201], roles[200])
+    scope = initial["scope_id"]
+    seeded = store.seed_bangumi(scope, dossier)
+    primary = seeded["profiles"][roles[200]]
+    assert primary["name"] == "小葵"
+    assert (primary["name_cn"], primary["name_ja"], primary["name_en"]) == ("小葵", "葵", "Aoi")
+    assert primary["description"] == primary["reference_description"] == biography
+    assert primary["external_source"]["character_id"] == 200
+    assert [source["character_id"] for source in primary["external_sources"]] == [201]
+    assert "Nana" in primary["aliases"]
+    assert any(variant["name"] == "Nana" for variant in primary["name_variants"])
+    assert store.seed_bangumi(scope, dossier) == seeded
+    for _ in range(2):
+        profile = store.catalog("asset_one")["profiles"][0]
+        assert profile["name_en"] == "Aoi" and profile["description"] == biography
+        assert store._read(scope) == seeded

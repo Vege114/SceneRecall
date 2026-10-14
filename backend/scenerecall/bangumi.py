@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import math
 import os
@@ -9,7 +10,9 @@ import re
 import shutil
 import signal
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -20,7 +23,16 @@ MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_DIAGNOSTIC_BYTES = 64 * 1024
 PAGE_SIZE = 100
 MAX_CHARACTERS = 1000
+NAME_SCHEMA_VERSION = 1
 _HOSTS = {"bgm.tv", "bangumi.tv", "chii.in", "www.bgm.tv", "www.bangumi.tv", "www.chii.in"}
+_CHINESE_NAME_KEYS = {"中文名", "简体中文名", "繁体中文名", "第二中文名", "中文名称"}
+_JAPANESE_NAME_KEYS = {"日文名", "日本語名", "日本名"}
+_ENGLISH_NAME_KEYS = {"英文名", "英语名", "English name"}
+_ROMAN_NAME_KEYS = {"罗马字", "罗马音", "罗马字名", "Romanized name", "Romaji"}
+_READING_KEYS = {"纯假名", "假名", "读音", "ふりがな"}
+_ALIAS_KEYS = {"别名", "别称", "昵称"}
+_NAME_KEYS = (_CHINESE_NAME_KEYS | _JAPANESE_NAME_KEYS | _ENGLISH_NAME_KEYS | _ROMAN_NAME_KEYS
+              | _READING_KEYS | _ALIAS_KEYS)
 
 
 class BangumiError(ValueError):
@@ -86,17 +98,165 @@ def _image(value: dict) -> str | None:
     return None
 
 
-def _infobox_values(infobox: Any, keys: set[str]) -> list[str]:
-    values = []
+def _infobox_entries(infobox: Any):
+    """Retain the nested k labels used by both Bangumi API infobox formats."""
     for entry in infobox if isinstance(infobox, list) else []:
-        if not isinstance(entry, dict) or entry.get("key") not in keys:
+        if not isinstance(entry, dict):
             continue
+        key = _text(entry.get("key"))
         raw = entry.get("values", entry.get("value", []))
         for value in raw if isinstance(raw, list) else [raw]:
             text = _text(value.get("v", value.get("value"))) if isinstance(value, dict) else _text(value)
-            if text and text not in values:
+            label = _text(value.get("k", value.get("key"))) if isinstance(value, dict) else ""
+            if text:
+                yield key, label or key, text
+
+
+def _infobox_values(infobox: Any, keys: set[str]) -> list[str]:
+    values = []
+    for key, label, text in _infobox_entries(infobox):
+        if key in keys or label in keys:
+            if text not in values:
                 values.append(text)
     return values
+
+
+def _kana(value: str) -> bool:
+    return bool(re.fullmatch(r"[\u3041-\u3096\u30a1-\u30faー\s・･]+", value))
+
+
+def _han_name(value: str) -> bool:
+    return bool(re.fullmatch(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\s·・]+", value))
+
+
+def _latin_name(value: str) -> bool:
+    letters = [char for char in value if char.isalpha()]
+    return bool(letters) and all("LATIN" in unicodedata.name(char, "") for char in letters)
+
+
+@lru_cache(maxsize=1)
+def _kana_converter():
+    from pykakasi import kakasi
+    return kakasi()
+
+
+@lru_cache(maxsize=1)
+def _han_converter():
+    from opencc import OpenCC
+    return OpenCC("t2s")
+
+
+def _romanize_reading(reading: str) -> str:
+    # Only transliterate an existing kana reading. Kanji dictionaries can guess
+    # the wrong personal-name reading, and a transliteration is not an official
+    # English localization. Preserve the source's word order and separators.
+    if not _kana(reading):
+        return ""
+    words = re.split(r"[\s・･]+", reading.strip())
+    result = " ".join("".join(part["hepburn"] for part in _kana_converter().convert(word)).capitalize()
+                      for word in words if word)
+    return result if _latin_name(result) else ""
+
+
+def character_names(raw: dict) -> dict:
+    """Source-backed multilingual display names, with explicit conversion provenance."""
+    url = _text(raw.get("url")) or f"https://bgm.tv/character/{_id(raw.get('id'))}"
+    entries = [(label, text) for key, label, text in _infobox_entries(raw.get("infobox"))
+               if key in _NAME_KEYS or label in _NAME_KEYS]
+    variants = []
+    for variant in raw.get("name_variants", []) or []:
+        if (isinstance(variant, dict) and _text(variant.get("name"))
+                and all(isinstance(variant.get(field), str)
+                        for field in ("language", "kind", "source", "source_url"))):
+            variants.append(copy.deepcopy(variant))
+
+    def add(name, language, kind="alias", source="bangumi", *, preserve=False):
+        if not name:
+            return
+        # A derived name loaded from a cache must retain its original provenance.
+        if any(item["name"] == name and item["language"] == language
+               and (preserve or item["source"] == source) for item in variants):
+            return
+        variants.append({"name": name, "language": language, "kind": kind,
+                         "source": source, "source_url": url})
+
+    for label, text in entries:
+        if label in _CHINESE_NAME_KEYS:
+            add(text, "zh-Hant" if label == "繁体中文名" else "zh-Hans")
+        elif label in _JAPANESE_NAME_KEYS:
+            add(text, "ja")
+        elif label in _ENGLISH_NAME_KEYS:
+            add(text, "en")
+        elif label in _ROMAN_NAME_KEYS:
+            add(text, "ja-Latn", "romanization")
+        elif label in _READING_KEYS:
+            add(text, "ja", "reading")
+        else:
+            add(text, "ja" if re.search(r"[\u3041-\u30fa]", text) else "und")
+
+    def first(keys):
+        return next((text for label, text in entries if label in keys), "")
+
+    def stored(field, language):
+        value = _text(raw.get(field))
+        # Older normalized snapshots may have a derived display name. Fresh
+        # infobox names should replace it, while repeated local upgrades must
+        # never relabel a conversion as an upstream name.
+        if any(item["name"] == value and item["language"] == language and item["source"] == "bangumi"
+               for item in variants):
+            return value
+        if any(item["name"] == value and item["source"] != "bangumi" for item in variants):
+            return ""
+        return value
+
+    original = _text(raw.get("name"))
+    chinese = (_text(raw.get("nameCN")) or stored("name_cn", "zh-Hans")
+               or first(_CHINESE_NAME_KEYS - {"繁体中文名"}) or _text(raw.get("name_cn")))
+    japanese = _text(raw.get("name_ja") or raw.get("nameJA")) or first(_JAPANESE_NAME_KEYS)
+    if not japanese and (re.search(r"[\u3041-\u30fa]", original) or first(_READING_KEYS)):
+        japanese = original
+    english = (_text(raw.get("nameEN")) or first(_ENGLISH_NAME_KEYS)
+               or stored("name_en", "en") or first(_ROMAN_NAME_KEYS) or _text(raw.get("name_en")))
+    add(original, "ja" if japanese else "und", "primary", preserve=True)
+    add(chinese, "zh-Hans", "primary", preserve=True)
+    add(japanese, "ja", "primary", preserve=True)
+    if english and not any(item["name"] == english for item in variants):
+        add(english, "en", "primary")
+
+    han_source = first({"繁体中文名"}) or original
+    if not chinese and _han_name(han_source):
+        chinese = _han_converter().convert(han_source)
+        add(chinese, "zh-Hans", "script_conversion", "opencc")
+    if not english:
+        latin = next((text for _, text in entries if _latin_name(text)), "")
+        if not latin and _latin_name(original):
+            latin = original
+        if latin:
+            english = latin
+        else:
+            reading = first(_READING_KEYS) or (original if _kana(original) else "")
+            english = _romanize_reading(reading)
+            add(english, "ja-Latn", "romanization", "kana_transliteration")
+
+    aliases = []
+    for value in [*(raw.get("aliases", []) or []),
+                  *_infobox_values(raw.get("infobox"), _NAME_KEYS - _CHINESE_NAME_KEYS),
+                  original, chinese, japanese, english,
+                  *(item["name"] for item in variants)]:
+        text = _text(value)
+        if text and text not in aliases:
+            aliases.append(text)
+    return {"name_cn": chinese, "name_ja": japanese, "name_en": english,
+            "name_variants": variants, "aliases": aliases}
+
+
+def normalize_dossier_names(dossier: dict) -> dict:
+    """Upgrade cached and durable snapshots locally, without another network read."""
+    result = copy.deepcopy(dossier)
+    for character in result.get("characters", []):
+        character.update(character_names(character))
+    result["name_schema_version"] = NAME_SCHEMA_VERSION
+    return result
 
 
 def _subject(raw: dict) -> dict:
@@ -117,19 +277,12 @@ def _subject(raw: dict) -> dict:
 def _character(raw: dict, relation: dict) -> dict:
     identifier = _id(raw.get("id"))
     infobox = raw.get("infobox", [])
-    chinese_names = _infobox_values(infobox, {"中文名", "简体中文名"})
     name = _text(raw.get("name"))
-    name_cn = _text(raw.get("name_cn") or raw.get("nameCN")) or next(iter(chinese_names), "")
-    aliases = _infobox_values(infobox, {"别名", "别称", "英文名", "日文名", "罗马字", "昵称"})
-    for alias in [name, name_cn, *chinese_names]:
-        if alias and alias not in aliases:
-            aliases.append(alias)
     role = relation.get("type", relation.get("relation", ""))
     return {
         "id": identifier,
         "name": name,
-        "name_cn": name_cn,
-        "aliases": aliases,
+        **character_names(raw),
         "description": _text(raw.get("summary") or raw.get("description") or raw.get("info")),
         "image_url": _image(raw),
         "url": f"https://bgm.tv/character/{identifier}",
@@ -243,6 +396,7 @@ class BangumiClient:
         warnings.extend(message for _, message in detailed if message)
         return {
             "source": "bangumi",
+            "name_schema_version": NAME_SCHEMA_VERSION,
             "subject": _subject(raw_subject),
             "characters": [character for character, _ in detailed],
             "fetched_at": datetime.now(timezone.utc).isoformat(),

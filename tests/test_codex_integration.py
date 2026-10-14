@@ -147,7 +147,8 @@ async def test_codex_vision_output_schema_requires_fields_and_only_current_compl
     assert event["start_ms"] == {"type": "integer", "minimum": 100, "maximum": 199}
     assert event["end_ms"] == {"type": "integer", "minimum": 100, "maximum": 200}
     assert "past-frame" not in json.dumps(schema) and "reference:" not in json.dumps(schema)
-    assert schema["$defs"]["Entity"]["properties"]["name"] == {"type": "null"}
+    name_schema = schema["$defs"]["Entity"]["properties"]["name"]
+    assert {variant["type"] for variant in name_schema["anyOf"]} == {"string", "null"}
 
 
 @pytest.mark.asyncio

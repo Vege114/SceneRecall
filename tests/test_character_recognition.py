@@ -17,9 +17,10 @@ from scenerecall.search import SearchEngine
 
 
 def character(frame_id, character_id=None, *, kind="person", description="黑色短发，蓝色外套", entity_id="person"):
-    return {"id": entity_id, "kind": kind, "name": None, "description": description,
-            "is_character": True, "character_id": character_id, "match_confidence": .92 if character_id else 0,
-            "match_reason": "稳定的发型与面部轮廓一致" if character_id else "当前没有匹配的已有档案",
+    name = "合成葵" if entity_id == "person" else "合成猫" if entity_id == "cat" else f"合成{entity_id}"
+    return {"id": entity_id, "kind": kind, "name": None if character_id else name, "description": description,
+            "is_character": True, "character_id": character_id, "match_confidence": .92,
+            "match_reason": "稳定的发型与面部轮廓一致" if character_id else f"当前画面姓名牌显示{name}",
             "observed_traits": [description], "evidence_frame_ids": [frame_id],
             "portrait_frame_id": frame_id, "portrait_box": [0, 0, .5, 1]}
 
@@ -135,7 +136,7 @@ async def test_cross_shot_cast_reuses_id_enriches_and_adds_animated_character(ca
                          if part["type"] == "image_url")
     with Image.open(io.BytesIO(base64.b64decode(reference_url.split(",", 1)[1]))) as reference:
         assert reference.size == (16, 32)
-    assert all(record["provenance"]["prompt_version"] == "scenerecall-0.2.0" for record in observations)
+    assert all(record["provenance"]["prompt_version"] == "scenerecall-0.3.0" for record in observations)
     assert all(record["character_revision"] == 0 for record in observations)
 
 
@@ -303,6 +304,35 @@ async def test_large_cast_keeps_every_dossier_but_bounds_reference_images(cast_w
     assert len(state["contexts"][1]["profiles"]) == 10
     second_content = state["payloads"][1]["messages"][1]["content"]
     assert len([part for part in second_content if part["type"] == "image_url"]) == 10  # 2 current + 8 references
+
+
+@pytest.mark.asyncio
+async def test_bangumi_observation_rejects_freeform_names_outside_dossier_projection(cast_worker, monkeypatch):
+    queue, asset, state = cast_worker
+    scope = queue.characters.context(asset["id"])["scope_id"]
+    queue.characters.seed_bangumi(scope, {
+        "source": "bangumi", "subject": {"id": 100},
+        "characters": [{"id": 200, "name": "Aoi", "name_cn": "小葵", "description": "黑色短发，蓝色外套"}]})
+
+    async def no_sleep(delay):
+        pass
+
+    monkeypatch.setattr("scenerecall.providers.asyncio.sleep", no_sleep)
+
+    def add_name(data, context, at):
+        data["entities"][0].update(name="额外姓名", match_reason="当前画面胸牌写着额外姓名")
+
+    state["callback"] = add_name
+    job = await run_cast(queue, asset)
+    assert job["status"] == "partial"
+    assert queue.library.observations(asset["id"]) == []
+    assert [profile["name"] for profile in queue.characters.catalog(asset["id"])["profiles"]] == ["小葵"]
+
+
+def test_bangumi_structured_output_forbids_freeform_names():
+    from scenerecall.providers import _vision_output_schema
+    schema = _vision_output_schema({"frame_one"}, {"character_one"}, 0, 1000, named_identities=False)
+    assert schema["$defs"]["Entity"]["properties"]["name"] == {"type": "null"}
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,11 @@
-"""Server-owned Bangumi snapshots and atomic, additive cast initialization."""
+"""Server-owned Bangumi snapshots and atomic source-defined cast initialization."""
 from __future__ import annotations
 
 import asyncio
 import copy
 from datetime import datetime, timezone
 
-from .bangumi import BangumiClient, BangumiError, parse_subject_reference
+from .bangumi import BangumiClient, BangumiError, normalize_dossier_names, parse_subject_reference
 from .library import atomic_json, read_json
 
 
@@ -43,8 +43,37 @@ def check_binding(current, selection):
         raise ValueError("此项目已使用另一个 Bangumi 档案，请使用独立项目导入不同作品")
 
 
+def _name_priority(character, field, name):
+    languages = {"name_cn": {"zh-Hans", "zh-Hant"}, "name_ja": {"ja"},
+                 "name_en": {"en", "ja-Latn", "und"}}[field]
+    priorities = [4 if entry.get("source") == "bangumi" and entry.get("language") == "en"
+                  else 3 if entry.get("source") == "bangumi" else 1
+                  for entry in character.get("name_variants", [])
+                  if entry.get("name") == name and entry.get("language") in languages]
+    return max(priorities, default=0)
+
+
+def _dossier_timestamp(dossier):
+    """Accept legacy naive ISO timestamps as UTC, and distrust invalid dates."""
+    value = dossier.get("fetched_at")
+    if not isinstance(value, str):
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        return timestamp.replace(tzinfo=timezone.utc) if timestamp.tzinfo is None else timestamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
 def merge_dossier(previous, incoming):
-    """Fill missing source metadata and append new roles, retaining prior data."""
+    """Use the newest dated roster, even when replaying older import snapshots."""
+    previous = normalize_dossier_names(previous)
+    incoming = normalize_dossier_names(incoming)
+    previous_time, incoming_time = _dossier_timestamp(previous), _dossier_timestamp(incoming)
+    # A moved episode or resumed import can carry an older dossier. Invalid
+    # timestamps cannot establish that its roster supersedes the saved one.
+    roster = (incoming if incoming_time is not None and (previous_time is None or incoming_time >= previous_time)
+              else previous)
     result = copy.deepcopy(previous)
     for key, value in incoming.items():
         if key not in {"characters", "subject", "fetched_at", "warnings"} and not result.get(key):
@@ -53,21 +82,30 @@ def merge_dossier(previous, incoming):
         if not result["subject"].get(key) and value:
             result["subject"][key] = copy.deepcopy(value)
     roles = {role["id"]: role for role in result["characters"]}
-    for role in incoming["characters"]:
+    incoming_roles = {role["id"]: role for role in incoming["characters"]}
+    result["characters"] = []
+    for roster_role in roster["characters"]:
+        role = incoming_roles.get(roster_role["id"], roster_role)
         if role["id"] not in roles:
             result["characters"].append(copy.deepcopy(role))
-            roles[role["id"]] = result["characters"][-1]
         else:
-            existing = roles[role["id"]]
+            existing = copy.deepcopy(roles[role["id"]])
             for key, value in role.items():
-                if not existing.get(key) and value:
+                if key in {"aliases", "name_variants"}:
+                    for entry in value:
+                        if entry not in existing.setdefault(key, []):
+                            existing[key].append(copy.deepcopy(entry))
+                elif key in {"name_cn", "name_ja", "name_en"} and value:
+                    if (not existing.get(key)
+                            or _name_priority(role, key, value) > _name_priority(roles[role["id"]], key, existing[key])):
+                        existing[key] = copy.deepcopy(value)
+                elif not existing.get(key) and value:
                     existing[key] = copy.deepcopy(value)
             if not role.get("detail_error"):
                 existing.pop("detail_error", None)
-    if incoming.get("warnings") != result.get("warnings"):
-        result["warnings"] = copy.deepcopy(incoming.get("warnings", []))
-    if result != previous:
-        result["fetched_at"] = incoming["fetched_at"]
+            result["characters"].append(existing)
+    result["warnings"] = copy.deepcopy(roster.get("warnings", []))
+    result["fetched_at"] = roster["fetched_at"]
     return result
 
 
@@ -96,10 +134,14 @@ class AnimeProfileStore:
                     fetched = datetime.fromisoformat(cached["fetched_at"].replace("Z", "+00:00"))
                     age = (datetime.now(timezone.utc) - fetched).total_seconds()
                     if cached["subject"]["id"] == subject_id and 0 <= age < 86400:
+                        upgraded = normalize_dossier_names(cached)
+                        if upgraded != cached:
+                            atomic_json(path, upgraded)
+                        cached = upgraded
                         return copy.deepcopy(cached)
                 except (ValueError, TypeError, KeyError):
                     pass
-            dossier = await self.client.dossier(subject_id)
+            dossier = normalize_dossier_names(await self.client.dossier(subject_id))
             validate_profile({"mode": "bangumi", "dossier": dossier})
             if dossier["subject"]["id"] != subject_id:
                 raise BangumiError("Bangumi 返回的条目与所选作品不一致，请重试")
@@ -162,6 +204,7 @@ class AnimeProfileStore:
             if selection["mode"] == "bangumi":
                 if not dossier or dossier["subject"]["id"] != selection["subject_id"]:
                     raise ValueError("导入任务缺少所选 Bangumi 档案，请重新提交")
+                dossier = normalize_dossier_names(dossier)
                 profile["dossier"] = copy.deepcopy(dossier)
             validate_profile(profile)
             previous = target.get("anime_profile")

@@ -28,6 +28,8 @@ def appearance(library, store, asset_id="asset_one", number=1, character_id=None
               "window_id": f"window_{number}", "shot_id": "shot_test", "start_ms": (number - 1) * 1000,
               "end_ms": number * 1000, "summary": "人物拿着杯子", "evidence_frame_ids": ["frame_test"],
               "entities": [{"id": "person", "kind": "person", "description": "红衣人物",
+                            "name": f"合成葵{number}", "match_confidence": .95,
+                            "match_reason": f"当前画面胸牌显示合成葵{number}",
                             "character_id": character_id, "evidence_frame_ids": ["frame_test"]}]}
     linked = store.apply_observation(asset_id, record)
     library.save_observation(asset_id, linked)
@@ -370,13 +372,14 @@ def test_keyframe_plan_preserves_precise_origin_for_legacy_rounded_manifest(libr
 
 
 def bangumi_archive(subject_id=100):
-    return {"source": "bangumi", "fetched_at": "2026-10-14T00:00:00Z",
+    from scenerecall.bangumi import normalize_dossier_names
+    return normalize_dossier_names({"source": "bangumi", "fetched_at": "2026-10-14T00:00:00Z",
             "subject": {"id": subject_id, "name": f"Synthetic anime {subject_id}", "name_cn": "测试动画",
                         "url": f"https://bgm.tv/subject/{subject_id}", "summary": "作品的先验资料"},
             "characters": [{"id": 200 + index, "name": f"Role {index}", "name_cn": f"条目角色 {index}",
                             "aliases": [f"原作别名 {index}"], "description": f"角色 {index} 的条目资料",
                             "url": f"https://bgm.tv/character/{200 + index}", "image_url": None}
-                           for index in range(2)]}
+                           for index in range(2)]})
 
 
 def test_standalone_bangumi_move_inherits_archive_and_zero_appearance_cast(library):
@@ -400,6 +403,29 @@ def test_standalone_bangumi_move_inherits_archive_and_zero_appearance_cast(libra
     assert corrected["notes"] == "未识别前的人工作品设定" and corrected["user_edited"]
     assert all(profile["representative"] is None for profile in moved["profiles"])
     assert store.context(asset["id"])["work_summary"]["id"] == 100
+    store.validate_all()
+
+
+def test_move_into_bangumi_project_does_not_copy_a_nonroster_local_dossier(library):
+    source = seed(library, "asset_local", series="")
+    target = seed(library, "asset_target", series="目标动画")
+    store = CharacterStore(library)
+    local_id = appearance(library, store, source["id"])
+    original_path = next(library.asset_dir(source["id"]).glob("analyses/*/observations/*.json"))
+    original = original_path.read_bytes()
+    profiles = AnimeProfileStore(library)
+    profiles.apply_project(target["project_id"], {"mode": "bangumi", "subject_id": 100}, bangumi_archive())
+    library.organization.assign([source["id"]], target["project_id"])
+    moved = library.get_asset(source["id"])
+    registry = store._read(moved["character_scope_id"])
+    assert len(registry["profiles"]) == 2
+    assert all(profile.get("external_source") for profile in registry["profiles"].values())
+    assert registry["imports"][source["character_scope_id"]][local_id] is None
+    assert store.decorate_observations(source["id"], library.observations(source["id"]))[0]["entities"][0]["character_id"] is None
+    assert original_path.read_bytes() == original
+    library.organization.assign([source["id"]], None)
+    assert len(store.catalog(source["id"])["profiles"]) == 2
+    assert all(profile.get("external_source") for profile in store.catalog(source["id"])["profiles"])
     store.validate_all()
 
 

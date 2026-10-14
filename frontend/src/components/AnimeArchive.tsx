@@ -111,7 +111,7 @@ export function useAnimeArchives(items: ImportInput[], project?: Project) {
 }
 
 export function AnimeArchivePreview({ profile }: { profile: AnimeProfile }) {
-  if (profile.mode === 'scratch') return <p className="anime-scratch">从零建立档案 · 后续画面识别持续补充人物与作品信息。</p>;
+  if (profile.mode === 'scratch') return <p className="anime-scratch">从零建立档案 · 仅为能够确认姓名的人物建档，后续识别补充出场证据。</p>;
   const { subject, characters } = profile.dossier;
   return <div className="anime-archive-preview">
     {subject.image_url && <img src={subject.image_url} alt={`${subject.name_cn || subject.name}的 Bangumi 封面`} loading="lazy" referrerPolicy="no-referrer" />}
@@ -131,7 +131,7 @@ export default function AnimeArchivePicker({ item, archives, readOnly = false }:
   const existing = archives.existingFor(item);
   const loading = ['searching', 'reading'].includes(state.status);
   return <section className="anime-archive-picker" aria-label="动画初始档案" aria-live="polite">
-    <h3>动画初始档案</h3><p className="helper">先利用 Bangumi 的作品与角色资料，后续识别继续补充。</p>
+    <h3>动画初始档案</h3><p className="helper">使用 Bangumi 列出的角色档案，后续识别补充外观与出场证据。</p>
     {existing && <p className="helper">沿用项目已保存的档案，同一作品的各集共享使用。</p>}
     {readOnly && !existing && <p className="helper">重试沿用这次导入已选择的档案。</p>}
     {loading && <Spinner label={state.status === 'reading' ? '正在读取 Bangumi 作品与角色资料' : `正在 Bangumi 查找「${state.query}」`} />}

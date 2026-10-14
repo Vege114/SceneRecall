@@ -340,6 +340,10 @@ class OrganizationStore:
                 if target_scope not in registries:
                     registries[target_scope] = store._read(target_scope)
                 target = registries[target_scope]
+                archive = (catalog["projects"][project_id].get("anime_profile") if project_id
+                           else source_archives[asset_id] or old.get("anime_profile"))
+                source_policy = store.cast_policy(old_registries[source_scope], source_archives[asset_id])
+                target_policy = store.cast_policy(target, archive)
                 imports = target.setdefault("imports", {})
                 bindings = {}
                 evidence_dir = self.library.asset_dir(asset_id)
@@ -353,6 +357,12 @@ class OrganizationStore:
                             continue
                         source_id = self.resolve_reference(asset_id, record, original_id,
                             old_registries[source_scope], strict=True, catalog=catalog)
+                        if source_id is not None:
+                            source_profile = old_registries[source_scope]["profiles"][source_id]
+                            if (not store.profile_allowed(source_profile, source_policy)
+                                    or not store.profile_allowed(source_profile, target_policy)):
+                                imports.setdefault(source_scope, {})[source_id] = None
+                                source_id = None
                         target_id = None
                         if source_id is not None:
                             imported = imports.setdefault(source_scope, {})
@@ -398,7 +408,9 @@ class OrganizationStore:
                 # edited profiles and identity decisions as well as the dossier.
                 source_registry = old_registries[source_scope]
                 for source_id, source_profile in source_registry["profiles"].items():
-                    if not external_sources(source_profile):
+                    if (not external_sources(source_profile)
+                            or not store.profile_allowed(source_profile, source_policy)
+                            or not store.profile_allowed(source_profile, target_policy)):
                         continue
                     imported = imports.setdefault(source_scope, {})
                     if source_id in imported:

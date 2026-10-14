@@ -2,12 +2,14 @@
 import asyncio
 import copy
 import subprocess
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from scenerecall.bangumi import BangumiError
-from scenerecall.library import now, read_json
+from scenerecall.anime_profiles import merge_dossier
+from scenerecall.library import atomic_json, now, read_json
 from scenerecall.main import create_app
 from scenerecall.providers import ProviderManager
 
@@ -94,6 +96,159 @@ def test_link_reads_cached_server_data_and_rejects_arbitrary_urls(client):
     second = client.post("/api/bangumi/subject", json={"reference": "42"})
     assert second.json() == first.json()
     assert client.app.state.bangumi.client.calls == [("dossier", 42)]
+
+
+def test_fresh_legacy_cache_upgrades_names_locally_and_retains_conversion_source(client):
+    path = client.app.state.library.root / "runtime" / "bangumi" / "42.json"
+    old = archive()
+    old["characters"] = [{"id": 150045, "name": "櫻木麗", "name_cn": "", "aliases": ["原始别名"],
+                          "infobox": [{"key": "别名", "values": [{"k": "罗马字", "v": "Sakuragi Rei"}]}]}]
+    atomic_json(path, old)
+    client.app.state.bangumi.client.fail = True
+    result = client.post("/api/bangumi/subject", json={"reference": "42"})
+    assert result.status_code == 200, result.text
+    upgraded = result.json()
+    assert upgraded["characters"][0]["name_cn"] == "樱木丽"
+    assert upgraded["characters"][0]["name_en"] == "Sakuragi Rei"
+    assert upgraded["fetched_at"] == old["fetched_at"]
+    assert read_json(path) == upgraded
+    assert client.app.state.bangumi.client.calls == []
+    assert client.post("/api/bangumi/subject", json={"reference": "42"}).json() == upgraded
+
+
+def test_dossier_refresh_keeps_current_roster_and_merges_new_name_variants():
+    first = archive()
+    first["characters"].append({"id": 8, "name": "已离开来源名单", "aliases": []})
+    second = archive()
+    second["characters"][0]["infobox"] = [{"key": "别名", "values": [
+        {"k": "英文名", "v": "Example Character"},
+    ]}]
+    merged = merge_dossier(first, second)
+    assert [value["id"] for value in merged["characters"]] == [7]
+    character = merged["characters"][0]
+    assert character["name_en"] == "Example Character"
+    assert "Example Character" in character["aliases"] and "测试别名" in character["aliases"]
+    assert any(value["name"] == "Example Character" and value["language"] == "en"
+               for value in character["name_variants"])
+    assert merge_dossier(merged, second) == merged
+
+
+def test_source_names_replace_converted_names_and_preserve_the_conversion_history():
+    first = archive()
+    first["characters"] = [{"id": 150045, "name": "櫻木麗", "aliases": [], "infobox": [
+        {"key": "别名", "values": [{"k": "纯假名", "v": "さくらぎ れい"}]},
+    ]}]
+    derived = merge_dossier(first, first)
+    assert derived["characters"][0]["name_cn"] == "樱木丽"
+    assert derived["characters"][0]["name_en"] == "Sakuragi Rei"
+    second = copy.deepcopy(first)
+    second["characters"][0]["infobox"] = [
+        {"key": "简体中文名", "value": "樱木玲"},
+        {"key": "别名", "value": [{"k": "英文名", "v": "Rei Sakuragi"},
+                                   {"k": "纯假名", "v": "さくらぎ れい"}]},
+    ]
+    merged = merge_dossier(derived, second)
+    character = merged["characters"][0]
+    assert character["name_cn"] == "樱木玲" and character["name_en"] == "Rei Sakuragi"
+    assert set(character["aliases"]) >= {"樱木丽", "樱木玲", "Sakuragi Rei", "Rei Sakuragi"}
+    assert any(value["name"] == "樱木丽" and value["source"] == "opencc" for value in character["name_variants"])
+    assert any(value["name"] == "樱木玲" and value["source"] == "bangumi" for value in character["name_variants"])
+    assert merge_dossier(merged, second) == merged
+
+
+def test_source_can_confirm_a_name_with_the_same_text_as_a_conversion():
+    first = archive()
+    first["characters"] = [{"id": 150045, "name": "櫻木麗", "aliases": []}]
+    derived = merge_dossier(first, first)
+    second = copy.deepcopy(first)
+    second["characters"][0]["infobox"] = [{"key": "简体中文名", "value": "樱木丽"}]
+    merged = merge_dossier(derived, second)
+    variants = merged["characters"][0]["name_variants"]
+    assert {value["source"] for value in variants if value["name"] == "樱木丽"} == {"bangumi", "opencc"}
+    assert merge_dossier(merged, second) == merged
+
+
+@pytest.mark.parametrize("older_time", ["2026-10-01T00:00:00Z", "2026-10-01 00:00:00", "invalid-date"])
+def test_older_or_undated_snapshot_cannot_roll_back_the_roster_but_can_fill_metadata(older_time):
+    latest = archive()
+    latest["fetched_at"] = "2026-10-14T08:00:00+08:00"
+    latest["characters"][0]["description"] = ""
+    latest["characters"].append({"id": 9, "name": "Current", "aliases": []})
+    older = archive()
+    older["fetched_at"] = older_time
+    older["characters"][0]["aliases"].append("旧资料有源别名")
+    older["characters"].append({"id": 8, "name": "Removed", "aliases": []})
+    merged = merge_dossier(latest, older)
+    assert [value["id"] for value in merged["characters"]] == [7, 9]
+    assert merged["fetched_at"] == latest["fetched_at"]
+    assert merged["characters"][0]["description"] == older["characters"][0]["description"]
+    assert "旧资料有源别名" in merged["characters"][0]["aliases"]
+    assert merge_dossier(merged, older) == merged
+
+
+def test_latest_roster_date_is_recorded_even_when_no_metadata_changed():
+    first = archive()
+    first["fetched_at"] = "2026-10-01T00:00:00Z"
+    refresh = copy.deepcopy(first)
+    refresh["fetched_at"] = "2026-10-14T00:00:00Z"
+    merged = merge_dossier(first, refresh)
+    assert merged["fetched_at"] == refresh["fetched_at"]
+    middle = copy.deepcopy(first)
+    middle["fetched_at"] = "2026-10-07T00:00:00Z"
+    middle["characters"].append({"id": 8, "name": "Older-only", "aliases": []})
+    assert [value["id"] for value in merge_dossier(merged, middle)["characters"]] == [7]
+
+
+def test_legacy_unknown_dates_keep_the_saved_roster_until_a_valid_refresh_arrives():
+    saved = archive()
+    saved["fetched_at"] = "old"
+    invalid = copy.deepcopy(saved)
+    invalid["fetched_at"] = "not-a-date"
+    invalid["characters"].append({"id": 8, "name": "Unverified refresh", "aliases": []})
+    assert [value["id"] for value in merge_dossier(saved, invalid)["characters"]] == [7]
+    invalid["fetched_at"] = "2026-10-14"
+    assert [value["id"] for value in merge_dossier(saved, invalid)["characters"]] == [7, 8]
+
+
+def test_moving_old_asset_into_refreshed_project_keeps_the_newest_roster(client, video):
+    payload = import_request(video, selection={"mode": "bangumi", "subject_id": 42})
+    job = client.post("/api/imports", json=payload).json()
+    done = execute(client, job["id"])
+    assert done["status"] == "completed", done
+    asset_id = done["items"][0]["asset_id"]
+    old = client.app.state.library.get_asset(asset_id)["anime_profile"]["dossier"]
+    latest = copy.deepcopy(old)
+    latest["fetched_at"] = (datetime.fromisoformat(old["fetched_at"]) + timedelta(seconds=1)).isoformat()
+    latest["characters"] = [{"id": 9, "name": "Current", "name_cn": "现有角色", "aliases": []}]
+    project = client.post("/api/projects", json={"name": "较新档案项目", "kind": "animation"}).json()
+    client.app.state.bangumi.apply_project(project["id"], {"mode": "bangumi", "subject_id": 42}, latest)
+    client.app.state.library.organization.assign([asset_id], project["id"])
+    profile = client.app.state.library.get_asset(asset_id)["anime_profile"]["dossier"]
+    assert [value["id"] for value in profile["characters"]] == [9]
+    assert profile["fetched_at"] == latest["fetched_at"]
+    assert [value["external_source"]["character_id"]
+            for value in client.app.state.characters.catalog(asset_id)["profiles"]] == [9]
+
+
+def test_frozen_import_snapshot_cannot_roll_back_a_newer_project_roster(client, video):
+    project = client.post("/api/projects", json={"name": "已刷新档案项目", "kind": "animation"}).json()
+    payload = import_request(video, project_id=project["id"], selection={"mode": "bangumi", "subject_id": 42})
+    job = client.post("/api/imports", json=payload).json()
+    frozen = client.app.state.jobs.get(job["id"])["config"]["items"][0]["anime_dossier"]
+    latest = copy.deepcopy(frozen)
+    latest["fetched_at"] = (datetime.fromisoformat(frozen["fetched_at"]) + timedelta(seconds=1)).isoformat()
+    latest["characters"] = [{"id": 9, "name": "Current", "name_cn": "现有角色", "aliases": []}]
+    client.app.state.bangumi.apply_project(project["id"], {"mode": "bangumi", "subject_id": 42}, latest)
+    client.app.state.bangumi.client.fail = True
+    done = execute(client, job["id"])
+    assert done["status"] == "completed", done
+    asset_id = done["items"][0]["asset_id"]
+    profile = client.app.state.library.get_asset(asset_id)["anime_profile"]["dossier"]
+    assert [value["id"] for value in profile["characters"]] == [9]
+    assert profile["fetched_at"] == latest["fetched_at"]
+    assert [value["external_source"]["character_id"]
+            for value in client.app.state.characters.catalog(asset_id)["profiles"]] == [9]
+    assert client.app.state.jobs.get(job["id"])["config"]["items"][0]["anime_dossier"] == frozen
 
 
 def test_import_seeds_shared_cast_before_first_recognition_and_replay_is_offline(client, video):

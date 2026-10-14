@@ -17,8 +17,8 @@ def character_observations(worker, monkeypatch):
         result = await analyze(identity, frames, start, end, *contexts)
         result.data.update(
             entities=[{"id": "actor", "kind": "person", "description": "合成蓝衣人物",
-                       "is_character": True, "character_id": None, "match_confidence": 0,
-                       "match_reason": "合成首次出场", "observed_traits": ["合成蓝衣"],
+                       "is_character": True, "name": "小蓝", "character_id": None, "match_confidence": .9,
+                       "match_reason": "合成台词明确称呼：小蓝", "observed_traits": ["合成蓝衣"],
                        "evidence_frame_ids": [frames[1]["id"]],
                        "portrait_frame_id": frames[1]["id"], "portrait_box": [0, 0, 1, 1]}],
             events=[{"actor_ids": ["actor"], "target_ids": [], "action": "合成转身动作",

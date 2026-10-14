@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 import unicodedata
 from pathlib import Path
 
@@ -22,6 +23,11 @@ BANGUMI_REFERENCE_POLICY = (
     "They do not establish current presence, appearance, actions or relationships; "
     "current observations must be supported by the supplied video frames."
 )
+CAST_POLICY = {
+    "mode": "named_only",
+    "allow_new_profiles": True,
+    "instruction": "Create dossiers only for named narrative characters with supported identity; anonymous people, appearance labels and temporary entity IDs remain observations only.",
+}
 
 
 class StaleCharacterRevision(ValueError):
@@ -85,6 +91,27 @@ def external_sources(profile: dict) -> list[dict]:
             if source is not None]
 
 
+def named_identity(value) -> str | None:
+    """A supplied identity must be a name, never an appearance/temporary label."""
+    if not isinstance(value, str) or not value.strip() or len(value) > 200:
+        return None
+    name = value.strip()
+    if normalized(name) in {"unknown", "unidentified", "unnamed", "anonymous", "none", "null", "n/a", "未知", "不明", "待确认"}:
+        return None
+    if re.fullmatch(
+        r"(?:未命名|未知|不明|待确认|匿名|unknown[_\s-]*|unidentified[_\s-]*|unnamed[_\s-]*|anonymous[_\s-]*)?"
+        r"(?:人物|角色|路人|女孩|男孩|女人|男人|女子|男子|学生|老师|观众|工作人员|人|少女|少年|person|character|entity|woman|man|girl|boy|student|teacher|bystander|extra|crowd|people|female|male|child|teenager)"
+        r"(?:[\s_#-]*[A-Za-z\d一二三四五六七八九十甲乙丙丁]+)?", name, flags=re.I
+    ) or re.fullmatch(
+        r".*(?:学生|老师|教师|男生|女生|观众|工作人员|少女|少年|女子|男子|女孩|男孩|女人|男人|女性|男性|同学|人物|的人|青年|小孩|儿童)", name
+    ) or re.fullmatch(
+        r"(?:red|blue|black|white|short|long|left|right|background|foreground|young|old|tall|small|unidentified|unknown|anonymous|wearing|glasses|cap|hat|uniformed|stage|at|on|in|a|the)[\s_-]+[\w\s-]*(?:person|woman|man|girl|boy|student|teacher|character|child|teenager)",
+        name, flags=re.I
+    ):
+        return None
+    return name
+
+
 class CharacterStore:
     def __init__(self, library):
         self.library = library
@@ -101,12 +128,45 @@ class CharacterStore:
         return registry
 
     @staticmethod
+    def cast_policy(registry: dict, archive: dict | None = None) -> dict:
+        if archive and archive.get("mode") == "bangumi":
+            dossier = archive.get("dossier") or {}
+            return {"mode": "bangumi", "allow_new_profiles": False,
+                    "subject_id": bangumi_id(dossier.get("subject", {}).get("id")),
+                    "character_ids": sorted({bangumi_id(row.get("id")) for row in dossier.get("characters", [])}),
+                    "instruction": "The supplied Bangumi cast is the complete dossier roster. Never add another dossier; unmatched people remain observations with character_id=null."}
+        return copy.deepcopy(registry.get("cast_policy") or CAST_POLICY)
+
+    @staticmethod
+    def profile_allowed(profile: dict, policy: dict) -> bool:
+        if policy["mode"] == "bangumi":
+            return any(bangumi_id(source["subject_id"]) == policy["subject_id"]
+                       and bangumi_id(source["character_id"]) in policy["character_ids"]
+                       for source in external_sources(profile))
+        # Preserve deliberate human naming. Old machine dossiers named with their
+        # own appearance description are hidden without deleting raw evidence.
+        return ("name" in profile.get("edited_fields", [])
+                or (named_identity(profile.get("name")) is not None
+                    and normalized(profile["name"]) not in {
+                        normalized(line) for line in profile.get("description", "").splitlines()}))
+
+    @staticmethod
     def _validate_structure(registry: dict, scope: str) -> None:
         if (not isinstance(registry, dict) or registry.get("scope_id") != scope
                 or type(registry.get("revision")) is not int or registry["revision"] < 0
                 or not isinstance(registry.get("profiles"), dict)
                 or not isinstance(registry.get("redirects"), dict)):
             raise ValueError("角色档案格式或所属作品无效")
+        policy = registry.get("cast_policy")
+        if policy is not None:
+            if (not isinstance(policy, dict) or policy.get("mode") != "bangumi"
+                    or policy.get("allow_new_profiles") is not False
+                    or not isinstance(policy.get("character_ids"), list)
+                    or not isinstance(policy.get("instruction"), str)):
+                raise ValueError("角色建档策略无效")
+            bangumi_id(policy.get("subject_id"))
+            for identity in policy["character_ids"]:
+                bangumi_id(identity)
         for character_id, profile in registry["profiles"].items():
             checked_id(character_id)
             if not isinstance(profile, dict) or profile.get("id") != character_id:
@@ -145,6 +205,14 @@ class CharacterStore:
                     raise ValueError("角色外部来源图片无效")
             if not isinstance(profile.get("reference_description", ""), str):
                 raise ValueError("角色参考说明无效")
+            for field in ("name_cn", "name_ja", "name_en"):
+                if not isinstance(profile.get(field, ""), str):
+                    raise ValueError("角色多语言名称无效")
+            variants = profile.get("name_variants", [])
+            if (not isinstance(variants, list) or any(not isinstance(row, dict)
+                    or any(not isinstance(row.get(field), str)
+                           for field in ("name", "language", "kind", "source", "source_url")) for row in variants)):
+                raise ValueError("角色多语言名称来源无效")
             representative = profile.get("representative")
             if representative is not None:
                 if not isinstance(representative, dict):
@@ -233,12 +301,13 @@ class CharacterStore:
         if not isinstance(fetched_at, str) or not fetched_at.strip() or len(fetched_at) > 128:
             raise ValueError("Bangumi 档案获取时间无效")
         result = copy.deepcopy(registry)
+        result["cast_policy"] = CharacterStore.cast_policy(registry, {"mode": "bangumi", "dossier": dossier})
         timestamp = fetched_at
         for character in dossier["characters"]:
             if not isinstance(character, dict):
                 raise ValueError("Bangumi 角色档案无效")
             source_id = bangumi_id(character.get("id"))
-            for field in ("name", "name_cn", "description", "url", "image_url", "role"):
+            for field in ("name", "name_cn", "name_ja", "name_en", "description", "url", "image_url", "role"):
                 if character.get(field) is not None and not isinstance(character[field], str):
                     raise ValueError("Bangumi 角色文字字段无效")
             raw_aliases = character.get("aliases", [])
@@ -253,6 +322,16 @@ class CharacterStore:
             aliases = unique([value[:2000] for value in [character.get("name") or "",
                              character.get("name_cn") or "", *raw_aliases]])
             aliases = [alias for alias in aliases if normalized(alias) != normalized(name)]
+            language_names = {field: (character.get(field) or "").strip()[:200]
+                              for field in ("name_cn", "name_ja", "name_en")}
+            language_names["name_ja"] = language_names["name_ja"] or (character.get("name") or "").strip()[:200]
+            variants = character.get("name_variants", [])
+            if (not isinstance(variants, list) or any(not isinstance(row, dict)
+                    or any(not isinstance(row.get(field), str)
+                           for field in ("name", "language", "kind", "source", "source_url")) for row in variants)):
+                raise ValueError("Bangumi 角色多语言名称来源无效")
+            aliases = unique(aliases + [value for value in language_names.values()
+                                      if value and normalized(value) != normalized(name)])
             description = (character.get("description") or "").strip()[:8000]
             source = {"source": "bangumi", "subject_id": subject_id, "character_id": source_id,
                       "url": (character.get("url") or f"https://bgm.tv/character/{source_id}")[:2000],
@@ -286,7 +365,8 @@ class CharacterStore:
                            "description": description, "reference_description": description,
                            "notes": "", "appearance": [], "user_edited": False, "edited_fields": [],
                            "created_at": timestamp, "updated_at": timestamp, "representative": None,
-                           "external_source": source}
+                           "external_source": source, **language_names,
+                           "name_variants": copy.deepcopy(variants)}
                 result["profiles"][character_id] = profile
                 continue
             before = copy.deepcopy(profile)
@@ -294,7 +374,7 @@ class CharacterStore:
             matching_source = next((origin for origin in known_sources
                 if bangumi_id(origin["character_id"]) == source_id
                 and bangumi_id(origin["subject_id"]) == subject_id), None)
-            if not known_sources:
+            if not profile.get("external_source"):
                 profile["external_source"] = source
             elif matching_source is None:
                 profile.setdefault("external_sources", []).append(source)
@@ -302,13 +382,33 @@ class CharacterStore:
                 for field, value in source.items():
                     if not matching_source.get(field) and value:
                         matching_source[field] = value
-            if not profile.get("reference_description") and description:
+            primary = profile["external_source"]
+            is_primary = (bangumi_id(primary["subject_id"]) == subject_id
+                          and bangumi_id(primary["character_id"]) == source_id)
+            if is_primary:
+                if "name" not in profile["edited_fields"] and profile["name"] != name:
+                    if "aliases" not in profile["edited_fields"]:
+                        profile["aliases"] = unique([*profile["aliases"], profile["name"]])
+                    profile["name"] = name
+                for field, value in language_names.items():
+                    if value:
+                        profile[field] = value
                 profile["reference_description"] = description
+            else:
+                aliases = unique([name, *aliases])
+            for variant in variants:
+                if variant not in profile.setdefault("name_variants", []):
+                    profile["name_variants"].append(copy.deepcopy(variant))
             locked = set(profile["edited_fields"])
             if "aliases" not in locked:
                 profile["aliases"] = unique(profile["aliases"] + aliases)
-            if not profile["description"] and "description" not in locked:
-                profile["description"] = description
+                profile["aliases"] = [alias for alias in profile["aliases"]
+                                      if normalized(alias) != normalized(profile["name"])]
+            if is_primary and "description" not in locked:
+                # Official biographies remain separate from observed appearance.
+                # This also repairs old machine-appended prose without changing
+                # the immutable observations or a human's description edits.
+                profile["description"] = profile.get("reference_description", "")
             if profile != before:
                 profile["updated_at"] = timestamp
         if result != registry:
@@ -330,10 +430,22 @@ class CharacterStore:
 
     def catalog(self, asset_id: str) -> dict:
         with self.library.lock:
-            scope = scope_id(self.library.get_asset(asset_id))
+            asset = self.library.get_asset(asset_id)
+            scope = scope_id(asset)
             registry = self._read(scope)
+            archive = asset.get("anime_profile")
+            if archive and archive.get("mode") == "bangumi":
+                # Upgrade old offline snapshots locally; no remote API is needed
+                # while viewing a cast or resuming recognition.
+                from .bangumi import normalize_dossier_names
+                upgraded = self.seed_registry(registry, normalize_dossier_names(archive["dossier"]))
+                if upgraded != registry:
+                    atomic_json(self._path(scope), upgraded)
+                    registry = upgraded
             assets = self._assets(scope)
-            profiles = copy.deepcopy(registry["profiles"])
+            policy = self.cast_policy(registry, asset.get("anime_profile"))
+            profiles = {identity: copy.deepcopy(profile) for identity, profile in registry["profiles"].items()
+                        if self.profile_allowed(profile, policy)}
             current_representatives = {}
             for profile in profiles.values():
                 profile["appearances"] = []
@@ -356,7 +468,7 @@ class CharacterStore:
                     for entity in record.get("entities", []):
                         resolved = self.library.organization.resolve_reference(
                             asset["id"], record, entity.get("character_id"), registry)
-                        if not resolved:
+                        if resolved not in profiles:
                             continue
                         frames = entity.get("evidence_frame_ids") or record.get("evidence_frame_ids", [])
                         profiles[resolved]["appearances"].append({
@@ -375,6 +487,7 @@ class CharacterStore:
                 profile["representative"] = current_representatives.get(profile["id"])
             return {"scope_id": scope, "revision": registry["revision"],
                     "profiles": list(profiles.values()), "assets": assets,
+                    "cast_policy": policy,
                     "membership_revision": self.library.get_asset(asset_id).get("membership_revision", 0)}
 
     def context(self, asset_id: str) -> dict:
@@ -383,12 +496,15 @@ class CharacterStore:
             fields = ("id", "name", "aliases", "description", "notes", "appearance",
                       "user_edited", "edited_fields", "representative", "updated_at", "created_at")
             context = {"scope_id": catalog["scope_id"], "revision": catalog["revision"],
+                       "cast_policy": copy.deepcopy(catalog["cast_policy"]),
                        "membership_revision": catalog["membership_revision"], "profiles": [
                 {**{key: copy.deepcopy(profile[key]) for key in fields},
                  "observed_traits": list(profile["appearance"]),
                  **({"external_source": copy.deepcopy(profile.get("external_source")),
                      "external_sources": copy.deepcopy(profile.get("external_sources", [])),
                      "reference_description": profile.get("reference_description", ""),
+                     **{key: copy.deepcopy(profile.get(key, [] if key == "name_variants" else ""))
+                        for key in ("name_cn", "name_ja", "name_en", "name_variants")},
                      "reference_policy": BANGUMI_REFERENCE_POLICY}
                     if external_sources(profile) else {})}
                 for profile in catalog["profiles"] if profile["appearance_count"] > 0 or external_sources(profile)
@@ -427,7 +543,9 @@ class CharacterStore:
             resolved = self._resolve(self._read(scope), character_id, strict=True)
             if resolved is None:
                 raise FileNotFoundError("角色档案已删除")
-            profile = next(profile for profile in self.catalog(asset_id)["profiles"] if profile["id"] == resolved)
+            profile = next((profile for profile in self.catalog(asset_id)["profiles"] if profile["id"] == resolved), None)
+            if profile is None:
+                raise FileNotFoundError("角色不在当前作品的具名角色名单中")
             representative = profile.get("representative")
             if not representative:
                 raise FileNotFoundError("角色尚无可用图片")
@@ -441,6 +559,7 @@ class CharacterStore:
             scope = scope_id(asset)
             registry = self._read(scope)
             self._check_revision(registry, expected_revision)
+            policy = self.cast_policy(registry, asset.get("anime_profile"))
             result = Observation.model_validate(copy.deepcopy(record)).model_dump()
             if result["asset_id"] != asset_id or result["end_ms"] > asset["duration_ms"]:
                 raise ValueError("角色证据不属于当前视频时间轴")
@@ -470,10 +589,32 @@ class CharacterStore:
                     continue
                 explicit = entity.get("character_id")
                 character_id = self._resolve(registry, explicit, strict=True) if explicit else None
+                if character_id and not self.profile_allowed(registry["profiles"][character_id], policy):
+                    entity["character_id"] = None
+                    continue
                 if explicit and character_id is None:
                     # Human deletion remains effective even for delayed model responses.
                     entity["character_id"] = None
                     continue
+                if character_id is None:
+                    identity_name = named_identity(entity.get("name"))
+                    confidence = entity.get("match_confidence")
+                    reason = str(entity.get("match_reason") or "").strip()
+                    if (not policy["allow_new_profiles"] or identity_name is None or not reason
+                            or type(confidence) not in {int, float} or not math.isfinite(confidence)
+                            or confidence < 0.65
+                            or normalized(identity_name) not in normalized(reason + " " + str(entity.get("description") or ""))):
+                        entity["character_id"] = None
+                        continue
+                    matching = [profile["id"] for profile in registry["profiles"].values()
+                                if self.profile_allowed(profile, policy)
+                                and normalized(identity_name) in {normalized(value) for value in
+                                    [profile["name"], *profile["aliases"]]}]
+                    if len(matching) == 1:
+                        character_id = matching[0]
+                    elif len(matching) > 1:
+                        entity["character_id"] = None
+                        continue
                 if character_id is None:
                     character_id = "character_" + digest([
                         scope, asset_id, result["run_id"], result["id"], entity["id"],
@@ -491,15 +632,14 @@ class CharacterStore:
                 if entity.get("appearance") and isinstance(entity["appearance"], str):
                     traits = [*traits, entity["appearance"]]
                 if profile is None:
-                    label = str(entity.get("label") or description or f"未命名角色 {len(registry['profiles']) + 1}")
                     timestamp = now()
-                    profile = {"id": character_id, "name": label[:80], "aliases": [],
+                    profile = {"id": character_id, "name": identity_name, "aliases": [],
                                "description": description[:8000], "notes": "", "appearance": unique(traits, 64),
                                "user_edited": False, "edited_fields": [], "created_at": timestamp,
                                "updated_at": timestamp, "representative": None}
                     registry["profiles"][character_id] = profile
                 locked = set(profile["edited_fields"])
-                if description and "description" not in locked:
+                if description and "description" not in locked and not external_sources(profile):
                     profile["description"] = "\n".join(unique(profile["description"].splitlines() + [description]))[:8000]
                 if "appearance" not in locked:
                     profile["appearance"] = unique(profile["appearance"] + traits, 64)
@@ -524,6 +664,9 @@ class CharacterStore:
             resolved = self._resolve(registry, character_id, strict=True)
             if resolved is None:
                 raise ValueError("角色档案已删除")
+            if not self.profile_allowed(registry["profiles"][resolved], self.cast_policy(
+                    registry, self.library.get_asset(asset_id).get("anime_profile"))):
+                raise FileNotFoundError("角色不在当前作品的具名角色名单中")
             for field, value in payload.items():
                 if field in {"aliases", "appearance"}:
                     if (not isinstance(value, list) or len(value) > 100
@@ -552,6 +695,9 @@ class CharacterStore:
             resolved = self._resolve(registry, character_id, strict=True)
             if resolved is None:
                 raise ValueError("角色档案已删除")
+            if not self.profile_allowed(registry["profiles"][resolved], self.cast_policy(
+                    registry, self.library.get_asset(asset_id).get("anime_profile"))):
+                raise FileNotFoundError("角色不在当前作品的具名角色名单中")
             self._remember_external_identity(registry, registry["profiles"][resolved])
             del registry["profiles"][resolved]
             registry["redirects"][resolved] = None
@@ -569,6 +715,9 @@ class CharacterStore:
             if source is None or target is None or source == target:
                 raise ValueError("请选择两个不同且未删除的角色档案")
             removed, kept = registry["profiles"][source], registry["profiles"][target]
+            policy = self.cast_policy(registry, self.library.get_asset(asset_id).get("anime_profile"))
+            if not self.profile_allowed(kept, policy):
+                raise FileNotFoundError("角色不在当前作品的具名角色名单中")
             self._remember_external_identity(registry, removed)
             self._remember_external_identity(registry, kept)
             kept_sources = external_sources(kept)
@@ -580,6 +729,12 @@ class CharacterStore:
                 kept_sources = external_sources(kept)
             if not kept.get("reference_description") and removed.get("reference_description"):
                 kept["reference_description"] = removed["reference_description"]
+            for field in ("name_cn", "name_ja", "name_en"):
+                if not kept.get(field) and removed.get(field):
+                    kept[field] = removed[field]
+            for variant in removed.get("name_variants", []):
+                if variant not in kept.setdefault("name_variants", []):
+                    kept["name_variants"].append(copy.deepcopy(variant))
             aliases = unique(kept["aliases"] + [removed["name"]] + removed["aliases"], 202)
             if len([alias for alias in aliases if normalized(alias) != normalized(kept["name"])]) > 100:
                 raise ValueError("合并后的别名超过 100 条，请先精简别名后再合并")
@@ -621,14 +776,18 @@ class CharacterStore:
             return next(profile for profile in self.catalog(asset_id)["profiles"] if profile["id"] == target)
 
     def decorate_observations(self, asset_id: str, records: list[dict]) -> list[dict]:
-        scope = scope_id(self.library.get_asset(asset_id))
+        asset = self.library.get_asset(asset_id)
+        scope = scope_id(asset)
         with self.library.lock:
             registry = self._read(scope)
+            policy = self.cast_policy(registry, asset.get("anime_profile"))
             result = copy.deepcopy(records)
             for record in result:
                 for entity in record.get("entities", []):
                     original = entity.get("character_id")
                     resolved = self.library.organization.resolve_reference(asset_id, record, original, registry)
+                    if resolved and not self.profile_allowed(registry["profiles"][resolved], policy):
+                        resolved = None
                     if resolved:
                         profile = registry["profiles"][resolved]
                         entity.update(character_id=resolved, character_name=profile["name"], name=profile["name"],

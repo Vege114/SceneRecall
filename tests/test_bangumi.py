@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from scenerecall.bangumi import BangumiClient, BangumiError, parse_subject_reference
+from scenerecall.bangumi import (BangumiClient, BangumiError, character_names, normalize_dossier_names,
+                                parse_subject_reference)
 
 
 @pytest.mark.parametrize("reference", [
@@ -66,11 +67,81 @@ async def test_cli_p1_envelopes_and_external_fields_are_normalized():
     assert dossier["subject"]["eps"] == 11
     assert dossier["source"] == "bangumi" and dossier["fetched_at"]
     assert dossier["characters"][0]["aliases"] == ["Biwa", "びわ", "琵琶"]
+    assert dossier["characters"][0]["name_en"] == "Biwa"
+    assert dossier["characters"][0]["name_ja"] == "びわ"
+    assert next(value for value in dossier["characters"][0]["name_variants"]
+                if value["name"] == "Biwa")["language"] == "en"
     assert dossier["characters"][0]["description"] == "异色瞳少女"
     assert dossier["characters"][0]["role"] == "主角"
     assert dossier["characters"][1]["name"] == "平重盛"
     assert dossier["characters"][1]["detail_error"] == "暂不可读取"
     assert dossier["warnings"]
+
+
+@pytest.mark.parametrize("envelope", ["value", "values"])
+def test_nested_infobox_name_labels_preserve_language_and_prefer_english(envelope):
+    raw = {"id": 7, "name": "架空人物", "infobox": [
+        {"key": "别名", envelope: [{"k": "第二中文名", "v": "另一中文名"},
+                                  {"k": "日文名", "v": "架空 人物"},
+                                  {"k": "纯假名", "v": "かくう じんぶつ"},
+                                  {"k": "罗马字", "v": "Kakuu Jinbutsu"},
+                                  {"k": "英文名", "v": "Imaginary Person"},
+                                  {"k": "昵称", "v": "舞台君"}]},
+    ]}
+    names = character_names(raw)
+    assert names["name_cn"] == "另一中文名"
+    assert names["name_ja"] == "架空 人物"
+    assert names["name_en"] == "Imaginary Person"
+    assert set(names["aliases"]) >= {"另一中文名", "架空 人物", "Kakuu Jinbutsu", "Imaginary Person", "舞台君"}
+    variants = {value["name"]: value for value in names["name_variants"]}
+    assert variants["另一中文名"]["language"] == "zh-Hans"
+    assert variants["Kakuu Jinbutsu"]["language"] == "ja-Latn"
+    assert variants["Kakuu Jinbutsu"]["kind"] == "romanization"
+    assert variants["Imaginary Person"]["language"] == "en"
+    assert all(value["source"] == "bangumi" and value["source_url"] == "https://bgm.tv/character/7"
+               for value in variants.values())
+
+
+def test_missing_latin_name_uses_only_supplied_kana_reading():
+    raw = {"id": 137797, "name": "眞井霧子", "name_cn": "真井雾子", "infobox": [
+        {"key": "别名", "values": [{"k": "纯假名", "v": "まい きりこ"}]},
+    ]}
+    names = character_names(raw)
+    assert names["name_en"] == "Mai Kiriko"
+    derived = next(value for value in names["name_variants"] if value["name"] == "Mai Kiriko")
+    assert derived == {"name": "Mai Kiriko", "language": "ja-Latn", "kind": "romanization",
+                       "source": "kana_transliteration", "source_url": "https://bgm.tv/character/137797"}
+    assert character_names({"id": 137797, "name": "眞井霧子", "name_cn": "真井雾子"})["name_en"] == ""
+    raw["infobox"][0]["values"][0]["v"] = "眞井 きりこ"
+    assert character_names(raw)["name_en"] == ""
+
+
+def test_missing_chinese_name_converts_han_script_without_inventing_kana_translation():
+    names = character_names({"id": 150045, "name": "櫻木麗", "infobox": [
+        {"key": "别名", "values": [{"k": "罗马字", "v": "Sakuragi Rei"}]},
+    ]})
+    assert names["name_cn"] == "樱木丽" and names["name_en"] == "Sakuragi Rei"
+    assert {"name": "樱木丽", "language": "zh-Hans", "kind": "script_conversion",
+            "source": "opencc", "source_url": "https://bgm.tv/character/150045"} in names["name_variants"]
+    assert "櫻木麗" in names["aliases"]
+    assert character_names({"id": 1, "name": "サクラ"})["name_cn"] == ""
+    traditional = character_names({"id": 2, "name": "Sakura", "infobox": [
+        {"key": "繁体中文名", "value": "櫻"},
+    ]})
+    assert traditional["name_cn"] == "樱"
+    assert any(value["language"] == "zh-Hant" for value in traditional["name_variants"])
+
+
+def test_cached_snapshot_name_upgrade_is_pure_and_idempotent():
+    dossier = {"source": "bangumi", "characters": [{"id": 150045, "name": "櫻木麗", "aliases": ["旧别名"],
+                                                       "infobox": []}]}
+    upgraded = normalize_dossier_names(dossier)
+    assert "name_schema_version" not in dossier
+    assert upgraded["name_schema_version"] == 1
+    assert "旧别名" in upgraded["characters"][0]["aliases"]
+    assert upgraded == normalize_dossier_names(upgraded)
+    converted = next(value for value in upgraded["characters"][0]["name_variants"] if value["name"] == "樱木丽")
+    assert converted["source"] == "opencc"
 
 
 async def test_reject_non_anime_subject_before_character_fetch():
