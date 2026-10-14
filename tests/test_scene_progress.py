@@ -100,11 +100,11 @@ async def test_pause_resume_rebuilds_cached_preparation_progress_without_accumul
     worker.queue.control(paused["id"], "resume", {"max_requests": 100})
     completed = await execute(worker, paused)
     assert completed["status"] == "completed", completed
-    assert snapshots[0] == {stage: progress(0, None, "pending") for stage in paused["stage_progress"]}
+    assert snapshots[0] == paused["stage_progress"]
     assert completed["stage_progress"] == {"transcript": progress(0, 0), "preparation": progress(2, 2),
                                            "deep_analysis": progress(0, 0), "context_refresh": progress(0, 0)}
     assert counts(worker) == {"preparation": 2} and completed["request_count"] == 2
-    assert completed["stage_metrics"]["preparation"]["cache_hits"] == 1
+    assert completed["stage_metrics"]["preparation"]["cache_hits"] == 0
     assert all(item["completed"] <= item["total"] for state in snapshots for item in state.values()
                if item["total"] is not None)
     cached = await execute(worker, enqueue(worker))

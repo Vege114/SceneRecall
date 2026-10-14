@@ -67,7 +67,7 @@ async def test_legacy_tasks_keep_56_frame_units_and_original_dependency_shape(sc
     worker.queue.control(job["id"], "resume", {"max_requests": 20})
     first = await execute(worker, job)
     assert first["status"] == "completed" and first["request_count"] == 2
-    assert first["stage_metrics"]["preparation"]["cache_hits"] == 1
+    assert first["stage_metrics"]["preparation"]["cache_hits"] == 0
     assert [len(call["frames"]) for call in worker.provider.calls] == [56, 4]
 
 

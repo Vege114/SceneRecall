@@ -11,6 +11,8 @@ import time
 
 from .library import atomic_json, digest, read_json, uid
 from .execution import bounded_map, execution_width, finish_on_cancel, yield_to_io
+from .scene_checkpoints import SceneCheckpointMixin
+from .scene_resume import SceneResumeMixin
 
 STRATEGY = "scene-chunks-v1"
 CORE_FRAMES = 56
@@ -252,7 +254,7 @@ def subtitle_context(cues, segments, start, end):
             "notice": "原始字幕完整保留；未展示的台词不能补写为画面事实"}
 
 
-class SceneJobMixin:
+class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
     def _scene_progress(self, job_id, stage, **changes):
         """Current execution progress, independent of durable paid-call accounting."""
         progress = copy.deepcopy(self.get(job_id).get("stage_progress"))
@@ -358,7 +360,6 @@ class SceneJobMixin:
             versions[stage] = RECONCILIATION_PROMPT_VERSION
         job = self.checkpoint(job_id)
         from .scenes import SceneStore
-        self._check_scene_dependencies(job["asset_id"], job["config"], SceneStore(self.library))
         root = self.library.asset_dir(job["asset_id"])
         run = root / "analyses" / job["run_id"]
         inputs = run / "scene-inputs" / f"{digest([stage, versions[stage], unit])}.json"
@@ -385,6 +386,7 @@ class SceneJobMixin:
             self._account_scene_receipt(job_id, receipt)
             self._scene_metric(job_id, stage, cache=1)
             return observation_data(receipt["data"])
+        self._check_scene_dependencies(job["asset_id"], job["config"], SceneStore(self.library))
         split_path = run / "scene-splits" / f"{key}.json"
         split = read_json(split_path) if stage == "preparation" else None
         if split is not None:
@@ -544,18 +546,146 @@ class SceneJobMixin:
         context["reference_frames"] = [f for f in context["reference_frames"] if f["character_id"] in ids]
         return context
 
+    def _validate_scene_preparation(self, snapshot, asset_id, run_id, config, plan,
+                                    transcript_total, preparation_total):
+        """Check a completed stage once, without reloading the frame registry per chunk."""
+        from .scenes import SceneStore
+
+        if (not isinstance(snapshot, dict) or snapshot.get("asset_id") != asset_id
+                or snapshot.get("run_id") != run_id
+                or snapshot.get("dependencies") != config["scene_dependencies"]
+                or type(snapshot.get("transcript_total")) is not int
+                or type(snapshot.get("preparation_total")) is not int
+                or snapshot["transcript_total"] != transcript_total
+                or snapshot["preparation_total"] != preparation_total):
+            raise ValueError("已保存的视觉分块阶段与当前任务不一致")
+        chunks = snapshot.get("chunks")
+        if not isinstance(chunks, list) or not chunks:
+            raise ValueError("已保存的视觉分块阶段缺少完整片段")
+        frame_lookup = {frame["id"]: frame for frame in plan["frames"]}
+        cues = {cue["id"]: cue for cue in SceneStore(self.library).subtitle_records(asset_id)}
+        boundary, observed = config["start_ms"], []
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                raise ValueError("已保存的视觉分块片段格式无效")
+            start, end = chunk.get("start_ms"), chunk.get("end_ms")
+            if (type(start) is not int or type(end) is not int or start != boundary
+                    or not start < end <= config["end_ms"]
+                    or chunk.get("asset_id") != asset_id or chunk.get("run_id") != run_id
+                    or chunk.get("id") != SceneStore.chunk_id(asset_id, start, end)
+                    or chunk.get("chunk_id") != chunk["id"]
+                    or chunk.get("understanding_level") != "initial"
+                    or chunk.get("dependencies") != config["scene_dependencies"]
+                    or type(chunk.get("needs_deep")) is not bool
+                    or not isinstance(chunk.get("summary"), str) or not chunk["summary"].strip()):
+                raise ValueError("已保存的视觉分块片段边界或来源无效")
+            for field in ("frame_ids", "evidence_frame_ids", "representative_frame_ids",
+                          "deep_frame_ids", "subtitle_ids"):
+                values = chunk.get(field, [])
+                if (not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+                        or len(set(values)) != len(values)):
+                    raise ValueError("已保存的视觉分块证据引用无效")
+            frame_ids = chunk.get("frame_ids", [])
+            frames = set(frame_ids)
+            if (not frame_ids or any(frame_id not in frame_lookup
+                                    or not start <= frame_lookup[frame_id]["at_ms"] < end
+                                    for frame_id in frame_ids)
+                    or not set(chunk.get("evidence_frame_ids", [])).issubset(frames)
+                    or not set(chunk.get("representative_frame_ids", [])).issubset(frames)):
+                raise ValueError("已保存的视觉分块包含缺失或越界关键帧")
+            deep_frames = set(chunk.get("deep_frame_ids", []))
+            if deep_frames and (not deep_frames.issubset(frames)
+                    or not set(chunk.get("representative_frame_ids", [])).issubset(deep_frames)
+                    or chunk["deep_frame_ids"] != [frame_id for frame_id in frame_ids if frame_id in deep_frames]):
+                raise ValueError("已保存的深入理解选帧与视觉分块不一致")
+            subtitle_ids = set(chunk.get("subtitle_ids", []))
+            if any(cue_id not in cues or cues[cue_id]["start_ms"] >= end
+                   or cues[cue_id]["end_ms"] <= start for cue_id in subtitle_ids):
+                raise ValueError("已保存的视觉分块字幕引用缺失或越界")
+            for field, allowed in (("visual_facts", {"frame_ids"}), ("dialogue_facts", {"cue_ids"}),
+                                   ("inferences", {"frame_ids", "cue_ids"})):
+                facts = chunk.get(field)
+                if not isinstance(facts, list):
+                    raise ValueError("已保存的视觉分块事实格式无效")
+                for fact in facts:
+                    if (not isinstance(fact, dict) or not isinstance(fact.get("text"), str)
+                            or not fact["text"].strip()):
+                        raise ValueError("已保存的视觉分块事实文字无效")
+                    refs = []
+                    for key, evidence in (("frame_ids", set(chunk.get("evidence_frame_ids", []))),
+                                          ("cue_ids", subtitle_ids)):
+                        values = fact.get(key, [])
+                        if (not isinstance(values, list) or any(not isinstance(value, str) for value in values)
+                                or not set(values).issubset(evidence) or (key not in allowed and values)):
+                            raise ValueError("已保存的视觉分块事实引用无效")
+                        refs.extend(values)
+                    if not refs:
+                        raise ValueError("已保存的视觉分块事实缺少证据")
+            observed.extend(frame_ids)
+            boundary = end
+        if boundary != config["end_ms"] or observed != [frame["id"] for frame in plan["frames"]]:
+            raise ValueError("已保存的视觉分块未完整覆盖任务范围和关键帧")
+        return snapshot
+
+    def _save_scene_preparation(self, asset_id, run_id, config, plan, chunks,
+                                transcript_total, preparation_total):
+        from .library import safe_id
+
+        snapshot = {"asset_id": asset_id, "run_id": run_id,
+                    "dependencies": copy.deepcopy(config["scene_dependencies"]),
+                    "chunks": copy.deepcopy(chunks), "transcript_total": transcript_total,
+                    "preparation_total": preparation_total}
+        self._validate_scene_preparation(snapshot, asset_id, run_id, config, plan,
+                                         transcript_total, preparation_total)
+        target = self.library.asset_dir(asset_id) / "analyses" / safe_id(run_id) / "scene-prepared.json"
+        atomic_json(target, snapshot)
+        return snapshot
+
+    def _load_scene_preparation(self, asset_id, run_id, config, plan, state,
+                                transcript_total, preparation_total):
+        from .library import safe_id
+
+        directory = self.library.asset_dir(asset_id) / "analyses" / safe_id(run_id)
+        snapshot = read_json(directory / "scene-prepared.json")
+        if snapshot is not None:
+            return self._validate_scene_preparation(snapshot, asset_id, run_id, config, plan,
+                                                     transcript_total, preparation_total)
+        if not state.get("published"):
+            return None
+        # Older runs already committed the complete preparation stage. Its own
+        # initial revisions retain the original needs_deep flags and boundaries,
+        # even after active pointers advance to deeper or refreshed revisions.
+        paths = [path for path in (directory / "scenes").glob("*.json")
+                 if not path.name.endswith(".deep.json")]
+        if not paths:
+            return None
+        chunks = [read_json(path) for path in paths]
+        if any(not isinstance(chunk, dict) for chunk in chunks):
+            raise ValueError("已保存的视觉分块片段格式无效")
+        chunks.sort(key=lambda chunk: (chunk.get("start_ms", -1), chunk.get("end_ms", -1)))
+        return self._save_scene_preparation(asset_id, run_id, config, plan, chunks,
+                                            transcript_total, preparation_total)
+
     async def analyze_scenes(self, job_id):
         from .scenes import SceneStore
         store = SceneStore(self.library)
         job = self.checkpoint(job_id)
         config, asset_id, run_id = job["config"], job["asset_id"], job["run_id"]
-        # Replayed receipts/parts rebuild these absolute per-execution counts.
-        # Nothing here enters model inputs, receipt identities or scene versions.
+        directory = self.library.asset_dir(asset_id) / "analyses" / run_id
+        state_path = directory / "scene-state.json"
+        state = read_json(state_path, {})
+        # Stage checkpoints preserve completed counts. Uncommitted receipts or
+        # parts are recovered locally without changing model inputs or versions.
         stage_progress = {stage: {"completed": 0, "total": None, "status": "pending"}
                           for stage in ("transcript", "preparation", "deep_analysis", "context_refresh")}
         if config.get("deepen_chunk_id"):
             for stage in ("transcript", "preparation", "context_refresh"):
                 stage_progress[stage] = {"completed": 0, "total": 0, "status": "completed"}
+        if config.get("scene_dependencies"):
+            for stage in stage_progress:
+                saved = job.get("stage_progress", {}).get(stage)
+                if saved:
+                    stage_progress[stage] = copy.deepcopy(saved)
         self.update(job_id, stage_progress=stage_progress)
         self._check_scene_range(asset_id, config, store)
         # Inspect every preceding active block, since prompt-facing gap lists
@@ -571,9 +701,6 @@ class SceneJobMixin:
         for profile in config["profile_snapshots"].values():
             if not self.profile_source_unchanged(config, profile):
                 raise ValueError("模型配置已变化，请创建新任务")
-        directory = self.library.asset_dir(asset_id) / "analyses" / run_id
-        state_path = directory / "scene-state.json"
-        state = read_json(state_path, {})
         if "subtitle" in config["stages"] and not state.get("ocr_complete"):
             await self.analyze_legacy(job_id, {**config, "stages": ["subtitle"]}, skip_reindex=True)
             if self.get(job_id)["failures"]:
@@ -621,12 +748,21 @@ class SceneJobMixin:
             if original.get("dependencies", {}).get("subtitle_digest") != dependencies["subtitle_digest"]:
                 chunk["dialogue_facts"] = [{"text": c["text"], "cue_ids": [c["id"]]} for c in cues if c["text"].strip()]
                 chunk["inferences"] = []
-            chunk = await self._deepen_scene(job_id, chunk, frames, cues, bounded_memory(prior, []))
-            self.checkpoint(job_id)
-            self._check_scene_dependencies(asset_id, config, store)
-            with self.library.lock:
-                store.upgrade(asset_id, run_id, chunk)
-            self._sync_scene_index(job_id, asset_id)
+            committed = self._load_manual_scene_commit(asset_id, run_id, config, original, state, state_path, store)
+            if committed is None:
+                chunk = await self._deepen_scene(job_id, chunk, frames, cues, bounded_memory(prior, []))
+                self.checkpoint(job_id)
+                self._check_scene_dependencies(asset_id, config, store)
+                with self.library.lock:
+                    chunk = store.upgrade(asset_id, run_id, chunk)
+                state["deepen_committed"] = {"relative": store._relative(chunk),
+                                             "revision_digest": store.revision_digest(chunk)}
+                state["index_dirty"] = True
+                atomic_json(state_path, state)
+            else:
+                self._scene_progress(job_id, "deep_analysis", completed=math.ceil(len(frames) /
+                    deep_batch_size(config["profile_snapshots"]["vision"])), status="completed")
+            self._repair_scene_index(job_id, asset_id, state, state_path)
         else:
             plan = (self.validated_plan(asset_id, config["start_ms"], config["end_ms"], config["keyframe_plan_id"])
                     if config.get("keyframe_plan_id") else await self.scan_plan(job_id, asset_id=asset_id,
@@ -642,152 +778,136 @@ class SceneJobMixin:
             total = math.ceil(len(frames) / batch_size)
             self._scene_progress(job_id, "transcript", total=len(batches))
             self._scene_progress(job_id, "preparation", total=total)
-            transcript_started = time.monotonic()
-            segments, unresolved = [], []
-            transcript_width = execution_width(config, "transcript", self.providers.get(prep_profile["id"]))
-            if (config.get("execution") or {}).get("transcript") == "parallel":
-                frozen_prior = bounded_memory(prior, [])
-                async def prepare_transcript(index, batch):
-                    previous = batches[index - 1][-20:] if index else []
-                    previous = copy.deepcopy(previous)
-                    while previous and encoded_size(previous) > 6000:
-                        previous.pop(0)
-                    story = {"prior": copy.deepcopy(frozen_prior), "previous_cues": previous,
-                             "execution_mode": "parallel", "previous_segments": [], "unresolved": [],
-                             "notice": "并行批次只共享已冻结的前序记忆与原始相邻台词；本组之外的台词仅作上下文，不应写入本组证据。"}
-                    self.update(job_id, message=f"并行台词预理解：第 {index + 1}/{len(batches)} 组")
-                    return await self._scene_call(job_id, "transcript", str(index), prep_profile,
-                        self.providers.prepare_subtitles, [batch, story])
-                self._scene_progress(job_id, "transcript", status="running")
-                finished = 0
-                def transcript_done(index, result):
-                    nonlocal finished
-                    finished += 1
-                    self._scene_progress(job_id, "transcript", completed=finished)
-                results = await bounded_map(batches, prepare_transcript, transcript_width,
-                    lambda: self.checkpoint(job_id), transcript_done)
-                for result in results:
-                    segments.extend(result["segments"])
-                    unresolved.extend(result.get("unresolved", []))
-            else:
-                for index, batch in enumerate(batches):
-                    self._scene_progress(job_id, "transcript", status="running")
-                    self.update(job_id, message=f"台词预理解：第 {index + 1} 组")
-                    story = {"prior": bounded_memory(prior, []), "previous_segments": segments[-6:], "unresolved": unresolved[-8:]}
-                    result = await self._scene_call(job_id, "transcript", str(index), prep_profile,
-                        self.providers.prepare_subtitles, [batch, story])
-                    segments.extend(result["segments"])
-                    unresolved = result.get("unresolved", [])
-                    self._scene_progress(job_id, "transcript", completed=index + 1)
-            self._scene_metric(job_id, "transcript", wall_elapsed=time.monotonic() - transcript_started)
-            chunks = []
-            self.update(job_id, total=total, completed=0)
             frame_lookup = {f["id"]: f for f in frames}
-            preparation_started = time.monotonic()
-            offsets = list(range(0, len(frames), batch_size))
-            prepared = None
-            parallel_preparation = (config.get("execution") or {}).get("preparation") == "parallel"
-            if parallel_preparation:
-                frozen_memory = {**bounded_memory(prior, []), "execution_mode": "parallel",
-                    "notice": "并行分块只共享已冻结的前序记忆；边界参考帧属于之前的时间范围，不能写成当前片段的事实。"}
-                frozen_characters = self._scene_context(asset_id, config)
-                async def prepare_batch(index, offset):
-                    core = frames[offset:offset + batch_size]
-                    context_frames = frames[max(0, offset - CONTEXT_FRAMES):offset]
+            restored = self._load_scene_preparation(asset_id, run_id, config, plan, state, len(batches), total)
+            if restored is not None:
+                chunks = restored["chunks"]
+                self._scene_progress(job_id, "transcript", completed=len(batches), status="completed")
+                self._scene_progress(job_id, "preparation", completed=total, status="completed")
+                self.update(job_id, message="已恢复完整分块方案，继续深入理解", progress=max(.5, job.get("progress", 0)))
+            else:
+                segments, unresolved = await self.prepare_transcript_stage(
+                    job_id, config, prior, cues, batches, prep_profile)
+                chunks, assembled = self._load_partial_scene_preparation(
+                    asset_id, run_id, config, plan, batch_size, len(batches))
+                self._scene_progress(job_id, "preparation", total=total, completed=assembled)
+                self.update(job_id, total=total, completed=assembled, progress=assembled / max(total, 1) * .5)
+                preparation_started = time.monotonic()
+                offsets = list(range(0, len(frames), batch_size))
+                prepared = None
+                parallel_preparation = (config.get("execution") or {}).get("preparation") == "parallel"
+                if parallel_preparation:
+                    frozen_memory = {**bounded_memory(prior, []), "execution_mode": "parallel",
+                        "notice": "并行分块只共享已冻结的前序记忆；边界参考帧属于之前的时间范围，不能写成当前片段的事实。"}
+                    result_path, result_state = self._scene_preparation_results(
+                        asset_id, run_id, config, plan, prep_profile, frames, cues, segments, batch_size)
+                    prepared = result_state["results"]
+                    pending = [index for index in range(assembled, total) if prepared[index] is None]
+                    frozen_characters = self._scene_context(asset_id, config) if pending else None
+                    async def prepare_batch(position, index):
+                        offset = offsets[index]
+                        core = frames[offset:offset + batch_size]
+                        context_frames = frames[max(0, offset - CONTEXT_FRAMES):offset]
+                        a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
+                        b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
+                        self.update(job_id, message=f"并行视觉分块与简要索引：第 {index + 1}/{total} 组")
+                        result = await self._scene_call(job_id, "preparation", str(index), prep_profile,
+                            self.providers.prepare_visual, [core, context_frames, subtitle_context(cues, segments, a, b),
+                                copy.deepcopy(frozen_memory), copy.deepcopy(frozen_characters)],
+                            images=math.ceil((len(core) + len(context_frames)) / 16))
+                        prepared[index] = result
+                        atomic_json(result_path, result_state)
+                        return result
+                    def preparation_done(index, result):
+                        finished = assembled + sum(value is not None for value in prepared[assembled:])
+                        self._scene_progress(job_id, "preparation", completed=finished)
+                        self.update(job_id, completed=finished, progress=finished / max(total, 1) * .5)
+                    self._scene_progress(job_id, "preparation", status="running")
+                    preparation_done(0, None)
+                    await bounded_map(pending, prepare_batch,
+                        execution_width(config, "preparation", self.providers.get(prep_profile["id"])),
+                        lambda: self.checkpoint(job_id), preparation_done)
+
+                for index in range(assembled, len(offsets)):
+                    offset = offsets[index]
+                    await yield_to_io()
+                    self.checkpoint(job_id)
+                    core, context_frames = frames[offset:offset + batch_size], frames[max(0, offset - CONTEXT_FRAMES):offset]
                     a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
                     b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
-                    self.update(job_id, message=f"并行视觉分块与简要索引：第 {index + 1}/{total} 组")
-                    return await self._scene_call(job_id, "preparation", str(index), prep_profile,
-                        self.providers.prepare_visual, [core, context_frames, subtitle_context(cues, segments, a, b),
-                            copy.deepcopy(frozen_memory), copy.deepcopy(frozen_characters)],
-                        images=math.ceil((len(core) + len(context_frames)) / 16))
-                finished = 0
-                def preparation_done(index, result):
-                    nonlocal finished
-                    finished += 1
-                    self._scene_progress(job_id, "preparation", completed=finished)
-                    self.update(job_id, completed=finished, progress=finished / max(total, 1) * .5)
-                self._scene_progress(job_id, "preparation", status="running")
-                prepared = await bounded_map(offsets, prepare_batch,
-                    execution_width(config, "preparation", self.providers.get(prep_profile["id"])),
-                    lambda: self.checkpoint(job_id), preparation_done)
-
-            for index, offset in enumerate(offsets):
-                await yield_to_io()
-                self.checkpoint(job_id)
-                self._scene_context(asset_id, config)
-                core, context_frames = frames[offset:offset + batch_size], frames[max(0, offset - CONTEXT_FRAMES):offset]
-                a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
-                b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
-                local_cues = [c for c in cues if c["end_ms"] > a and c["start_ms"] < b]
-                sub_context = subtitle_context(cues, segments, a, b)
-                if prepared is not None:
-                    self.update(job_id, message=f"整理已完成的视觉分块：{index + 1}/{total}")
-                    result = prepared[index]
-                else:
-                    self._scene_progress(job_id, "preparation", status="running")
-                    self.update(job_id, message=f"视觉分块与简要索引：{index + 1}/{total}")
-                    result = await self._scene_call(job_id, "preparation", str(index), prep_profile,
-                        self.providers.prepare_visual, [core, context_frames, sub_context, memory_for(chunks),
-                                                       self._scene_context(asset_id, config)],
-                        images=math.ceil((len(core) + len(context_frames)) / 16))
-                for number, raw in enumerate(result["chunks"]):
-                    chosen = [frame_lookup[fid] for fid in raw["frame_ids"]]
-                    start = a if number == 0 else chosen[0]["at_ms"]
-                    next_raw = result["chunks"][number + 1] if number + 1 < len(result["chunks"]) else None
-                    stop = frame_lookup[next_raw["frame_ids"][0]]["at_ms"] if next_raw else b
-                    chunk_id = "scene_" + digest([asset_id, start, stop])
-                    chunk = {**raw, "id": chunk_id, "chunk_id": chunk_id, "asset_id": asset_id, "run_id": run_id,
-                             "scene_key": raw.get("scene_key", ""),
-                             "start_ms": start, "end_ms": stop, "shot_ids": list(dict.fromkeys(f["shot_id"] for f in chosen)),
-                             "evidence_frame_ids": list(raw["frame_ids"]),
-                             "subtitle_ids": [c["id"] for c in local_cues if c["end_ms"] > start and c["start_ms"] < stop],
-                             "understanding_level": "initial", "dependencies": dependencies,
-                             "provenance": {"strategy": STRATEGY, "keyframe_plan_id": plan["id"],
-                                            "profile_id": prep_profile["id"], "model": prep_profile.get("model", "")},
-                             "uncertainties": result.get("unresolved", []),
-                             "memory_before": copy.deepcopy(frozen_memory) if parallel_preparation else memory_for(chunks)}
-                    # Keep transcript-only semantic coverage even when sparse frames
-                    # required a bounded cue sample for the visual model.
-                    own_cues = set(chunk["subtitle_ids"])
-                    for segment in segments:
-                        if set(segment["cue_ids"]).issubset(own_cues):
-                            fact = {"text": segment["summary"], "cue_ids": segment["cue_ids"]}
-                            if fact not in chunk["dialogue_facts"]:
-                                chunk["dialogue_facts"].append(fact)
-                    if number == 0 and raw.get("continues_previous") and chunks:
-                        previous = chunks.pop()
-                        required_frames = list(dict.fromkeys(deep_frame_ids(previous) + deep_frame_ids(chunk)))
-                        chunk["start_ms"] = previous["start_ms"]
-                        chunk["summary"] = (previous["summary"] + "；" + chunk["summary"])[-6000:]
-                        for key in ("frame_ids", "evidence_frame_ids", "subtitle_ids", "shot_ids"):
-                            chunk[key] = list(dict.fromkeys(previous.get(key, []) + chunk.get(key, [])))
-                        for key in ("visual_facts", "dialogue_facts", "inferences"):
-                            chunk[key] = previous.get(key, []) + chunk.get(key, [])
-                        chunk["needs_deep"] = previous["needs_deep"] or chunk["needs_deep"]
-                        chunk["deep_frame_ids"] = required_frames
-                        chunk["scene_key"] = chunk["scene_key"] or previous.get("scene_key", "")
-                        chunk["memory_before"] = previous["memory_before"]
-                        chunk["id"] = chunk["chunk_id"] = "scene_" + digest([asset_id, chunk["start_ms"], stop])
-                        reps = list(dict.fromkeys(previous["representative_frame_ids"] + chunk["representative_frame_ids"]))
-                        chunk["representative_frame_ids"] = reps if len(reps) <= 8 else reps[:7] + [reps[-1]]
-                    chunk["memory_after"] = memory_for(chunks + [chunk])
-                    chunks.append(chunk)
-                if prepared is None:
-                    self._scene_progress(job_id, "preparation", completed=index + 1)
-                    self.update(job_id, completed=index + 1, progress=(index + 1) / max(total, 1) * .5)
-            self._scene_metric(job_id, "preparation", wall_elapsed=time.monotonic() - preparation_started)
-            if not chunks:
-                raise ValueError("此范围没有可分析的关键帧")
-            link_similar_scenes(chunks)
+                    local_cues = [c for c in cues if c["end_ms"] > a and c["start_ms"] < b]
+                    sub_context = subtitle_context(cues, segments, a, b)
+                    if prepared is not None:
+                        self.update(job_id, message=f"整理已完成的视觉分块：{index + 1}/{total}")
+                        result = prepared[index]
+                    else:
+                        self._scene_progress(job_id, "preparation", status="running")
+                        self.update(job_id, message=f"视觉分块与简要索引：{index + 1}/{total}")
+                        version = prompt_versions()["preparation"]
+                        frozen = read_json(directory / "scene-inputs" / f"{digest(['preparation', version, str(index)])}.json")
+                        args = (frozen["args"] if frozen is not None else
+                                [core, context_frames, sub_context, memory_for(chunks), self._scene_context(asset_id, config)])
+                        result = await self._scene_call(job_id, "preparation", str(index), prep_profile,
+                            self.providers.prepare_visual, args,
+                            images=math.ceil((len(core) + len(context_frames)) / 16))
+                    for number, raw in enumerate(result["chunks"]):
+                        chosen = [frame_lookup[fid] for fid in raw["frame_ids"]]
+                        start = a if number == 0 else chosen[0]["at_ms"]
+                        next_raw = result["chunks"][number + 1] if number + 1 < len(result["chunks"]) else None
+                        stop = frame_lookup[next_raw["frame_ids"][0]]["at_ms"] if next_raw else b
+                        chunk_id = "scene_" + digest([asset_id, start, stop])
+                        chunk = {**raw, "id": chunk_id, "chunk_id": chunk_id, "asset_id": asset_id, "run_id": run_id,
+                                 "scene_key": raw.get("scene_key", ""),
+                                 "start_ms": start, "end_ms": stop, "shot_ids": list(dict.fromkeys(f["shot_id"] for f in chosen)),
+                                 "evidence_frame_ids": list(raw["frame_ids"]),
+                                 "subtitle_ids": [c["id"] for c in local_cues if c["end_ms"] > start and c["start_ms"] < stop],
+                                 "understanding_level": "initial", "dependencies": dependencies,
+                                 "provenance": {"strategy": STRATEGY, "keyframe_plan_id": plan["id"],
+                                                "profile_id": prep_profile["id"], "model": prep_profile.get("model", "")},
+                                 "uncertainties": result.get("unresolved", []),
+                                 "memory_before": copy.deepcopy(frozen_memory) if parallel_preparation else memory_for(chunks)}
+                        # Keep transcript-only semantic coverage even when sparse frames
+                        # required a bounded cue sample for the visual model.
+                        own_cues = set(chunk["subtitle_ids"])
+                        for segment in segments:
+                            if set(segment["cue_ids"]).issubset(own_cues):
+                                fact = {"text": segment["summary"], "cue_ids": segment["cue_ids"]}
+                                if fact not in chunk["dialogue_facts"]:
+                                    chunk["dialogue_facts"].append(fact)
+                        if number == 0 and raw.get("continues_previous") and chunks:
+                            previous = chunks.pop()
+                            required_frames = list(dict.fromkeys(deep_frame_ids(previous) + deep_frame_ids(chunk)))
+                            chunk["start_ms"] = previous["start_ms"]
+                            chunk["summary"] = (previous["summary"] + "；" + chunk["summary"])[-6000:]
+                            for key in ("frame_ids", "evidence_frame_ids", "subtitle_ids", "shot_ids"):
+                                chunk[key] = list(dict.fromkeys(previous.get(key, []) + chunk.get(key, [])))
+                            for key in ("visual_facts", "dialogue_facts", "inferences"):
+                                chunk[key] = previous.get(key, []) + chunk.get(key, [])
+                            chunk["needs_deep"] = previous["needs_deep"] or chunk["needs_deep"]
+                            chunk["deep_frame_ids"] = required_frames
+                            chunk["scene_key"] = chunk["scene_key"] or previous.get("scene_key", "")
+                            chunk["memory_before"] = previous["memory_before"]
+                            chunk["id"] = chunk["chunk_id"] = "scene_" + digest([asset_id, chunk["start_ms"], stop])
+                            reps = list(dict.fromkeys(previous["representative_frame_ids"] + chunk["representative_frame_ids"]))
+                            chunk["representative_frame_ids"] = reps if len(reps) <= 8 else reps[:7] + [reps[-1]]
+                        chunk["memory_after"] = memory_for(chunks + [chunk])
+                        chunks.append(chunk)
+                    self._save_partial_scene_preparation(asset_id, run_id, config, chunks, len(batches), index + 1)
+                    if prepared is None:
+                        self._scene_progress(job_id, "preparation", completed=index + 1)
+                        self.update(job_id, completed=index + 1, progress=(index + 1) / max(total, 1) * .5)
+                self._scene_metric(job_id, "preparation", wall_elapsed=time.monotonic() - preparation_started)
+                if not chunks:
+                    raise ValueError("此范围没有可分析的关键帧")
+                link_similar_scenes(chunks)
+                self._save_scene_preparation(asset_id, run_id, config, plan, chunks, len(batches), total)
             if not state.get("published"):
                 self._check_scene_dependencies(asset_id, config, store)
                 store.publish(asset_id, run_id, chunks, config["start_ms"], config["end_ms"])
-                self._sync_scene_index(job_id, asset_id)
                 state["published"] = True
+                state["index_dirty"] = True
                 atomic_json(state_path, state)
-            completed_chunks = []
-            context_changed = False
+            self._repair_scene_index(job_id, asset_id, state, state_path)
             batch_size = deep_batch_size(config["profile_snapshots"]["vision"])
             deep_total = sum(math.ceil(len(deep_frame_ids(c, all_frames=config.get("character_reanalysis"))) / batch_size) for c in chunks
                              if c["needs_deep"] or config.get("character_reanalysis"))
@@ -797,24 +917,31 @@ class SceneJobMixin:
                     deep_seen = True
                 elif deep_seen:
                     refresh_total += 1
-            self._scene_progress(job_id, "deep_analysis", total=deep_total)
-            self._scene_progress(job_id, "context_refresh", total=refresh_total)
-            self.update(job_id, deep_request_count=deep_total, total=len(chunks), completed=0)
-            for index, chunk in enumerate(chunks):
+            cursor, completed_chunks = self._load_scene_understanding(
+                asset_id, run_id, config, chunks, state, state_path, store)
+            self._repair_scene_index(job_id, asset_id, state, state_path)
+            context_changed = cursor["context_changed"]
+            refresh_completed = cursor["refresh_completed"]
+            self._scene_progress(job_id, "deep_analysis", total=deep_total,
+                                 completed=cursor["deep_completed"])
+            self._scene_progress(job_id, "context_refresh", total=refresh_total,
+                                 completed=refresh_completed)
+            self.update(job_id, deep_request_count=deep_total, total=len(chunks),
+                        completed=cursor["completed"], progress=.5 + .5 * cursor["completed"] / len(chunks))
+            for index in range(cursor["completed"], len(chunks)):
+                chunk = chunks[index]
                 await yield_to_io()
                 self.checkpoint(job_id)
                 memory = bounded_memory(prior, completed_chunks)
-                if chunk["needs_deep"] or config.get("character_reanalysis"):
+                kind = self._understanding_kind(chunk, config, context_changed)
+                if kind == "deep_analysis":
                     selected_ids = deep_frame_ids(chunk, all_frames=config.get("character_reanalysis"))
                     chunk = await self._deepen_scene(job_id, chunk, [frame_lookup[fid] for fid in selected_ids], cues, memory)
                     self._check_scene_dependencies(asset_id, config, store)
                     chunk = store.upgrade(asset_id, run_id, chunk, invalidate_dependents=False)
                     context_changed = True
-                    self._sync_scene_index(job_id, asset_id)
-                elif context_changed:
+                elif kind == "context_refresh":
                     self._scene_progress(job_id, "context_refresh", status="running")
-                    # Earlier deep analysis changed the narrative. Reconcile only
-                    # text-supported interpretation; no need to send these images again.
                     prepared = {key: chunk[key] for key in ("chunk_id", "start_ms", "end_ms", "summary", "visual_facts", "dialogue_facts", "inferences")}
                     for field in ("visual_facts", "dialogue_facts", "inferences"):
                         prepared[field] = prepared[field][-16:]
@@ -825,10 +952,13 @@ class SceneJobMixin:
                     chunk["memory_after"] = bounded_memory({}, [chunk])
                     self._check_scene_dependencies(asset_id, config, store)
                     chunk = store.publish(asset_id, run_id + "_context", [chunk], chunk["start_ms"], chunk["end_ms"])[0]
-                    self._sync_scene_index(job_id, asset_id)
                     refresh_completed += 1
                     self._scene_progress(job_id, "context_refresh", completed=refresh_completed)
-                completed_chunks.append(store.get(asset_id, chunk["id"]))
+                self._commit_scene_understanding(cursor, chunk, kind,
+                    self.get(job_id)["stage_progress"]["deep_analysis"]["completed"], state, state_path, store)
+                self._repair_scene_index(job_id, asset_id, state, state_path)
+                completed_chunks.append(store._project_semantics(asset_id, chunk))
+                completed_chunks = completed_chunks[-8:]
                 self.update(job_id, completed=index + 1, progress=.5 + .5 * (index + 1) / len(chunks))
         embedding = config.get("bindings", {}).get("embedding")
         if embedding:
@@ -863,7 +993,6 @@ class SceneJobMixin:
         config, asset_id = job["config"], job["asset_id"]
         profile = config["profile_snapshots"]["vision"]
         batch_size = deep_batch_size(profile)
-        self._scene_context(asset_id, config)
         progress_base = self.get(job_id).get("stage_progress", {}).get("deep_analysis", {}).get("completed", 0)
         self._scene_progress(job_id, "deep_analysis", status="running")
         target = self.library.asset_dir(asset_id) / "analyses" / job["run_id"] / "scene-deep" / f"{chunk['id']}.json"
@@ -920,7 +1049,6 @@ class SceneJobMixin:
         for index, offset in enumerate(range(0, len(frames), batch_size)):
             await yield_to_io()
             self.checkpoint(job_id)
-            self._scene_context(asset_id, config)
             current = frames[offset:offset + batch_size]
             start = chunk["start_ms"] if offset == 0 else current[0]["at_ms"]
             end = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else chunk["end_ms"]

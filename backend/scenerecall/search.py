@@ -124,6 +124,9 @@ class SearchEngine:
                     signature TEXT NOT NULL, text_hash TEXT NOT NULL, vector TEXT NOT NULL,
                     PRIMARY KEY(signature,text_hash)
                 );
+                CREATE TABLE IF NOT EXISTS build_checkpoints (
+                    kind TEXT PRIMARY KEY, records_digest TEXT NOT NULL
+                );
             """)
 
     @staticmethod
@@ -178,6 +181,7 @@ class SearchEngine:
                     "SELECT data FROM records WHERE asset_id=? AND kind='subtitle' AND is_context=0", (asset,))]
                 for context in _context_records(source):
                     self._write_record(db, context)
+            db.execute("DELETE FROM build_checkpoints")
             self._generation += 1
 
     def remove_assets(self, asset_ids):
@@ -186,6 +190,7 @@ class SearchEngine:
             for asset_id in asset_ids:
                 db.execute("DELETE FROM evidence_fts WHERE id IN (SELECT id FROM records WHERE asset_id=?)", (asset_id,))
                 db.execute("DELETE FROM records WHERE asset_id=?", (asset_id,))
+            db.execute("DELETE FROM build_checkpoints")
             self._generation += 1
 
     def sync_asset(self, records: list[dict], asset_id: str | None = None) -> dict:
@@ -229,6 +234,7 @@ class SearchEngine:
                         self._write_record(db, row)
                         context_count += 1
             if changed_count or removed_count or context_count:
+                db.execute("DELETE FROM build_checkpoints")
                 self._generation += 1
         return {"upserted": changed_count, "removed": removed_count, "contexts_changed": context_count}
 
@@ -246,16 +252,30 @@ class SearchEngine:
                 await result
 
     async def rebuild(self, records: list[dict], embedding_profile_id: str | None = None,
-                      *, before_batch: Callable | None = None, on_batch: Callable | None = None) -> dict:
+                      *, before_batch: Callable | None = None, on_batch: Callable | None = None,
+                      embed_batch: Callable | None = None) -> dict:
         self._validate_records(records)
         generation = self._generation
         all_records = records + _context_records(records)
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         count, cost, cost_known, cache_hits = 0, 0.0, True, 0
         namespace = None
+        records_digest = self._records_digest(all_records)
+        signature = self._signature(embedding_profile_id) if embedding_profile_id else None
+        with self._lock, self._db() as db:
+            completed = {row[0]: row[1] for row in db.execute("SELECT kind,records_digest FROM build_checkpoints")}
+            lexical_ready = (completed.get("lexical") == records_digest
+                and db.execute("SELECT COUNT(*) FROM records").fetchone()[0] == len(all_records)
+                and db.execute("SELECT COUNT(*) FROM evidence_fts").fetchone()[0] == len(all_records))
+            vector_ready = bool(signature and completed.get("vector:" + signature) == records_digest
+                and db.execute("SELECT 1 FROM namespaces WHERE signature=?", (signature,)).fetchone())
+        if lexical_ready and (not signature or vector_ready):
+            return {"records": len(records), "contexts": len(all_records) - len(records),
+                    "embedding_profile_id": embedding_profile_id,
+                    "cache_hits": len({_text_hash(record) for record in all_records}) if signature else 0,
+                    "request_count": 0, "usage": usage, "cost": 0.0, "resumed": True}
         if embedding_profile_id and all_records:
             import lancedb
-            signature = self._signature(embedding_profile_id)
             profile = self.providers.get(embedding_profile_id)
             vector_by_hash = {}
             with self._db() as db:
@@ -268,7 +288,9 @@ class SearchEngine:
                 batch = missing[offset:offset + 64]
                 await self._callback(before_batch, len(batch))
                 try:
-                    result = await self.providers.embed(embedding_profile_id, [text for _, text in batch])
+                    texts = [text for _, text in batch]
+                    result = (await embed_batch(texts) if embed_batch else
+                              await self.providers.embed(embedding_profile_id, texts))
                 except ProviderError as exc:
                     await self._callback(on_batch, exc)
                     raise
@@ -306,16 +328,30 @@ class SearchEngine:
                 "embedding_profile_id": embedding_profile_id, "cache_hits": cache_hits,
                 "request_count": count, "usage": usage, "cost": cost if cost_known else None}
 
+    @staticmethod
+    def _records_digest(records: list[dict]) -> str:
+        return hashlib.sha256(json.dumps(sorted(records, key=lambda row: row["id"]),
+            ensure_ascii=False, sort_keys=True, allow_nan=False).encode()).hexdigest()
+
     def _publish(self, records: list[dict], namespace: tuple | None, generation: int) -> None:
         with self._lock, self._db() as db:
             if self._generation != generation:
                 raise ValueError("索引构建期间资料发生变化，请重试重建；原索引已保留")
-            db.execute("DELETE FROM records")
-            db.execute("DELETE FROM evidence_fts")
-            for record in records:
-                self._write_record(db, record)
+            records_digest = self._records_digest(records)
+            checkpoint = db.execute("SELECT records_digest FROM build_checkpoints WHERE kind='lexical'").fetchone()
+            if (not checkpoint or checkpoint[0] != records_digest
+                    or db.execute("SELECT COUNT(*) FROM records").fetchone()[0] != len(records)
+                    or db.execute("SELECT COUNT(*) FROM evidence_fts").fetchone()[0] != len(records)):
+                db.execute("DELETE FROM records")
+                db.execute("DELETE FROM evidence_fts")
+                for record in records:
+                    self._write_record(db, record)
+                db.execute("DELETE FROM build_checkpoints")
+                db.execute("INSERT INTO build_checkpoints VALUES ('lexical',?)", (records_digest,))
             if namespace:
                 db.execute("INSERT OR REPLACE INTO namespaces VALUES (?,?,?,?,?,?,?)", namespace)
+                db.execute("INSERT OR REPLACE INTO build_checkpoints VALUES (?,?)",
+                           ("vector:" + namespace[0], records_digest))
             self._generation += 1
 
     def status(self) -> dict:

@@ -285,7 +285,8 @@ async def test_failed_deep_retry_reuses_preparation_and_successful_deep_receipts
     assert counts(worker) == {"preparation": 1, "deep_analysis": 3}
     assert [call["start_ms"] for call in worker.provider.calls if call["stage"] == "deep_analysis"] == [0, 24250, 24250]
     assert worker.store.list(worker.asset["id"])[0]["understanding_level"] == "deep"
-    assert resumed["stage_metrics"]["preparation"]["cache_hits"] >= 1
+    # The published stage is restored as a whole; its receipts are not replayed.
+    assert resumed["stage_metrics"]["preparation"] == first["stage_metrics"]["preparation"]
 
 
 @pytest.mark.asyncio

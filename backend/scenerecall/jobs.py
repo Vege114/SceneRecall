@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from . import codex_cli
 from .library import Library, atomic_json, digest, now, read_json, uid
 from .models import AnalysisInput
-from .providers import (CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, MAX_OUTPUT_TOKENS,
+from .providers import (AIResult, CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_REFERENCES, MAX_OUTPUT_TOKENS,
                         PROMPT_VERSION, SUBTITLE_PROMPT_VERSION, ProviderManager)
 from .workflows import WorkflowQueueMixin
 from .scene_jobs import CODEX_CORE_FRAMES, CORE_FRAMES, SceneJobMixin
@@ -467,7 +467,7 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         with scope(profile) if scope else nullcontext():
             return await method(profile["id"], *args)
 
-    async def call(self, job_id: str, profile: dict, method, *args, frames=0, context_tokens=0,
+    async def call(self, job_id: str, profile: dict, method, *args, frames=0, text_count=1, context_tokens=0,
                    receipt_path=None, receipt_key=None):
         job = self.checkpoint(job_id)
         call_id = uid("call")
@@ -479,7 +479,7 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             return copy.deepcopy(cached["data"])
         await self.reserve_call(job_id, profile, call_id=call_id,
             receipt_path=str(receipt_path.relative_to(self.library.root)), frames=frames,
-            context_tokens=context_tokens)
+            text_count=text_count, context_tokens=context_tokens)
         async def perform():
             started = time.monotonic()
             try:
@@ -648,9 +648,49 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         interval = max(1, round(1000 / config["subtitle_fps"]))
         subtitle_times = list(range(start, end, interval)) if "subtitle" in config["stages"] else []
         total = len(windows) + math.ceil(len(subtitle_times) / 8)
-        self.update(job_id, total=total, completed=0)
-        completed = 0
+        stage_state = copy.deepcopy(self.get(job_id).get("legacy_stage_state", {}))
+        fingerprint = self.library.get_asset(asset_id)["fingerprint"]
+        subtitle_signature = None
+        subtitle_ready = False
+        if subtitle_times:
+            subtitle_signature = digest([fingerprint, start, end, interval, config["subtitle_crop"],
+                model_identity(config["profile_snapshots"]["subtitle"]), SUBTITLE_PROMPT_VERSION])
+            saved = stage_state.get("subtitle", {})
+            subtitle_ready = (saved.get("signature") == subtitle_signature
+                and saved.get("active") == self.library.active(asset_id).get("subtitle_runs")
+                and saved.get("subtitle_digest") == digest(self.library.subtitles(asset_id)))
+        completed = math.ceil(len(subtitle_times) / 8) if subtitle_ready else 0
+        self.update(job_id, total=total, completed=completed)
+        # Validate committed window references in one pass. Resuming the index
+        # or OCR stage never reconstructs character context for finished vision.
+        observations = {record.get("cache_key"): record for record in self.library.observations(asset_id)} if windows else {}
+        vision_signature = (digest([fingerprint, windows, config.get("keyframe_plan_id"),
+            config["frames_per_window"], config["character_snapshot"],
+            model_identity(config["profile_snapshots"]["vision"]), PROMPT_VERSION]) if windows else None)
+        saved_vision = stage_state.get("vision", {})
+        finished_windows = (dict(saved_vision.get("units", {}))
+            if saved_vision.get("signature") == vision_signature else {})
+
+        def save_stage(stage, value):
+            state = copy.deepcopy(self.get(job_id).get("legacy_stage_state", {}))
+            state[stage] = value
+            self.update(job_id, legacy_stage_state=state)
+
+        pending_windows = []
         for window in windows:
+            saved_key = finished_windows.get(window["id"])
+            if isinstance(saved_key, str) and saved_key in observations:
+                record = observations[saved_key]
+                if (record.get("id") == "obs_" + digest([asset_id, window["start_ms"], window["end_ms"]])
+                        and record.get("start_ms") == window["start_ms"]
+                        and record.get("end_ms") == window["end_ms"]):
+                    completed += 1
+                    continue
+            pending_windows.append(window)
+        if len(pending_windows) != len(windows):
+            self.update(job_id, completed=completed, progress=completed / max(total, 1),
+                        message="已恢复完成的画面识别，继续后续阶段")
+        for window in pending_windows:
             self.checkpoint(job_id)
             self.character_context(asset_id, config["character_snapshot"])
             profile = config["profile_snapshots"]["vision"]
@@ -662,10 +702,12 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             checkpoint_key = "vision:" + cache_key
             record_id = "obs_" + digest([asset_id, window["start_ms"], window["end_ms"]])
             stage_path = directory / "analyses" / run_id / "vision-batches" / f"{cache_key}.json"
-            existing = next((r for r in self.library.observations(asset_id) if r.get("cache_key") == cache_key), None)
+            existing = observations.get(cache_key)
             try:
                 if existing and (not config["force"] or existing.get("run_id") == run_id
                                  or checkpoint_key in self.get(job_id)["checkpoints"]):
+                    finished_windows[window["id"]] = cache_key
+                    save_stage("vision", {"signature": vision_signature, "units": finished_windows})
                     completed += 1
                     self.update(job_id, completed=completed, progress=completed/max(total, 1), message="复用已完成的画面识别")
                     continue
@@ -718,6 +760,9 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                     self.library.save_observation(asset_id, data)
                 self.search.upsert(self.library.records(asset_id))
                 self.update(job_id, checkpoints=self.get(job_id)["checkpoints"] + [checkpoint_key])
+                observations[cache_key] = data
+                finished_windows[window["id"]] = cache_key
+                save_stage("vision", {"signature": vision_signature, "units": finished_windows})
             except StopJob:
                 raise
             except (CharacterContextChanged, StaleCharacterRevision):
@@ -783,7 +828,8 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                 self.update(job_id, failures=self.get(job_id)["failures"] + [{"unit": checkpoint_key, "message": error_message(exc)}])
                 return None
             return cached
-        batches = [subtitle_times[offset:offset + 8] for offset in range(0, len(subtitle_times), 8)]
+        batches = ([] if subtitle_ready else
+            [subtitle_times[offset:offset + 8] for offset in range(0, len(subtitle_times), 8)])
         def ocr_done(index, result):
             nonlocal completed
             completed += 1
@@ -795,10 +841,15 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         all_ocr_ok = all(result is not None for result in results)
         if batches:
             self._scene_metric(job_id, "subtitle", wall_elapsed=time.monotonic() - ocr_started)
-        if subtitle_times and all_ocr_ok:
+        if subtitle_ready:
+            self.update(job_id, message="已恢复完成的字幕轨道，继续后续阶段")
+        elif subtitle_times and all_ocr_ok:
             self.checkpoint(job_id)
             cues = merge_ocr_frames(canonical_ocr_frames(ocr_frames, start, end, interval), interval)
             self.library.save_subtitles(asset_id, run_id, cues, start, end)
+            save_stage("subtitle", {"signature": subtitle_signature,
+                "active": self.library.active(asset_id).get("subtitle_runs"),
+                "subtitle_digest": digest(self.library.subtitles(asset_id))})
         elif subtitle_times and not all_ocr_ok:
             self.update(job_id, message="字幕批次有失败，完整轨道未切换；重试可复用已识别批次")
         self.checkpoint(job_id)
@@ -818,12 +869,14 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         await self.search.rebuild(records)
         profile = self.providers.get(embedding_profile_id) if embedding_profile_id else None
 
-        def before_batch(batch_size):
-            self.before_call(job_id, profile, text_count=batch_size)
-
-        def on_batch(result):
-            self.account(job_id, result)
+        async def embed_batch(texts):
+            # The normal durable-call protocol recovers accounting and response
+            # data if the process stops before SearchEngine commits its cache.
+            key = "embedding:" + digest([model_identity(profile), texts])
+            data = await self.call(job_id, profile, self.providers.embed, texts,
+                                   text_count=len(texts), receipt_key=key)
+            return AIResult(data, {}, 0, 0.0)
 
         if profile:
             await self.search.rebuild(records, embedding_profile_id=embedding_profile_id,
-                                      before_batch=before_batch, on_batch=on_batch)
+                                      before_batch=lambda _: self.checkpoint(job_id), embed_batch=embed_batch)

@@ -138,7 +138,7 @@ async def test_controls_drain_started_calls_and_resume_without_repaying(scene_wo
     completed = await execute(worker, job)
     assert completed["status"] == "completed", completed
     assert completed["request_count"] == 4 and entered == 4
-    assert completed["stage_metrics"]["preparation"]["cache_hits"] == 2
+    assert completed["stage_metrics"]["preparation"]["cache_hits"] == 0
 
 
 @pytest.mark.asyncio
