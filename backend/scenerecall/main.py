@@ -7,6 +7,7 @@ import mimetypes
 import os
 import secrets
 import shutil
+import zipfile
 from contextlib import nullcontext
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,7 @@ from .models import (
     AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput, ConcurrencyInput,
     CharacterMergeInput, CharacterReanalysisInput, DeepenInput, ExecutionOptions, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
+from .native_picker import FilePickerBusy, FilePickerInput, FilePickerUnavailable, RestoreLocalInput, local_file, pick_local_files
 from .providers import ProviderManager
 from .search import SearchEngine
 from .scenes import SceneStore
@@ -246,6 +248,20 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.post("/api/media/subtitle-tracks")
     async def media_subtitle_tracks(payload: SubtitleProbeInput):
         return await asyncio.to_thread(subtitle_track_info, Path(payload.video_path))
+
+    @app.post("/api/media/subtitle-detection")
+    async def media_subtitle_detection(payload: SubtitleProbeInput):
+        from .subtitle_detection import detect_subtitle_sources
+        return await asyncio.to_thread(detect_subtitle_sources, Path(payload.video_path))
+
+    @app.post("/api/local-files/pick")
+    async def local_files_pick(payload: FilePickerInput):
+        try:
+            return await asyncio.to_thread(pick_local_files, payload)
+        except FilePickerBusy as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except FilePickerUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
 
     @app.post("/api/assets")
     async def asset_register(payload: AssetInput):
@@ -523,12 +539,23 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             with path.open("wb") as out:
                 while chunk := await file.read(1024*1024):
                     out.write(chunk)
-            result = await asyncio.to_thread(library.restore, path)
-            await search.rebuild(library.records())
-            return result
+            return await restore_archive(path)
         finally:
             path.unlink(missing_ok=True)
             await file.close()
+
+    async def restore_archive(path):
+        try:
+            result = await asyncio.to_thread(library.restore, path)
+        except zipfile.BadZipFile as exc:
+            raise ValueError("所选文件不是有效的 ZIP 备份") from exc
+        await search.rebuild(library.records())
+        return result
+
+    @app.post("/api/backups/restore-local")
+    async def restore_local(payload: RestoreLocalInput):
+        path = await asyncio.to_thread(local_file, payload.path, "backup")
+        return await restore_archive(path)
 
     frontend = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if frontend.exists():

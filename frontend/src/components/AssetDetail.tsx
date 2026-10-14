@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowLeft, Bookmark, Check, ChevronRight, Clock3, FileVideo, FolderSearch, Layers3, Maximize2, Pencil, Play, ScanLine, Subtitles, Trash2, UsersRound } from 'lucide-react';
 import { api, duration, formatTime, friendlyDate, message, post } from '../api';
+import { pickLocalFiles } from '../lib/localFiles';
 import { useApp } from '../context';
 import { KIND_LABELS, SUBTITLE_SOURCE_LABELS, type Annotation, type AssetDetail as AssetDetailType, type Entity, type Observation, type SceneChunk, type Subtitle } from '../types';
 import { Alert, Empty, Field, Modal, Spinner, Status } from './ui';
@@ -36,12 +37,19 @@ function RelocateModal({ assetId, onClose, onSaved }: { assetId: string; onClose
   const { notify } = useApp();
   const [path, setPath] = useState('');
   const [busy, setBusy] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const [error, setError] = useState('');
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); setBusy(true); setError('');
-    try { await post(`/assets/${encodeURIComponent(assetId)}/relocate`, { video_path: path.trim().replace(/^['"]|['"]$/g, '') }); await onSaved(); notify('原视频位置已更新'); onClose(); } catch (error) { setError(message(error)); } finally { setBusy(false); }
+  const choose = async () => {
+    if (busy || choosing) return;
+    setChoosing(true); setError('');
+    try { const paths = await pickLocalFiles('video'); if (paths.length) setPath(paths[0]); }
+    catch (error) { setError(message(error)); } finally { setChoosing(false); }
   };
-  return <Modal title="重新定位原视频" subtitle="文件移动或状态变化后，在这里重新校验原文件。" onClose={onClose}><form onSubmit={submit}><div className="modal-body"><Field label="新的视频绝对路径"><input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/Users/你的名字/Movies/动画.mkv" required /></Field><p className="helper">请提供同一个视频文件，以保持时间码与识别资料对应。</p>{error && <Alert tone="error">{error}</Alert>}</div><footer className="modal-footer"><span /> <button className="button primary" type="submit" disabled={busy}>{busy ? <Spinner label="正在校验" /> : '校验并更新位置'}</button></footer></form></Modal>;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); if (!path || busy || choosing) return; setBusy(true); setError('');
+    try { await post(`/assets/${encodeURIComponent(assetId)}/relocate`, { video_path: path }); await onSaved(); notify('原视频位置已更新'); onClose(); } catch (error) { setError(message(error)); } finally { setBusy(false); }
+  };
+  return <Modal title="重新定位原视频" subtitle="文件移动或状态变化后，在这里重新校验原文件。" onClose={() => { if (!busy && !choosing) onClose(); }}><form onSubmit={submit}><div className="modal-body"><button className="button secondary" type="button" disabled={busy || choosing} onClick={() => void choose()}>{choosing ? <Spinner label="正在选择文件" /> : <><FolderSearch size={16} />{path ? '重新选择原视频' : '选择原视频'}</>}</button>{path && <Field label="已选择的视频"><input value={path} readOnly /></Field>}<p className="helper">在 Finder 中选择同一个视频文件，以保持时间码与识别资料对应。</p>{error && <Alert tone="error">{error}</Alert>}</div><footer className="modal-footer"><span /> <button className="button primary" type="submit" disabled={busy || choosing || !path}>{busy ? <Spinner label="正在校验" /> : '校验并更新位置'}</button></footer></form></Modal>;
 }
 
 export default function AssetDetail({ id, initialTime = 0, initialCue, initialChunk }: { id: string; initialTime?: number; initialCue?: string; initialChunk?: string }) {

@@ -231,17 +231,30 @@ class Library:
         mode = payload.subtitle_mode
         fallback = None
         if mode in {"auto", "container"}:
-            if mode == "auto" and not tracks and payload.subtitle_stream_index is None:
-                if payload.subtitle_offset_ms:
-                    raise ValueError("未检测到容器字幕轨，无法应用文字轨时间偏移")
-                mode = "embedded"
-                fallback = "未检测到容器字幕轨；仅在画面有烧录字幕时，可绑定字幕视觉模型后运行 OCR。音轨转写暂不支持。"
+            if mode == "auto" and recommended_subtitle_track(tracks) is None and payload.subtitle_stream_index is None:
+                from .subtitle_detection import detect_subtitle_sources
+
+                detection = detect_subtitle_sources(source, metadata=metadata)
+                if detection["recommended_mode"] == "external":
+                    mode = "external"
+                    sub_path = Path(detection["recommended_subtitle_path"])
+                elif tracks:
+                    # Bitmap soft tracks cannot be read by OCR of the video
+                    # frame; do not silently select that unrelated workflow.
+                    select_subtitle_track(tracks)
+                else:
+                    if payload.subtitle_offset_ms:
+                        raise ValueError("未检测到可用文字字幕，无法应用字幕时间偏移")
+                    mode = "embedded"
+                    fallback = detection["reason"] + "；仅在画面有烧录字幕时，可绑定字幕视觉模型后运行 OCR。音轨转写暂不支持。"
+                    if detection["warnings"]:
+                        fallback += " " + " ".join(detection["warnings"])
             else:
                 track = select_subtitle_track(tracks, payload.subtitle_stream_index)
                 container = self._extract_container(source, metadata, track, payload.subtitle_offset_ms)
                 mode = "container"
-        if payload.subtitle_mode == "external":
-            sub_path = Path(payload.subtitle_path).expanduser().resolve(strict=True)
+        if mode == "external":
+            sub_path = sub_path or Path(payload.subtitle_path).expanduser().resolve(strict=True)
             cues = parse_subtitles(sub_path, metadata["duration_ms"], payload.subtitle_offset_ms)
             if not cues:
                 raise ValueError("字幕文件没有有效字幕")

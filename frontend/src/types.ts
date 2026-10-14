@@ -21,6 +21,18 @@ export interface BangumiSearch {
   status: 'matches' | 'not_found' | 'error'; candidates: BangumiSubject[]; error?: string;
 }
 export type SubtitleMode = 'auto' | 'container' | 'external' | 'embedded';
+export interface ExternalSubtitleCandidate {
+  path: string; name: string; relative_path: string; match: 'exact' | 'filename' | 'episode' | 'unmatched';
+  language: string | null; score: number;
+}
+export interface SubtitleDetection extends SubtitleTracks {
+  external_candidates: ExternalSubtitleCandidate[];
+  recommended_mode: 'container' | 'external' | 'auto';
+  recommended_subtitle_path: string | null;
+  reason: string;
+  scan_complete: boolean;
+  warnings?: string[];
+}
 export interface SubtitleTrack {
   index: number;
   codec: string;

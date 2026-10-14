@@ -21,7 +21,11 @@ function context(): AppContextValue {
 function renderApp(ui: ReactNode, value = context()) { return render(<AppContext.Provider value={value}>{ui}</AppContext.Provider>); }
 function mockFetch(handler: (url: string, options?: RequestInit) => unknown | Promise<unknown>) {
   const fetch = vi.fn(async (url: string, options?: RequestInit) => {
-    const data = await handler(url, options);
+    let data = await handler(url, options);
+    if (url.endsWith('/subtitle-detection') && !(data instanceof Response)) {
+      const value = data as Partial<SubtitleTracks>;
+      data = { external_candidates: [], recommended_mode: value.tracks?.some((track) => track.supported) ? 'container' : 'auto', recommended_subtitle_path: null, reason: '已检测字幕', scan_complete: true, tracks: [], recommended_stream_index: null, duration_ms: 12000, ...value };
+    }
     return data instanceof Response ? data : new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   vi.stubGlobal('fetch', fetch); return fetch;
@@ -48,11 +52,11 @@ describe('Local container subtitle import', () => {
 
   it('shows track metadata, disables bitmap tracks and imports an explicitly selected stream and offset without a model', async () => {
     const user = userEvent.setup();
-    const fetch = mockFetch((url) => url.endsWith('/subtitle-tracks') ? tracks : { ...asset, subtitle_mode: 'container' });
+    const fetch = mockFetch((url) => url.endsWith('/subtitle-detection') ? tracks : { ...asset, subtitle_mode: 'container' });
     const onClose = vi.fn(); renderApp(<ImportModal onClose={onClose} />);
     await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/synthetic.mkv');
     await user.click(screen.getByRole('button', { name: '从零建档' }));
-    await user.click(screen.getByRole('button', { name: '探测字幕轨' }));
+    await user.click(screen.getByRole('button', { name: '重新自动检测' }));
     const select = await screen.findByLabelText(/视频内的字幕轨/);
     expect(screen.getByRole('option', { name: '轨道 2 · zho · 简体 · ass · 默认' })).toBeTruthy();
     expect((screen.getByRole('option', { name: /hdmv_pgs_subtitle/ }) as HTMLOptionElement).disabled).toBe(true);
@@ -72,9 +76,9 @@ describe('Local container subtitle import', () => {
     });
     const onClose = vi.fn(); renderApp(<ImportModal onClose={onClose} />);
     const path = screen.getByLabelText(/视频绝对路径/);
-    await user.type(path, '/tmp/a.mkv'); await user.click(screen.getByRole('button', { name: '从零建档' })); await user.click(screen.getByRole('button', { name: '探测字幕轨' }));
+    await user.type(path, '/tmp/a.mkv'); await user.click(screen.getByRole('button', { name: '从零建档' })); await user.click(screen.getByRole('button', { name: '重新自动检测' }));
     await user.clear(path); await user.type(path, '/tmp/b.mkv');
-    await user.click(screen.getByRole('button', { name: '探测字幕轨' }));
+    await user.click(screen.getByRole('button', { name: '重新自动检测' }));
     const select = await screen.findByLabelText(/视频内的字幕轨/);
     await user.selectOptions(select, '7');
     await act(async () => { stale.resolve(tracks); await stale.promise; });
@@ -95,15 +99,16 @@ describe('Local container subtitle import', () => {
     const fetch = mockFetch((_url, options) => JSON.parse(options!.body as string).video_path === '/tmp/empty.mkv' ? { ...tracks, tracks: [], recommended_stream_index: null } : { ...tracks, tracks: [tracks.tracks[2]], recommended_stream_index: null });
     renderApp(<ImportModal onClose={vi.fn()} />);
     const path = screen.getByLabelText(/视频绝对路径/);
-    await user.type(path, '/tmp/empty.mkv'); await user.click(screen.getByRole('button', { name: '从零建档' })); await user.click(screen.getByRole('button', { name: '探测字幕轨' }));
+    await user.type(path, '/tmp/empty.mkv'); await user.click(screen.getByRole('button', { name: '从零建档' })); await user.click(screen.getByRole('button', { name: '重新自动检测' }));
     await screen.findByText(/未发现容器字幕轨/);
     expect((screen.getByRole('button', { name: /加入资料库/ }) as HTMLButtonElement).disabled).toBe(false);
-    await user.clear(path); await user.type(path, '/tmp/bitmap.mkv'); await user.click(screen.getByRole('button', { name: '探测字幕轨' }));
+    await user.clear(path); await user.type(path, '/tmp/bitmap.mkv'); await user.click(screen.getByRole('button', { name: '重新自动检测' }));
     await screen.findByText(/图像字幕轨不能直接作为画面 OCR/);
     expect((screen.getByRole('button', { name: /加入资料库/ }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole('button', { name: /外挂字幕文件/ }));
     expect((screen.getByRole('button', { name: /加入资料库/ }) as HTMLButtonElement).disabled).toBe(false);
-    expect((screen.getByLabelText(/字幕文件绝对路径/) as HTMLInputElement).required).toBe(true);
+    expect(screen.getByLabelText(/这集的外挂字幕/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: '选择本机字幕文件（可多选）' })).toBeTruthy();
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -113,13 +118,13 @@ describe('Local container subtitle import', () => {
     renderApp(<ImportModal onClose={vi.fn()} />);
     await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/missing.mkv');
     await user.click(screen.getByRole('button', { name: '从零建档' }));
-    await user.click(screen.getByRole('button', { name: '探测字幕轨' }));
+    await user.click(screen.getByRole('button', { name: '重新自动检测' }));
     await screen.findByRole('alert');
     await user.clear(screen.getByLabelText(/视频绝对路径/));
     expect(screen.queryByText('视频路径不可读')).toBeNull();
     failed = false;
     await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/synthetic.mkv');
-    await user.click(screen.getByRole('button', { name: '探测字幕轨' }));
+    await user.click(screen.getByRole('button', { name: '重新自动检测' }));
     await screen.findByLabelText(/视频内的字幕轨/);
   });
 

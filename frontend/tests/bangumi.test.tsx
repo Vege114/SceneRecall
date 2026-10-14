@@ -17,7 +17,7 @@ function show(projects: Project[] = [], projectId?: string) {
 function mockFetch(handler: (url: string, body: any) => unknown | Promise<unknown>) {
   const fetch = vi.fn(async (url: string, options?: RequestInit) => {
     const body = options?.body ? JSON.parse(String(options.body)) : {};
-    const result = await handler(url, body);
+    const result = url === '/api/media/subtitle-detection' ? { duration_ms: 12000, tracks: [], recommended_stream_index: null, external_candidates: [], recommended_mode: 'auto', recommended_subtitle_path: null, reason: '未找到字幕', scan_complete: true } : await handler(url, body);
     return result instanceof Response ? result : new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   vi.stubGlobal('fetch', fetch); return fetch;
@@ -121,7 +121,7 @@ describe('Bangumi animation import', () => {
     await user.selectOptions(screen.getByLabelText('归属项目'), 'other');
     expect(importButton().disabled).toBe(true); expect(screen.queryByRole('link', { name: '查看 Bangumi 条目' })).toBeNull();
     await screen.findByText('没有找到对应的 Bangumi 条目。你可以提供链接，或从零建立档案。');
-    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ query: '另一部动画' });
+    expect(JSON.parse(String(fetch.mock.calls.find(([url]) => url === '/api/bangumi/search')![1]?.body))).toEqual({ query: '另一部动画' });
   });
 
   it('shares one unassigned batch archive, keeps it when adding or removing files, and resets all rows on a title change', async () => {

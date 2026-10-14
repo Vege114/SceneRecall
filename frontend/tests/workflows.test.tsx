@@ -14,6 +14,7 @@ import App from '../src/App';
 const asset: Asset = { id: 'synthetic-asset', work_id: 'synthetic-work', title: '合成测试片段', kind: 'movie', duration_ms: 12000, width: 640, height: 360, subtitle_mode: 'external', source_available: true, source_changed: false, created_at: '2026-01-01T00:00:00Z', status: 'ready' };
 const profile: Profile = { id: 'vision-test', name: '测试视觉接口', base_url: 'http://127.0.0.1:9000/v1', model: 'local-test-model', capabilities: ['vision'], secret_mode: 'session', has_key: true };
 const bootstrap: Bootstrap = { library_path: '/tmp/scenerecall-ui-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: { assets: 1, records: 1, favorites: 0 }, tools: { ffmpeg: true, ffprobe: true }, version: '0.1.0' };
+const noSubtitles = { duration_ms: 12000, tracks: [], recommended_stream_index: null, external_candidates: [], recommended_mode: 'auto', recommended_subtitle_path: null, reason: '未找到字幕', scan_complete: true };
 
 function appContext(overrides: Partial<AppContextValue> = {}): AppContextValue {
   return { bootstrap, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn(), ...overrides };
@@ -22,7 +23,7 @@ function renderApp(ui: ReactNode, context: AppContextValue = appContext()) {
   return render(<AppContext.Provider value={context}>{ui}</AppContext.Provider>);
 }
 function mockFetch(handler: (url: string, options?: RequestInit) => unknown | Promise<unknown>) {
-  const mock = vi.fn(async (url: string, options?: RequestInit) => new Response(JSON.stringify(await handler(url, options)), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const mock = vi.fn(async (url: string, options?: RequestInit) => new Response(JSON.stringify(url === '/api/media/subtitle-detection' ? noSubtitles : await handler(url, options)), { status: 200, headers: { 'Content-Type': 'application/json' } }));
   vi.stubGlobal('fetch', mock);
   return mock;
 }
@@ -32,23 +33,26 @@ afterEach(() => {
 });
 
 describe('Import and model prerequisites', () => {
-  it('requires a subtitle path before sending an external-subtitle import', async () => {
+  it('requires a selected subtitle before sending an external-subtitle import', async () => {
     const user = userEvent.setup();
-    const fetch = mockFetch(() => asset);
+    const fetch = mockFetch((url) => url === '/api/local-files/pick' ? { paths: ['/tmp/synthetic.srt'], cancelled: false } : asset);
     const onClose = vi.fn();
     renderApp(<ImportModal onClose={onClose} />);
     await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/synthetic.mp4');
     await user.click(screen.getByRole('button', { name: '从零建档' }));
     await user.click(screen.getByRole('button', { name: /外挂字幕文件/ }));
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
-    expect(fetch).not.toHaveBeenCalled();
-    expect((screen.getByLabelText(/字幕文件绝对路径/) as HTMLInputElement).validity.valueMissing).toBe(true);
-    await user.type(screen.getByLabelText(/字幕文件绝对路径/), '/tmp/synthetic.srt');
+    expect(fetch.mock.calls.some((call) => call[0] === '/api/imports')).toBe(false);
+    expect(await screen.findByText('请为「synthetic.mp4」选择外挂字幕文件。')).toBeTruthy();
+    expect((screen.getByLabelText(/这集的外挂字幕/) as HTMLSelectElement).value).toBe('');
+    await user.click(screen.getByRole('button', { name: '选择本机字幕文件（可多选）' }));
+    expect((screen.getByLabelText(/这集的外挂字幕/) as HTMLSelectElement).value).toBe('/tmp/synthetic.srt');
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
     await screen.findByRole('dialog', { name: '批量导入进度' });
     expect(onClose).not.toHaveBeenCalled();
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).items[0]).toMatchObject({ video_path: '/tmp/synthetic.mp4', subtitle_path: '/tmp/synthetic.srt', subtitle_mode: 'external', series: '', title: 'synthetic' });
-    expect(fetch.mock.calls[0][0]).toBe('/api/imports');
+    const imported = fetch.mock.calls.find((call) => call[0] === '/api/imports')!;
+    expect(JSON.parse(imported[1]!.body as string).items[0]).toMatchObject({ video_path: '/tmp/synthetic.mp4', subtitle_path: '/tmp/synthetic.srt', subtitle_mode: 'external', series: '', title: 'synthetic' });
+    expect(JSON.parse(fetch.mock.calls.find((call) => call[0] === '/api/local-files/pick')![1]!.body as string)).toEqual({ kind: 'subtitle', multiple: true, directory: '/tmp' });
     expect(fetch.mock.calls.some((call) => call[0].startsWith('/api/jobs'))).toBe(false);
   });
 
@@ -61,7 +65,7 @@ describe('Import and model prerequisites', () => {
     await user.click(screen.getByRole('button', { name: /画面字幕 OCR/ }));
     expect((screen.getByRole('button', { name: /加入资料库/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/中绑定字幕视觉模型/)).toBeTruthy();
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch.mock.calls.every((call) => call[0] === '/api/media/subtitle-detection')).toBe(true);
   });
 
   it('keeps an existing API key input empty and omits it on unchanged profile updates', async () => {
