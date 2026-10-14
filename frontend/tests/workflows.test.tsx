@@ -38,6 +38,7 @@ describe('Import and model prerequisites', () => {
     const onClose = vi.fn();
     renderApp(<ImportModal onClose={onClose} />);
     await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/synthetic.mp4');
+    await user.click(screen.getByRole('button', { name: '从零建档' }));
     await user.click(screen.getByRole('button', { name: /外挂字幕文件/ }));
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
     expect(fetch).not.toHaveBeenCalled();
@@ -56,6 +57,7 @@ describe('Import and model prerequisites', () => {
     const fetch = mockFetch(() => asset);
     renderApp(<ImportModal onClose={vi.fn()} />);
     await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/synthetic.mp4');
+    await user.click(screen.getByRole('button', { name: '从零建档' }));
     await user.click(screen.getByRole('button', { name: /画面字幕 OCR/ }));
     expect((screen.getByRole('button', { name: /加入资料库/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/中绑定字幕视觉模型/)).toBeTruthy();

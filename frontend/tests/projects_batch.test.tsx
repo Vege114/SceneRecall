@@ -84,6 +84,23 @@ describe('Local multi-file browser and import', () => {
     const body = JSON.parse(fetch.mock.calls[1][1]!.body as string); expect(body.items).toHaveLength(1); expect(body.items[0]).toMatchObject({ item_id: 'bad', video_path: '/fixed/bad.mkv' });
   });
 
+  it('preserves separate archive selections and legacy kinds when retrying an older project import', async () => {
+    const user = userEvent.setup();
+    const entries: ImportInput[] = [{ ...input('one'), episode: 1, anime_profile: { mode: 'bangumi', subject_id: 42 } }, { ...input('two'), episode: 2, anime_profile: { mode: 'scratch' } }, { ...input('film'), kind: 'movie', series: '', episode: null }];
+    const job = { ...baseJob, id: 'legacy-import', type: 'import', status: 'failed', items: entries.map((entry) => ({ item_id: entry.item_id, name: entry.title, status: 'failed', error: '原视频不可读' })) };
+    const fetch = mockFetch((url) => url === '/api/imports/legacy-import' ? { job, items: entries, project_id: 'project1' } : { ...job, status: 'completed' });
+    show(<ImportModal retryJobId="legacy-import" onClose={vi.fn()} />);
+    await screen.findByText('已选择 Bangumi 条目 #42，导入时读取现成档案。');
+    expect((screen.getByLabelText(/^作品名称/) as HTMLInputElement).disabled).toBe(true);
+    await user.clear(screen.getByLabelText(/视频绝对路径/)); await user.type(screen.getByLabelText(/视频绝对路径/), '/fixed/one.E99.mkv');
+    expect((screen.getByLabelText('集（可选）') as HTMLInputElement).value).toBe('1');
+    await user.click(within(screen.getByLabelText('待导入视频')).getByRole('button', { name: /^two/ }));
+    expect(screen.getByText('从零建立档案 · 仅为能够确认姓名的人物建档，后续识别补充出场证据。')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /重试失败文件/ })); await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    const body = JSON.parse(fetch.mock.calls[1][1]!.body as string);
+    expect(body.items.map((entry: ImportInput) => [entry.title, entry.kind, entry.episode, entry.anime_profile])).toEqual([['one', 'animation', 1, { mode: 'bangumi', subject_id: 42 }], ['two', 'animation', 2, { mode: 'scratch' }], ['film', 'movie', null, undefined]]);
+  });
+
   it('naturally sorts 2 before 10, applies continuous episode numbering, and preserves a per-file override', async () => {
     const user = userEvent.setup(); const fetch = mockFetch((_url, body) => ({ ...baseJob, type: 'import', status: 'completed', items: body.items.map((entry: ImportInput) => ({ item_id: entry.item_id, name: entry.title, status: 'completed', asset_id: entry.item_id })) }));
     show(<ImportModal projectId="project1" onClose={vi.fn()} />);
@@ -93,10 +110,30 @@ describe('Local multi-file browser and import', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce()); const body = JSON.parse(fetch.mock.calls[0][1]!.body as string); expect(body.items.map((entry: ImportInput) => entry.video_path)).toEqual(['/tmp/2.mkv', '/tmp/10.mkv']); expect(body.items.map((entry: ImportInput) => [entry.season, entry.episode])).toEqual([[2, 3], [2, 10]]);
   });
 
+  it('keeps a shared title and manual episode settings when replacing a file or adding more files', async () => {
+    const user = userEvent.setup(); const fetch = mockFetch((_url, body) => ({ ...baseJob, type: 'import', status: 'completed', items: body.items.map((entry: ImportInput) => ({ item_id: entry.item_id, name: entry.title, status: 'completed', asset_id: entry.item_id })) }));
+    show(<ImportModal projectId="project1" onClose={vi.fn()} />);
+    await user.click(screen.getByText('粘贴多个绝对路径')); await user.click(screen.getByLabelText('每行一个视频路径')); await user.paste('/tmp/[A] Anime [10][1080p].mkv\n/tmp/[Z] Anime [02][x265].mkv'); await user.click(screen.getByRole('button', { name: '添加路径列表' }));
+    const rows = within(screen.getByLabelText('待导入视频'));
+    expect(rows.getAllByRole('button').map((row) => row.textContent)).toEqual(['第 2 集[Z] Anime [02][x265].mkv', '第 10 集[A] Anime [10][1080p].mkv']);
+    expect(screen.getAllByLabelText(/^作品名称/)).toHaveLength(1);
+    await user.clear(screen.getByLabelText(/^作品名称/)); await user.type(screen.getByLabelText(/^作品名称/), '共同动画名');
+    await user.click(rows.getByRole('button', { name: /第 10 集/ }));
+    await user.type(screen.getByLabelText('季（可选）'), '3'); await user.clear(screen.getByLabelText('集（可选）')); await user.type(screen.getByLabelText('集（可选）'), '20');
+    await user.clear(screen.getByLabelText(/视频绝对路径/)); await user.type(screen.getByLabelText(/视频绝对路径/), '/fixed/Other.S02E04.mkv');
+    expect((screen.getByLabelText(/^作品名称/) as HTMLInputElement).value).toBe('共同动画名');
+    expect((screen.getByLabelText('季（可选）') as HTMLInputElement).value).toBe('3'); expect((screen.getByLabelText('集（可选）') as HTMLInputElement).value).toBe('20');
+    await user.click(screen.getByLabelText('每行一个视频路径')); await user.paste('/tmp/Anime [01].mkv'); await user.click(screen.getByRole('button', { name: '添加路径列表' })); await user.click(screen.getByRole('button', { name: /加入资料库/ }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce()); const body = JSON.parse(fetch.mock.calls[0][1]!.body as string);
+    expect(body.items.map((entry: ImportInput) => entry.title)).toEqual(['共同动画名', '共同动画名', '共同动画名']);
+    expect(body.items.map((entry: ImportInput) => [entry.season, entry.episode])).toEqual([[null, 1], [null, 2], [3, 20]]);
+    expect(body.items[2].video_path).toBe('/fixed/Other.S02E04.mkv');
+  });
+
   it('explicitly clears project membership and legacy series metadata when choosing unassigned', async () => {
     const user = userEvent.setup(); const fetch = mockFetch(() => ({ ...baseJob, type: 'import', status: 'completed', items: [] }));
     show(<ImportModal projectId="project1" onClose={vi.fn()} />);
-    await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/ep1.mkv'); await user.selectOptions(screen.getByLabelText('归属项目'), 'project2'); await user.selectOptions(screen.getByLabelText('归属项目'), ''); await user.click(screen.getByRole('button', { name: /加入资料库/ }));
+    await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/ep1.mkv'); await user.selectOptions(screen.getByLabelText('归属项目'), ''); await user.click(screen.getByRole('button', { name: '从零建档' })); await user.click(screen.getByRole('button', { name: /加入资料库/ }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce()); const body = JSON.parse(fetch.mock.calls[0][1]!.body as string); expect(body.project_id).toBeNull(); expect(body.items[0].series).toBe('');
   });
 
@@ -104,6 +141,7 @@ describe('Local multi-file browser and import', () => {
     const user = userEvent.setup(); const fetch = vi.fn().mockRejectedValue(new Error('network')); vi.stubGlobal('fetch', fetch);
     show(<ImportModal onClose={vi.fn()} />);
     await user.type(screen.getByLabelText(/视频绝对路径/), '/tmp/ep1.mkv');
+    await user.click(screen.getByRole('button', { name: '从零建档' }));
     await user.click(screen.getByRole('button', { name: /加入资料库/ })); await screen.findByRole('alert');
     await user.click(screen.getByRole('button', { name: /加入资料库/ })); await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(JSON.parse(fetch.mock.calls[0][1].body).request_id).toBe(JSON.parse(fetch.mock.calls[1][1].body).request_id);

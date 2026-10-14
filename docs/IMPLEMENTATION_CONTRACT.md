@@ -2,6 +2,14 @@
 
 Internal records and REST use snake_case. Time is integer milliseconds relative to asset start. Source data are versioned JSON; all indexes disposable. Engineering tests use generated fixtures and provider doubles. Real media/model validation is recorded separately in `VALIDATION.md` and is not inferred from synthetic tests.
 
+## Anime batch import UI (2026-10-14)
+
+Fresh imports represent one anime, including theatrical anime: every item has `kind: animation` and the same batch title. The title and initial Bangumi/scratch archive are edited once above the file editor. Unassigned fresh batches use one title-dependent archive discovery scope; adding/removing/reselecting files does not reset it, and title changes invalidate stale lookups and selections. Existing animation projects retain their saved archive and project-name query. Destination and series metadata still follow the selected project; unassigned imports remain unassigned and do not implicitly create projects or shared character scopes.
+
+Filename inference fills per-file season/episode only where recognizable and orders selected files by inferred season/episode with numeric filename fallback. Common `S01E02`, `EP02`, Chinese episode markers and bracketed numbers are recognized; technical metadata and years are not episode defaults. Season, episode, version, subtitle source/stream/file and offset remain independent per item. Manual season/episode edits, including clearing them, survive path edits and adding files. Explicit bulk numbering marks its assigned values as user overrides. Retry loads persisted item titles, kinds, profiles and ordering rather than rewriting old multi-work batches; saved profiles and committed items retain existing retry restrictions.
+
+The GUI removes movie/series category and type entry points, creates animation projects, and offers animation projects as new import destinations. Legacy asset/project kinds and REST input enums remain supported, and editing an old project preserves its kind. No data migration or model invocation occurs as part of this UI change.
+
 ## Direct stage and batch recovery (2026-10-14)
 
 Resume/retry of the same persistent task restores validated stage results and completed units before admitting remaining work. A completed stage does not traverse its model-call or assembly path again. A partly completed stage reuses its saved units and runs only the unfinished work; local source, dependency, evidence and checkpoint validation still occurs. Execution checkpoints are separate from frozen model inputs and paid-call receipts and do not change their identities, request budgets or cumulative accounting.

@@ -41,7 +41,7 @@ function RelocateModal({ assetId, onClose, onSaved }: { assetId: string; onClose
     event.preventDefault(); setBusy(true); setError('');
     try { await post(`/assets/${encodeURIComponent(assetId)}/relocate`, { video_path: path.trim().replace(/^['"]|['"]$/g, '') }); await onSaved(); notify('原视频位置已更新'); onClose(); } catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
-  return <Modal title="重新定位原视频" subtitle="文件移动或状态变化后，在这里重新校验原文件。" onClose={onClose}><form onSubmit={submit}><div className="modal-body"><Field label="新的视频绝对路径"><input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/Users/你的名字/Movies/电影.mp4" required /></Field><p className="helper">请提供同一个视频文件，以保持时间码与识别资料对应。</p>{error && <Alert tone="error">{error}</Alert>}</div><footer className="modal-footer"><span /> <button className="button primary" type="submit" disabled={busy}>{busy ? <Spinner label="正在校验" /> : '校验并更新位置'}</button></footer></form></Modal>;
+  return <Modal title="重新定位原视频" subtitle="文件移动或状态变化后，在这里重新校验原文件。" onClose={onClose}><form onSubmit={submit}><div className="modal-body"><Field label="新的视频绝对路径"><input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/Users/你的名字/Movies/动画.mkv" required /></Field><p className="helper">请提供同一个视频文件，以保持时间码与识别资料对应。</p>{error && <Alert tone="error">{error}</Alert>}</div><footer className="modal-footer"><span /> <button className="button primary" type="submit" disabled={busy}>{busy ? <Spinner label="正在校验" /> : '校验并更新位置'}</button></footer></form></Modal>;
 }
 
 export default function AssetDetail({ id, initialTime = 0, initialCue, initialChunk }: { id: string; initialTime?: number; initialCue?: string; initialChunk?: string }) {

@@ -26,7 +26,6 @@ const importJob = (body: any) => ({ id: 'import-1', type: 'import', status: 'com
 const importButton = () => screen.getByRole('button', { name: /加入资料库/ }) as HTMLButtonElement;
 async function animation(user: ReturnType<typeof userEvent.setup>, title = '星海') {
   await user.type(screen.getByLabelText(/视频绝对路径/), `/tmp/${title}.mkv`);
-  await user.selectOptions(screen.getByLabelText('作品类型'), 'animation');
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -35,7 +34,7 @@ describe('Bangumi animation import', () => {
     const user = userEvent.setup();
     const fetch = mockFetch((url, body) => url === '/api/bangumi/search' ? { status: 'matches', candidates: [dossier().subject] } : url === '/api/bangumi/subject' ? dossier() : importJob(body));
     show([project], project.id);
-    expect((screen.getByLabelText('作品类型') as HTMLSelectElement).value).toBe('animation');
+    expect(screen.queryByLabelText('作品类型')).toBeNull();
     expect(importButton().disabled).toBe(true);
     await screen.findByRole('link', { name: '查看 Bangumi 条目' });
     expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ query: '星海' });
@@ -103,7 +102,7 @@ describe('Bangumi animation import', () => {
     const fetch = mockFetch((url, body) => url === '/api/bangumi/search' ? body.query === '星海' ? { status: 'matches', candidates: [dossier().subject] } : { status: 'not_found', candidates: [] } : url === '/api/bangumi/subject' ? pending : importJob(body));
     show(); await animation(user);
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/bangumi/subject')).toBe(true));
-    await user.clear(screen.getByLabelText('作品名称')); await user.type(screen.getByLabelText('作品名称'), '新动画');
+    await user.clear(screen.getByLabelText(/作品名称/)); await user.type(screen.getByLabelText(/作品名称/), '新动画');
     await act(async () => { finish(dossier()); });
     await screen.findByText('没有找到对应的 Bangumi 条目。你可以提供链接，或从零建立档案。');
     expect(screen.queryByRole('link', { name: '查看 Bangumi 条目' })).toBeNull();
@@ -125,24 +124,37 @@ describe('Bangumi animation import', () => {
     expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ query: '另一部动画' });
   });
 
-  it('tracks unassigned animation selections individually and resets only the changed item', async () => {
-    const user = userEvent.setup(); const fetch = mockFetch((url, body) => url === '/api/bangumi/search' ? { status: 'not_found', candidates: [] } : importJob(body));
+  it('shares one unassigned batch archive, keeps it when adding or removing files, and resets all rows on a title change', async () => {
+    const user = userEvent.setup();
+    const fetch = mockFetch((url, body) => url === '/api/bangumi/search' ? { status: 'not_found', candidates: [] } : importJob(body));
     show(); await user.click(screen.getByText('粘贴多个绝对路径'));
-    await user.type(screen.getByLabelText('每行一个视频路径'), '/tmp/1.mkv\n/tmp/2.mkv'); await user.click(screen.getByRole('button', { name: '添加路径列表' }));
-    await user.selectOptions(screen.getByLabelText('作品类型'), 'animation'); await user.click(screen.getByRole('button', { name: '从零建档' }));
+    await user.click(screen.getByLabelText('每行一个视频路径')); await user.paste('/tmp/星海 [02].mkv\n/tmp/星海 [01].mkv');
+    await user.click(screen.getByRole('button', { name: '添加路径列表' }));
+    await screen.findByText('没有找到对应的 Bangumi 条目。你可以提供链接，或从零建立档案。');
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/bangumi/search')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: '从零建档' }));
+    expect(importButton().disabled).toBe(false);
     const rows = within(screen.getByLabelText('待导入视频'));
-    await user.click(rows.getByRole('button', { name: /2/ })); await user.selectOptions(screen.getByLabelText('作品类型'), 'animation');
+    await user.click(rows.getByRole('button', { name: /第 2 集/ }));
+    expect(importButton().disabled).toBe(false);
+    await user.click(screen.getByLabelText('每行一个视频路径')); await user.paste('/tmp/星海 [03].mkv');
+    await user.click(screen.getByRole('button', { name: '添加路径列表' }));
+    expect(importButton().disabled).toBe(false);
+    await user.click(rows.getByRole('button', { name: /第 1 集/ }));
+    await user.click(screen.getByRole('button', { name: '移除当前视频' }));
+    expect(importButton().disabled).toBe(false);
+    await user.clear(screen.getByLabelText(/作品名称/)); await user.type(screen.getByLabelText(/作品名称/), '另一部动画');
     expect(importButton().disabled).toBe(true);
-    await user.click(screen.getByRole('button', { name: '从零建档' })); expect(importButton().disabled).toBe(false);
-    await user.clear(screen.getByLabelText('作品名称')); await user.type(screen.getByLabelText('作品名称'), '另一部动画');
-    expect(importButton().disabled).toBe(true);
-    await user.click(rows.getByRole('button', { name: /^1/ }));
-    expect(screen.getByText('从零建立档案 · 仅为能够确认姓名的人物建档，后续识别补充出场证据。')).toBeTruthy();
-    await user.click(rows.getByRole('button', { name: /另一部动画/ })); await user.selectOptions(screen.getByLabelText('作品类型'), 'movie');
-    expect(importButton().disabled).toBe(false); await user.click(importButton());
+    expect(screen.queryByText('从零建立档案 · 仅为能够确认姓名的人物建档，后续识别补充出场证据。')).toBeNull();
+    await user.click(screen.getByRole('button', { name: '从零建档' }));
+    await user.click(importButton());
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/imports')).toBe(true));
     const body = JSON.parse(String(fetch.mock.calls.find(([url]) => url === '/api/imports')![1]?.body));
-    expect(body.items[0].anime_profile).toEqual({ mode: 'scratch' }); expect(body.items[1]).not.toHaveProperty('anime_profile');
+    expect(body.items).toHaveLength(2);
+    expect(body.items.map((row: ImportInput) => row.title)).toEqual(['另一部动画', '另一部动画']);
+    expect(body.items.map((row: ImportInput) => row.kind)).toEqual(['animation', 'animation']);
+    expect(body.items.map((row: ImportInput) => row.anime_profile)).toEqual([{ mode: 'scratch' }, { mode: 'scratch' }]);
+    expect(body.items.map((row: ImportInput) => row.episode)).toEqual([2, 3]);
   });
 
   it('preserves the original archive selection when retrying a failed import', async () => {

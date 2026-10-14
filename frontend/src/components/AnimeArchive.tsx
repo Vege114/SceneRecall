@@ -11,13 +11,14 @@ interface ArchiveState {
 }
 interface ArchiveScope { key: string; signature: string; query: string; existing?: AnimeProfile; preset?: AnimeProfileSelection }
 const normalizeTitle = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
-function scopeFor(row: ImportInput, project?: Project): ArchiveScope | undefined {
+function scopeFor(row: ImportInput, project?: Project, sharedBatch = false): ArchiveScope | undefined {
   if (row.kind !== 'animation') return;
-  const shared = project?.kind === 'animation';
+  const shared = project?.kind === 'animation' && (sharedBatch || !row.anime_profile);
   const query = (shared ? project.name : row.title).trim();
   const existing = shared && project.anime_profile && (!row.anime_profile || JSON.stringify(profileSelection(project.anime_profile)) === JSON.stringify(row.anime_profile)) ? project.anime_profile : undefined;
-  return { key: shared ? `project:${project.id}` : `item:${row.item_id}`, query,
-    signature: JSON.stringify([shared ? project.id : row.item_id, query, project?.id || '', shared ? project.anime_profile : null]),
+  const identity = shared ? `project:${project.id}` : sharedBatch ? 'batch' : `item:${row.item_id}`;
+  return { key: identity, query,
+    signature: JSON.stringify([identity, query, project?.id || '', shared ? project.anime_profile : null]),
     existing, preset: row.anime_profile };
 }
 function profileSelection(profile: AnimeProfile): AnimeProfileSelection {
@@ -28,11 +29,11 @@ const initialState = (scope: ArchiveScope): ArchiveState => ({ signature: scope.
   dossier: scope.existing?.mode === 'bangumi' ? scope.existing.dossier : undefined,
   selection: scope.existing ? profileSelection(scope.existing) : scope.preset });
 
-export function useAnimeArchives(items: ImportInput[], project?: Project) {
+export function useAnimeArchives(items: ImportInput[], project?: Project, sharedBatch = false) {
   const [archives, setArchives] = useState<Record<string, ArchiveState>>({});
   const requests = useRef<Record<string, { signature: string; version: number; timer?: number }>>({});
   const sequence = useRef(0);
-  const scopes = [...new Map(items.map((row) => scopeFor(row, project)).filter((scope): scope is ArchiveScope => !!scope).map((scope) => [scope.key, scope])).values()];
+  const scopes = [...new Map(items.map((row) => scopeFor(row, project, sharedBatch)).filter((scope): scope is ArchiveScope => !!scope).map((scope) => [scope.key, scope])).values()];
   const scopeKey = JSON.stringify(scopes);
   const invalidate = (scope: ArchiveScope) => {
     const prior = requests.current[scope.key];
@@ -88,7 +89,7 @@ export function useAnimeArchives(items: ImportInput[], project?: Project) {
     requests.current = {};
   }, []);
   const stateFor = (row: ImportInput) => {
-    const scope = scopeFor(row, project);
+    const scope = scopeFor(row, project, sharedBatch);
     if (!scope) return undefined;
     const state = archives[scope.key];
     return state?.signature === scope.signature ? state : initialState(scope);
@@ -96,17 +97,17 @@ export function useAnimeArchives(items: ImportInput[], project?: Project) {
   return {
     stateFor,
     selectionFor: (row: ImportInput) => stateFor(row)?.selection,
-    existingFor: (row: ImportInput) => scopeFor(row, project)?.existing,
+    existingFor: (row: ImportInput) => scopeFor(row, project, sharedBatch)?.existing,
     setReference: (row: ImportInput, reference: string) => {
-      const scope = scopeFor(row, project); if (!scope) return;
+      const scope = scopeFor(row, project, sharedBatch); if (!scope) return;
       setArchives((current) => ({ ...current, [scope.key]: { ...stateFor(row)!, reference } }));
     },
-    read: (row: ImportInput, reference: string) => { const scope = scopeFor(row, project); if (scope) void read(scope, reference); },
+    read: (row: ImportInput, reference: string) => { const scope = scopeFor(row, project, sharedBatch); if (scope) void read(scope, reference); },
     scratch: (row: ImportInput) => {
-      const scope = scopeFor(row, project); if (!scope) return;
+      const scope = scopeFor(row, project, sharedBatch); if (!scope) return;
       const version = invalidate(scope); save(scope, version, { status: 'scratch', selection: { mode: 'scratch' }, dossier: undefined, error: '' });
     },
-    searchAgain: (row: ImportInput) => { const scope = scopeFor(row, project); if (scope?.query) void search(scope, invalidate(scope)); },
+    searchAgain: (row: ImportInput) => { const scope = scopeFor(row, project, sharedBatch); if (scope?.query) void search(scope, invalidate(scope)); },
   };
 }
 
