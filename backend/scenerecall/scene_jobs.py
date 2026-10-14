@@ -10,7 +10,7 @@ import math
 import time
 
 from .library import atomic_json, digest, read_json, uid
-from .execution import bounded_map, execution_width, finish_on_cancel
+from .execution import bounded_map, execution_width, finish_on_cancel, yield_to_io
 
 STRATEGY = "scene-chunks-v1"
 CORE_FRAMES = 56
@@ -344,6 +344,9 @@ class SceneJobMixin:
         return self.get(job["id"])
 
     async def _scene_call(self, job_id, stage, unit, profile, method, args, *, images=0):
+        # A cache hit has no provider await. Let HTTP/control requests run even
+        # when an entire serial stage can be restored from local receipts.
+        await yield_to_io()
         from .jobs import model_identity
         from .models import normalize_observation_evidence
         from .scene_preparation import (CONTEXTUAL_VISION_PROMPT_VERSION, SUBTITLE_PREPARATION_PROMPT_VERSION,
@@ -710,6 +713,7 @@ class SceneJobMixin:
                     lambda: self.checkpoint(job_id), preparation_done)
 
             for index, offset in enumerate(offsets):
+                await yield_to_io()
                 self.checkpoint(job_id)
                 self._scene_context(asset_id, config)
                 core, context_frames = frames[offset:offset + batch_size], frames[max(0, offset - CONTEXT_FRAMES):offset]
@@ -797,6 +801,8 @@ class SceneJobMixin:
             self._scene_progress(job_id, "context_refresh", total=refresh_total)
             self.update(job_id, deep_request_count=deep_total, total=len(chunks), completed=0)
             for index, chunk in enumerate(chunks):
+                await yield_to_io()
+                self.checkpoint(job_id)
                 memory = bounded_memory(prior, completed_chunks)
                 if chunk["needs_deep"] or config.get("character_reanalysis"):
                     selected_ids = deep_frame_ids(chunk, all_frames=config.get("character_reanalysis"))
@@ -912,6 +918,7 @@ class SceneJobMixin:
                 return context
 
         for index, offset in enumerate(range(0, len(frames), batch_size)):
+            await yield_to_io()
             self.checkpoint(job_id)
             self._scene_context(asset_id, config)
             current = frames[offset:offset + batch_size]

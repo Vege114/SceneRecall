@@ -8,6 +8,12 @@ class ReservationBusy(Exception):
     """A call can fit the budget after currently reserved calls finish."""
 
 
+async def yield_to_io():
+    """Give ready I/O a turn, including when cached operations never suspend."""
+    # A positive delay lets the loop poll I/O before admitting more CPU work.
+    await asyncio.sleep(0.001)
+
+
 async def finish_on_cancel(operation):
     """Keep a submitted call and its receipt together during queue shutdown."""
     task = asyncio.create_task(operation)
@@ -47,6 +53,7 @@ async def bounded_map(items, operation, width, checkpoint, on_result=None):
                 task = asyncio.create_task(operation(cursor, values[cursor]))
                 pending[task] = cursor
                 cursor += 1
+                await yield_to_io()
             if not pending:
                 break
             done, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)

@@ -151,6 +151,8 @@ Search record shape: id,asset_id,work_id,title,series,season,episode,version,kin
 
 `Library(root:Path)` provides active record projection, immutable runs, file registration and annotations. Jobs queue in runtime/jobs.sqlite. HTTP API async providers/worker; SQLite connections per operation. App factory `create_app(data_dir:Path,start_worker=True,providers=None)`.
 
+The bounded scheduler yields to I/O after registering each owned task, including operations that complete synchronously from cache. Scene receipt replay, partition assembly, completed-scene replay and saved deep-part replay also yield between bounded units, outside library locks. The small positive scheduling delay allows the loop to poll I/O; it does not alter request concurrency, frozen inputs, receipt identity or accounting. Cancellation during admission still drains all owned operations before propagating, so submitted work retains its durable receipts.
+
 Job errors derived from Pydantic validation expose only bounded validation messages and field locations; they omit input values and validation-help URLs.
 
 Job model snapshots and recognition cache identities distinguish Codex CLI from API connections. Missing provider_type remains OpenAI-compatible and preserves the legacy API identity/cache key. Switching connection type, URL, or model blocks old snapshots before another request. Codex CLI estimates retain frame/request estimates but monetary cost is unknown; analysis creation and resume/retry reject max_cost for Codex stages, and restored jobs pause before submitting a CLI request with a monetary budget. max_requests still reserves up to three attempts, and mixed API/CLI totals remain unknown if any cost is unknown.
