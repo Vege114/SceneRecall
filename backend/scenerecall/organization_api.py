@@ -72,6 +72,12 @@ def register_organization_routes(app, library, queue, search):
     async def projects():
         return organization.projects()
 
+    @app.get("/api/anime")
+    async def anime(project_id: str | None = None):
+        if project_id:
+            organization.get_project(project_id)
+        return organization.anime(project_id)
+
     @app.post("/api/projects")
     async def create_project(payload: ProjectCreate):
         return organization.save_project(payload.model_dump())

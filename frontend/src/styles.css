@@ -68,3 +68,18 @@ fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.7}.o
 @media(max-width:520px){.anime-archive-picker{padding:12px}.anime-archive-preview{gap:11px}.anime-archive-preview>img{width:58px}.anime-archive-preview strong{font-size:13px}.anime-archive-options .button-row{gap:9px}.asset-anime-archive{padding:7px 12px}}
 
 .character-names{display:grid;gap:4px;margin:8px 0;font-size:11px;line-height:1.7}.character-names>div{display:grid;grid-template-columns:minmax(32px,max-content) minmax(0,1fr);gap:8px}.character-names dt{color:#8a947c}.character-names dd{margin:0;color:#687a5c;overflow-wrap:anywhere}
+
+/* Project → anime/season → episode navigation */
+.library-hierarchy { display: grid; gap: 28px; }
+.library-project > .section-row { margin-bottom: 14px; }
+.anime-group { border: 1px solid var(--border, #dde4d9); border-radius: 12px; background: var(--surface, #fff); margin-bottom: 14px; overflow: hidden; }
+.anime-group > summary { display: flex; align-items: center; gap: 12px; padding: 22px; cursor: pointer; color: var(--text, #32473b); }
+.anime-group > summary::after { content: '展开单集 ＋'; margin-left: auto; font-size: 12px; white-space: nowrap; }
+.anime-group[open] > summary::after { content: '收起 −'; }
+.anime-group > summary span { font-size: 13px; color: var(--muted, #7b8c78); }
+.anime-group .asset-grid, .anime-group .asset-list { padding: 0 18px 18px; }
+.anime-group-actions { display: flex; flex-wrap: wrap; gap: 18px; padding: 0 22px 18px; }
+.search-scope { display: flex; flex-wrap: wrap; gap: 16px; padding: 18px 0 4px; }
+.search-scope label { display: grid; gap: 6px; flex: 1; min-width: 170px; font-size: 13px; }
+.search-scope select { width: 100%; }
+@media (max-width: 650px) { .anime-group > summary { flex-wrap: wrap; padding: 16px; } .anime-group > summary::after { margin-left: 0; } .search-scope label { min-width: 100%; } }

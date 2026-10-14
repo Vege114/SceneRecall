@@ -45,8 +45,8 @@ describe('Local container subtitle import', () => {
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
     await screen.findByRole('dialog', { name: '批量导入进度' });
     expect(onClose).not.toHaveBeenCalled();
-    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/imports']);
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).items[0]).toMatchObject({ video_path: '/tmp/synthetic.mkv', subtitle_mode: 'auto', subtitle_path: null, subtitle_offset_ms: 0 });
+    expect(fetch.mock.calls.filter(([url]) => !url.endsWith('/subtitle-detection')).map((call) => call[0])).toEqual(['/api/imports']);
+    expect(JSON.parse(fetch.mock.calls.find(([url]) => url === '/api/imports')![1]!.body as string).items[0]).toMatchObject({ video_path: '/tmp/synthetic.mkv', subtitle_mode: 'auto', subtitle_path: null, subtitle_offset_ms: 0 });
     expect(value.refresh).toHaveBeenCalledOnce();
   });
 
@@ -65,7 +65,7 @@ describe('Local container subtitle import', () => {
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
     await screen.findByRole('dialog', { name: '批量导入进度' });
     expect(onClose).not.toHaveBeenCalled();
-    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string).items[0]).toMatchObject({ subtitle_mode: 'container', subtitle_stream_index: 3, subtitle_offset_ms: -125 });
+    expect(JSON.parse(fetch.mock.calls.find(([url]) => url === '/api/imports')![1]!.body as string).items[0]).toMatchObject({ subtitle_mode: 'container', subtitle_stream_index: 3, subtitle_offset_ms: -125 });
   });
 
   it('clears selected tracks on path change and ignores an older probe that finishes after the new probe', async () => {
@@ -139,7 +139,7 @@ describe('Local container subtitle import', () => {
     await user.click(screen.getByRole('button', { name: /加入资料库/ }));
     await screen.findByRole('dialog', { name: '批量导入进度' });
     expect(onClose).not.toHaveBeenCalled();
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).items[0]).toMatchObject({ subtitle_mode: 'embedded', subtitle_offset_ms: 0 });
+    expect(JSON.parse(fetch.mock.calls.find(([url]) => url === '/api/imports')![1]!.body as string).items[0]).toMatchObject({ subtitle_mode: 'embedded', subtitle_offset_ms: 0 });
   });
 });
 

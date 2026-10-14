@@ -118,7 +118,7 @@ class SceneStore:
                 source_info = self.library.get_asset(source_asset)
                 target_info = self.library.get_asset(asset_id, include_deleted=True)
                 if (source is None or (dependency.get("revision_digest") and dependency["revision_digest"] != self.revision_digest(source))
-                        or source_info.get("project_id") != target_info.get("project_id")
+                        or source_info.get("anime_id") != target_info.get("anime_id")
                         or self._stale_reasons(source_asset, source, cache, visiting)):
                     reasons.append("前序场景上下文已变化")
             except (ValueError, FileNotFoundError):
@@ -319,17 +319,17 @@ class SceneStore:
 
     @staticmethod
     def _episode(asset: dict):
-        if type(asset.get("season")) is not int or type(asset.get("episode")) is not int:
+        if type(asset.get("episode")) is not int:
             return None
-        return asset["season"], asset["episode"]
+        return asset.get("season") or 1, asset["episode"]
 
     def prior_memory(self, asset_id: str, start_ms: int) -> dict:
         asset = self.library.get_asset(asset_id)
         episode = self._episode(asset)
         sources = []
-        if episode is not None and asset.get("project_id"):
+        if episode is not None and asset.get("anime_id"):
             sources = [item for item in self.library.list_assets() if item["id"] != asset_id
-                       and item.get("project_id") == asset["project_id"] and self._episode(item) is not None
+                       and item.get("anime_id") == asset["anime_id"] and self._episode(item) is not None
                        and self._episode(item) < episode]
             sources.sort(key=lambda item: (*self._episode(item), item["id"]))
         sources.append(asset)
@@ -402,8 +402,8 @@ class SceneStore:
         with self.library.lock:
             for target in self.library.list_assets():
                 same = target["id"] == asset_id
-                later = (episode is not None and self._episode(target) is not None and asset.get("project_id")
-                         and target.get("project_id") == asset["project_id"] and self._episode(target) > episode)
+                later = (episode is not None and self._episode(target) is not None and asset.get("anime_id")
+                         and target.get("anime_id") == asset["anime_id"] and self._episode(target) > episode)
                 if not same and not later:
                     continue
                 active = self.library.active(target["id"])

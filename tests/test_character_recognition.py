@@ -308,10 +308,10 @@ async def test_large_cast_keeps_every_dossier_but_bounds_reference_images(cast_w
 
 @pytest.mark.asyncio
 async def test_bangumi_observation_rejects_freeform_names_outside_dossier_projection(cast_worker, monkeypatch):
+    from scenerecall.anime_profiles import AnimeProfileStore
     queue, asset, state = cast_worker
-    scope = queue.characters.context(asset["id"])["scope_id"]
-    queue.characters.seed_bangumi(scope, {
-        "source": "bangumi", "subject": {"id": 100},
+    AnimeProfileStore(queue.library).apply_asset(asset["id"], {"mode": "bangumi", "subject_id": 100}, {
+        "source": "bangumi", "fetched_at": "2026-10-14T00:00:00Z", "subject": {"id": 100, "name": "Synthetic anime"},
         "characters": [{"id": 200, "name": "Aoi", "name_cn": "小葵", "description": "黑色短发，蓝色外套"}]})
 
     async def no_sleep(delay):

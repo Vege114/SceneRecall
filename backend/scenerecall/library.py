@@ -20,13 +20,7 @@ SCHEMA = "1.0"
 
 class DeletedAssetError(ValueError):
     def __init__(self):
-        super().__init__("该视频已在回收站，请先从回收站恢复")
-
-
-class DuplicateAssetError(ValueError):
-    def __init__(self, asset_id):
-        super().__init__("该视频已在资料库中，可重新定位原文件或重跑识别")
-        self.asset_id = asset_id
+        super().__init__("该导入条目已生成的档案在回收站；如需再次导入，请新建导入批次")
 
 
 def now() -> str:
@@ -267,15 +261,16 @@ class Library:
         with self.lock:
             if explicit_project and payload.project_id is not None:
                 self.organization.get_project(payload.project_id)
-            for asset in self.list_assets(include_deleted=True):
-                if import_item_key and asset.get("import_item_key") == import_item_key:
-                    if asset["deleted"]:
-                        raise DeletedAssetError()
-                    return asset
-                if asset["fingerprint"] == checksum:
-                    if asset["deleted"]:
-                        raise DeletedAssetError()
-                    raise DuplicateAssetError(asset["id"])
+            if import_item_key:
+                for asset in self.list_assets(include_deleted=True):
+                    if asset.get("import_item_key") == import_item_key:
+                        if asset["deleted"]:
+                            raise DeletedAssetError()
+                        return asset
+            # The fingerprint validates source integrity; it is not an import
+            # identity. New imports get independent evidence and may reference
+            # the same unchanged source as active or archived assets. Only an
+            # already committed item in this task is reused after a retry/crash.
             asset_id = uid("asset")
             title = payload.title.strip() or source.stem
             identity = [title, payload.kind, payload.series, payload.season, payload.episode]
@@ -734,7 +729,8 @@ class Library:
                     description += " " + " ".join(names)
                 frames = record.get("evidence_frame_ids", [])
                 result.append({"id": record["id"], "record_id": record["id"], "asset_id": asset["id"],
-                               **{key: asset.get(key) for key in ("project_id", "project_name", "folder_id", "folder_ids", "tags")},
+                               **{key: asset.get(key) for key in ("project_id", "project_name", "anime_id", "anime_title",
+                                                                 "folder_id", "folder_ids", "tags")},
                                "work_id": asset["work_id"], "title": asset["title"], "series": asset.get("series", ""),
                                "season": asset.get("season"), "episode": asset.get("episode"), "version": asset["version"],
                                "kind": "scene" if is_scene else "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],

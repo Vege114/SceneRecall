@@ -15,7 +15,7 @@ async def test_failed_deep_episode_has_pending_gap_and_is_not_completed_prior_me
     worker = scene_worker(4)
     next_episode = seed(worker.library, "asset_next", episode=2, series="合成连续剧")
     manifest_path = worker.library.asset_dir(worker.asset["id"]) / "manifest.json"
-    atomic_json(manifest_path, {**read_json(manifest_path), "season": 1, "episode": 1, "series": "合成连续剧"})
+    atomic_json(manifest_path, {**read_json(manifest_path), "title": "合成连续剧", "season": 1, "episode": 1, "series": "合成连续剧"})
     worker.library.organization.assign([worker.asset["id"]], next_episode["project_id"])
     worker.provider.deep_times = {250}
     worker.provider.fail_deep_at = 0

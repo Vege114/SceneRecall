@@ -15,7 +15,7 @@ from scenerecall.search import SearchEngine
 
 def seed(library, identity="asset_one", *, episode=1, season=1, series="测试动画"):
     asset = {"schema_version": "1.0", "id": identity, "work_id": "work_" + identity,
-             "title": identity, "kind": "animation", "series": series, "season": season, "episode": episode,
+             "title": series or identity, "kind": "animation", "series": series, "season": season, "episode": episode,
              "version": "test", "duration_ms": 10000, "fingerprint": identity, "subtitle_mode": "external",
              "created_at": "2026-10-13T00:00:00Z"}
     atomic_json(library.asset_dir(identity) / "manifest.json", asset)

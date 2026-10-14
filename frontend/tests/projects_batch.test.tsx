@@ -80,7 +80,7 @@ describe('Native multi-file selection and import', () => {
   });
 
   it('reloads a failed import and retries only the corrected failed item', async () => {
-    const user = userEvent.setup(); const entries = [input('ok'), input('bad')];
+    const user = userEvent.setup(); const entries = [input('ok'), input('bad')].map((row) => ({ ...row, anime_profile: { mode: 'scratch' as const } }));
     const job = { ...baseJob, id: 'import1', type: 'import', status: 'partial', items: [{ item_id: 'ok', name: 'ok', status: 'completed', asset_id: 'ep1' }, { item_id: 'bad', name: 'bad', status: 'failed', error: '无法读取原视频' }] };
     const fetch = mockFetch((url, body) => url === '/api/imports/import1' ? { job, items: entries, project_id: 'project1' } : { ...job, status: 'queued', items: job.items.map((entry) => entry.item_id === body.items[0].item_id ? { ...entry, status: 'pending' } : entry) });
     show(<ImportModal retryJobId="import1" onClose={vi.fn()} />);
@@ -126,6 +126,7 @@ describe('Native multi-file selection and import', () => {
     expect(rows.getAllByRole('button').map((row) => row.textContent)).toEqual(['第 2 集[Z] Anime [02][x265].mkv', '第 10 集[A] Anime [10][1080p].mkv']);
     expect(screen.getAllByLabelText(/^作品名称/)).toHaveLength(1);
     await user.clear(screen.getByLabelText(/^作品名称/)); await user.type(screen.getByLabelText(/^作品名称/), '共同动画名');
+    await user.click(screen.getByRole('button', { name: '从零建档' }));
     await user.click(rows.getByRole('button', { name: /第 10 集/ }));
     await user.type(screen.getByLabelText('季（可选）'), '3'); await user.clear(screen.getByLabelText('集（可选）')); await user.type(screen.getByLabelText('集（可选）'), '20');
     await user.clear(screen.getByLabelText(/视频绝对路径/)); await user.type(screen.getByLabelText(/视频绝对路径/), '/fixed/Other.S02E04.mkv');

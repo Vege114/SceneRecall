@@ -5,6 +5,7 @@ import { useApp } from '../context';
 import type { Asset, ImportInput, Job, SubtitleMode, SubtitleDetection } from '../types';
 import { compareAnimeImports, inferAnimeFilename } from '../importFilenames';
 import { pairSubtitles } from '../importSubtitles';
+import { groupAnime, animeLabel } from '../anime';
 import { pickLocalFiles } from '../lib/localFiles';
 import { Alert, Field, Modal, Spinner, Status } from './ui';
 import SubtitleTrackSelect from './SubtitleTrackSelect';
@@ -17,13 +18,13 @@ const cleanPath = (value: string) => {
 };
 const makeItem = (path = ''): ImportInput => { const guessed = inferAnimeFilename(path); return { item_id: crypto.randomUUID(), video_path: cleanPath(path), title: guessed.title || cleanPath(path).split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || '', kind: 'animation', series: '', season: guessed.season, episode: guessed.episode, version: '', subtitle_mode: 'auto', subtitle_path: null, subtitle_offset_ms: 0 }; };
 export default function ImportModal({ onClose, projectId, retryJobId }: { onClose: () => void; projectId?: string; retryJobId?: string }) {
-  const { refresh, notify, bootstrap, projects = [], openJobs } = useApp();
+  const { refresh, notify, bootstrap, assets, projects = [], openJobs } = useApp();
   const [items, setItems] = useState<ImportInput[]>(() => {
     const target = projects.find((entry) => entry.id === projectId); const row = makeItem();
     return [target?.kind === 'animation' ? { ...row, title: target.name, series: target.name } : row];
   });
   const [selected, setSelected] = useState(0);
-  const [project, setProject] = useState(() => { const target = projects.find((entry) => entry.id === projectId); return !target || target.kind === 'animation' ? projectId || '' : ''; });
+  const [project, setProject] = useState(() => { const target = projects.find((entry) => entry.id === projectId); return target ? projectId || '' : ''; });
   const [bulkSeason, setBulkSeason] = useState('1');
   const [firstEpisode, setFirstEpisode] = useState('1');
   const [paths, setPaths] = useState('');
@@ -47,7 +48,7 @@ export default function ImportModal({ onClose, projectId, retryJobId }: { onClos
   const item = items[selected] || items[0];
   const targetProject = projects.find((entry) => entry.id === project);
   const fresh = !job && !retryJobId;
-  const archives = useAnimeArchives(items, targetProject, fresh);
+  const archives = useAnimeArchives(items, targetProject, fresh, assets);
   useEffect(() => {
     if (!retryJobId && targetProject?.kind === 'animation') setItems((current) => current.map((row) => !row.video_path && !row.title ? { ...row, kind: 'animation', title: targetProject.name, series: targetProject.name } : row));
   }, [targetProject?.id, targetProject?.kind, targetProject?.name, retryJobId]);
@@ -76,7 +77,7 @@ export default function ImportModal({ onClose, projectId, retryJobId }: { onClos
   const update = (values: Partial<ImportInput>) => { setItems((current) => current.map((row) => row.item_id === item.item_id ? { ...row, ...values } : row)); setError(''); };
   const changeTitle = (title: string) => {
     titleEdited.current = true;
-    setItems((current) => current.map((row) => ({ ...row, title, ...(!targetProject && title !== row.title ? { anime_profile: undefined } : {}) })));
+    setItems((current) => current.map((row) => ({ ...row, title, ...(title !== row.title ? { anime_profile: undefined } : {}) })));
     setError('');
   };
   const changePath = (value: string) => {
@@ -95,7 +96,7 @@ export default function ImportModal({ onClose, projectId, retryJobId }: { onClos
       const present = current.filter((row) => cleanPath(row.video_path)); const seen = new Set(present.map((row) => cleanPath(row.video_path)));
       const added = values.map(cleanPath).filter((value) => value && !seen.has(value) && !!seen.add(value)).map(makeItem);
       const rows = [...present, ...added].sort(compareAnimeImports);
-      const title = current[0]?.title || (!titleEdited.current ? targetProject?.name || rows[0]?.title || '' : '');
+      const title = current[0]?.title || (!titleEdited.current ? rows[0]?.title || targetProject?.name || '' : '');
       return rows.length ? rows.map((row) => ({ ...row, title, kind: 'animation', series: targetProject?.name || '' })) : [{ ...makeItem(), title, series: targetProject?.name || '' }];
     }); setSelected(0); setPaths('');
   };
@@ -173,10 +174,10 @@ export default function ImportModal({ onClose, projectId, retryJobId }: { onClos
   return <Modal title={job ? '批量导入进度' : '导入本机视频'} subtitle="同一部动画一次选择多集，逐集设置集号与字幕，原视频保留在原位置。" onClose={onClose} wide><form onSubmit={submit}>
     <div className="modal-body">
       <>
-        <div className="file-entry"><FileVideo size={27} /><div><strong>连接本地视频文件</strong><p>不会复制或上传整部视频。导入完成后可单独选择分析。</p></div></div>
+        <div className="file-entry"><FileVideo size={27} /><div><strong>连接本地视频文件</strong><p>不会复制或上传整部视频。重复导入会建立独立档案，导入后可单独选择分析。</p></div></div>
         {!job && <><div className="button-row"><button type="button" className="button primary" disabled={picking || busy} onClick={() => void chooseFiles('video')}><Plus size={16} />选择多个视频</button>{picking && <Spinner label="请在系统文件窗口中选择" />}</div><p className="helper">打开系统文件选择窗口，可按住 Command 或 Shift 多选。</p><details className="advanced"><summary>粘贴多个绝对路径</summary><Field label="每行一个视频路径"><textarea value={paths} onChange={(event) => setPaths(event.target.value)} rows={3} /></Field><button type="button" className="button secondary small" disabled={!paths.trim() || picking || busy} onClick={() => addPaths(paths.split(/\r?\n/))}>添加路径列表</button></details></>}
-        <Field label="归属项目"><select value={project} disabled={!!job || !!retryJobId || busy} onChange={(event) => { setProject(event.target.value); const target = projects.find((entry) => entry.id === event.target.value); setItems((current) => current.map((row) => ({ ...row, kind: 'animation', anime_profile: undefined, ...(target ? { title: target.name, series: target.name } : { series: '' }) }))); }}><option value="">未归类</option>{projects.filter((entry) => entry.kind === 'animation' || (!!job && entry.id === project)).map((entry) => <option value={entry.id} key={entry.id}>{entry.name}</option>)}</select></Field>
-        {fresh && item && <fieldset disabled={busy}><Field label="作品名称" hint="所有选入文件共用这个名称与初始档案；剧场版动画也在这里导入。"><input value={items[0].title} onChange={(event) => changeTitle(event.target.value)} required /></Field><AnimeArchivePicker item={items[0]} archives={archives} /></fieldset>}
+        <Field label="归属项目"><select value={project} disabled={!!job || !!retryJobId || busy} onChange={(event) => { setProject(event.target.value); const target = projects.find((entry) => entry.id === event.target.value); setItems((current) => current.map((row) => ({ ...row, kind: 'animation', anime_profile: undefined, ...(target ? { series: target.name } : { series: '' }) }))); }}><option value="">未归类</option>{projects.map((entry) => <option value={entry.id} key={entry.id}>{entry.name}</option>)}</select></Field>
+        {fresh && groupAnime(assets.filter((entry) => (entry.project_id || '') === project)).length > 0 && <Field label="已有动画 / 季度" hint="选择后沿用该动画名称、季度与档案；新动画可直接填写作品名称。"><select value="" onChange={(event) => { const group = groupAnime(assets).find((entry) => entry.id === event.target.value); if (!group) return; titleEdited.current = true; setItems((current) => current.map((row) => ({ ...row, title: group.title, season: group.season, anime_profile: undefined }))); }}><option value="">新建动画，或选择已有动画…</option>{groupAnime(assets.filter((entry) => (entry.project_id || '') === project)).map((group) => <option key={group.id} value={group.id}>{animeLabel(group)}</option>)}</select></Field>}{fresh && item && <fieldset disabled={busy}><Field label="作品名称" hint="填写具体动画或季度的名称；同一项目中的 TV 与剧场版分别命名。所有选入文件共用这个名称。"><input value={items[0].title} onChange={(event) => changeTitle(event.target.value)} required /></Field><AnimeArchivePicker item={items[0]} archives={archives} /></fieldset>}
         {fresh && items.length > 1 && <details className="advanced"><summary>批量设置季号与连续集号</summary><p className="helper">已按文件名识别集号并排序；按左侧文件顺序编号，应用后仍可逐集修改。</p><div className="form-grid"><Field label="批量季号"><input type="number" min="0" step="1" value={bulkSeason} onChange={(event) => setBulkSeason(event.target.value)} /></Field><Field label="起始集号"><input type="number" min="0" step="1" value={firstEpisode} onChange={(event) => setFirstEpisode(event.target.value)} /></Field></div><button type="button" className="button secondary small" disabled={!bulkSeason || !firstEpisode || !Number.isInteger(Number(bulkSeason)) || !Number.isInteger(Number(firstEpisode)) || Number(bulkSeason) < 0 || Number(firstEpisode) < 0} onClick={() => setItems((current) => current.map((row, index) => { episodeOverrides.current.add(row.item_id); seasonOverrides.current.add(row.item_id); return { ...row, season: Number(bulkSeason), episode: Number(firstEpisode) + index }; }))}>应用连续集号</button></details>}
         {job && <div className="import-progress" aria-live="polite"><Status status={job.status} /><span>{job.items?.filter((entry) => !!entry.asset_id).length || 0} / {items.length} 个视频已导入{failed ? ` · ${failed} 个失败` : ''}</span>{running && <Spinner label="正在本机校验与提取字幕" />}<a href="#/jobs" onClick={onClose}>在任务队列查看</a></div>}
         <div className="import-layout"><div className="import-items" aria-label="待导入视频">{items.map((row, index) => { const state = job?.items?.find((entry) => entry.item_id === row.item_id); return <button type="button" className={`import-row ${selected === index ? 'active' : ''}`} key={row.item_id} onClick={() => setSelected(index)}><strong>{fresh ? row.episode !== null ? `${row.season !== null ? `第 ${row.season} 季 · ` : ''}第 ${row.episode} 集` : `视频 ${index + 1} · 集号待确认` : row.title || `视频 ${index + 1}`}</strong><span>{row.video_path.split(/[\\/]/).pop() || '请选择文件'}</span>{state && <Status status={state.status} />}</button>; })}</div>{item && <div className="import-editor"><div className="section-row"><h3>第 {selected + 1} 项 · 文件设置</h3>{fresh && items.length > 1 && <button type="button" className="text-button" aria-label="移除当前视频" disabled={busy || picking} onClick={removeItem}><Trash2 size={14} />移除</button>}</div>

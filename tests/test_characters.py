@@ -6,6 +6,7 @@ from copy import deepcopy
 import pytest
 
 from scenerecall.characters import CharacterStore, StaleCharacterRevision, scope_id
+from scenerecall.anime_profiles import AnimeProfileStore
 from scenerecall.library import Library, atomic_json, read_json
 from scenerecall.providers import ProviderManager
 from scenerecall.search import SearchEngine
@@ -424,12 +425,17 @@ def test_bangumi_reseed_adds_missing_reference_information_without_replacing_loc
     assert store.seed_bangumi(scope, dossier) == seeded
 
 
-def test_bangumi_project_work_context_is_bounded_and_reference_only(cast):
+def bind_bangumi_archive(library, dossier, asset_id="asset_one"):
+    """Attach this animation's roster without changing other works in its series."""
+    return AnimeProfileStore(library).apply_asset(
+        asset_id, {"mode": "bangumi", "subject_id": dossier["subject"]["id"]}, dossier)
+
+
+def test_bangumi_animation_work_context_is_bounded_and_reference_only(cast):
     library, store = cast
-    asset = library.get_asset("asset_one")
     dossier = bangumi_dossier()
     dossier["subject"]["summary"] = "先验介绍" * 5000
-    library.organization.save_project({"anime_profile": {"mode": "bangumi", "dossier": dossier}}, asset["project_id"])
+    bind_bangumi_archive(library, dossier)
     context = store.context("asset_one")
     assert context["work_summary"]["source"] == "bangumi"
     assert context["work_summary"]["name_cn"] == "合成动画"
@@ -508,7 +514,7 @@ def test_bangumi_roster_blocks_new_named_profiles_and_hides_legacy_roles_without
     scope = store.context("asset_one")["scope_id"]
     immutable = next(library.asset_dir("asset_one").glob("analyses/*/observations/*.json"))
     original = immutable.read_bytes()
-    store.seed_bangumi(scope, bangumi_dossier())
+    bind_bangumi_archive(library, bangumi_dossier())
     context = store.context("asset_one")
     assert context["cast_policy"]["mode"] == "bangumi"
     assert context["cast_policy"]["allow_new_profiles"] is False
@@ -543,11 +549,12 @@ def test_refreshed_bangumi_roster_excludes_removed_identity_and_retains_its_raw_
     scope = store.context("asset_one")["scope_id"]
     dossier = bangumi_dossier()
     dossier["characters"].append({"id": 201, "name": "Nana", "name_cn": "奈奈", "aliases": []})
-    registry = store.seed_bangumi(scope, dossier)
+    bind_bangumi_archive(library, dossier)
+    registry = store._read(scope)
     removed = next(profile["id"] for profile in registry["profiles"].values()
                    if profile["external_source"]["character_id"] == 201)
     save(library, store, observation(character_id=removed), registry["revision"])
-    store.seed_bangumi(scope, bangumi_dossier())
+    bind_bangumi_archive(library, bangumi_dossier())
     assert [profile["external_source"]["character_id"] for profile in store.catalog("asset_one")["profiles"]] == [200]
     assert store.context("asset_one")["cast_policy"]["character_ids"] == [200]
     assert store.decorate_observations("asset_one", library.observations("asset_one"))[0]["entities"][0]["character_id"] is None
@@ -571,8 +578,7 @@ def test_legacy_anonymous_dossier_stays_hidden_after_appearance_enrichment(cast)
 def test_bangumi_biography_repair_retains_visual_evidence_and_human_description(cast, refresh):
     library, store = cast
     dossier = bangumi_dossier()
-    asset = library.get_asset("asset_one")
-    library.organization.save_project({"anime_profile": {"mode": "bangumi", "dossier": dossier}}, asset["project_id"])
+    bind_bangumi_archive(library, dossier)
     initial = store.catalog("asset_one")
     identity = initial["profiles"][0]["id"]
     save(library, store, observation(character_id=identity, observed_traits=["红衣", "黑色短发"]), initial["revision"])
@@ -608,8 +614,7 @@ def test_merged_bangumi_sources_reseed_primary_names_and_biography_idempotently(
     dossier["characters"][0].update(name="葵", name_ja="葵", name_en="Aoi", description=biography)
     dossier["characters"].append({"id": 201, "name": "奈々", "name_ja": "奈々", "name_cn": "奈奈",
                                   "name_en": "Nana", "aliases": [], "description": "奈奈的另一份官方简介"})
-    asset = library.get_asset("asset_one")
-    library.organization.save_project({"anime_profile": {"mode": "bangumi", "dossier": dossier}}, asset["project_id"])
+    bind_bangumi_archive(library, dossier)
     initial = store.catalog("asset_one")
     roles = {profile["external_source"]["character_id"]: profile["id"] for profile in initial["profiles"]}
     store.merge("asset_one", roles[201], roles[200])

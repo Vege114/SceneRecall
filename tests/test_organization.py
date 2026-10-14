@@ -10,9 +10,9 @@ from scenerecall.library import Library, atomic_json, read_json
 from scenerecall.organization import OrganizationConflict
 
 
-def seed(library, asset_id="asset_one", series="旧动画", episode=1):
+def seed(library, asset_id="asset_one", series="旧动画", episode=1, title=None):
     asset = {"schema_version": "1.0", "id": asset_id, "work_id": "work_" + asset_id,
-             "title": asset_id, "kind": "animation", "series": series, "season": 1, "episode": episode,
+             "title": title or series or asset_id, "kind": "animation", "series": series, "season": 1, "episode": episode,
              "version": "test", "duration_ms": 10000, "fingerprint": asset_id,
              "created_at": "2026-10-01T00:00:00Z", "subtitle_mode": "embedded"}
     atomic_json(library.asset_dir(asset_id) / "manifest.json", asset)
@@ -407,7 +407,7 @@ def test_standalone_bangumi_move_inherits_archive_and_zero_appearance_cast(libra
 
 
 def test_move_into_bangumi_project_does_not_copy_a_nonroster_local_dossier(library):
-    source = seed(library, "asset_local", series="")
+    source = seed(library, "asset_local", series="", title="目标动画")
     target = seed(library, "asset_target", series="目标动画")
     store = CharacterStore(library)
     local_id = appearance(library, store, source["id"])
@@ -462,19 +462,18 @@ def test_same_bangumi_identity_move_reuses_destination_decisions_without_duplica
     store.validate_all()
 
 
-def test_bangumi_move_to_different_subject_rejects_before_any_catalog_or_cast_write(library):
+def test_bangumi_move_to_series_with_different_subject_keeps_its_concrete_archive(library):
     source_asset = seed(library, "asset_standalone", series="")
     destination = library.organization.save_project({"name": "另一个条目", "kind": "animation"})
     profiles = AnimeProfileStore(library)
     profiles.apply_asset(source_asset["id"], {"mode": "bangumi", "subject_id": 100}, bangumi_archive())
     profiles.apply_project(destination["id"], {"mode": "bangumi", "subject_id": 101}, bangumi_archive(101))
-    catalog_before = library.organization.path.read_bytes()
-    casts_before = {path: path.read_bytes() for path in (library.root / "works").glob("*/characters.json")}
-    with pytest.raises(ValueError):
-        library.organization.assign([source_asset["id"]], destination["id"])
-    assert library.organization.path.read_bytes() == catalog_before
-    assert all(path.read_bytes() == data for path, data in casts_before.items())
-    assert library.get_asset(source_asset["id"])["project_id"] is None
+    library.organization.assign([source_asset["id"]], destination["id"])
+    moved = library.get_asset(source_asset["id"])
+    assert moved["project_id"] == destination["id"]
+    assert moved["anime_profile"]["dossier"]["subject"]["id"] == 100
+    assert library.organization.get_project(destination["id"])["anime_profile"]["dossier"]["subject"]["id"] == 101
+    assert CharacterStore(library).context(source_asset["id"])["work_summary"]["id"] == 100
 
 
 def test_bound_project_move_to_unassigned_preserves_dossier_cast_and_backup(library, tmp_path):

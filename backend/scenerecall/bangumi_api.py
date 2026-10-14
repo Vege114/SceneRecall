@@ -31,7 +31,7 @@ def register_bangumi_routes(app, library, search):
     async def project_profile(project_id: str, payload: AnimeProfileSelection):
         # Validate the local destination before requesting remote data.
         project = library.organization.get_project(project_id)
-        if project["kind"] != "animation":
+        if project["kind"] not in {"animation", "series"}:
             raise ValueError("只有动画项目可以使用 Bangumi 初始档案")
         from .anime_profiles import check_binding
         selection = payload.model_dump(exclude_none=True)

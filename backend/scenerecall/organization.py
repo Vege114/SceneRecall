@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -21,6 +22,49 @@ def legacy_scope(asset: dict) -> str:
     from .characters import normalized
     series = normalized(asset.get("series") or "")
     return "cast_" + digest([asset.get("kind", "movie"), series]) if series else safe_id(asset["work_id"])
+
+
+def release_metadata(asset: dict) -> dict:
+    """Read conservative release hints without changing immutable manifests."""
+    filename = asset.get("file_name") or asset.get("title", "")
+    stem = re.sub(r"\.(?:mkv|mp4|avi|mov|webm|m4v)$", "", filename, flags=re.I)
+    position = re.search(r"\bS(\d{1,2})E(\d{1,3})\b", stem, re.I)
+    bracket = re.search(r"\[(\d{1,3})(?:v\d+)?\]", stem, re.I)
+    explicit = bool(re.search(r"vcb[- ]studio|dmhy|dmg&|动漫|動畫|动画|fansub", stem, re.I))
+    episode = int(position[2]) if position else int(bracket[1]) if bracket else None
+    season = int(position[1]) if position else None
+    title = re.sub(r"\[[^\]]*\]|\([^)]*(?:1080|720|2160|x26[45]|flac)[^)]*\)", " ", stem)
+    title = re.sub(r"\bS\d{1,2}E\d{1,3}\b", " ", title, flags=re.I)
+    title = " ".join(title.split()).strip(" ._-")
+    return {"title": title or asset.get("title", ""), "episode": episode, "season": season,
+            "animation": explicit, "filename_title": stem == re.sub(
+                r"\.(?:mkv|mp4|avi|mov|webm|m4v)$", "", asset.get("title", ""), flags=re.I)}
+
+
+def anime_metadata(asset: dict, project=None, profile=None) -> dict:
+    release = release_metadata(asset)
+    animated = (asset.get("kind") == "animation" or (profile or {}).get("mode") == "bangumi"
+                or (project or {}).get("kind") == "animation"
+                or release["animation"] and release["episode"] is not None)
+    title = (release["title"] if animated and release["filename_title"] else asset["title"]).strip()
+    episode = asset.get("episode")
+    season = asset.get("season")
+    if animated:
+        episode = episode if episode is not None else release["episode"]
+        season = season if season is not None else release["season"]
+    return {"anime_title": title, "kind": "animation" if animated else asset.get("kind", "movie"),
+            "season": season, "episode": episode,
+            "anime_source_title": asset["title"],
+            "anime_release_key": release["title"].casefold() if animated and release["animation"] else None}
+
+
+def anime_identity(asset: dict) -> str:
+    from .characters import normalized
+    subject = (asset.get("anime_profile") or {}).get("dossier", {}).get("subject", {}).get("id")
+    media = "episodes" if asset.get("episode") is not None else "feature"
+    identity = [asset.get("project_id"), asset.get("kind", "movie"), subject or normalized(asset["anime_title"]),
+                asset.get("season"), media]
+    return "anime_" + digest(identity)
 
 
 class OrganizationStore:
@@ -130,12 +174,70 @@ class OrganizationStore:
     def migrate(self):
         with self.library.lock:
             catalog = self._read()
+            original_members = copy.deepcopy(catalog["assets"])
             changed = False
+            manifests = {}
             for path in (self.library.root / "assets").glob("*/manifest.json"):
                 asset = read_json(path)
+                manifests[asset["id"]] = asset
                 if asset["id"] not in catalog["assets"]:
                     self._add_asset(catalog, asset)
                     changed = True
+            # Freeze the old project-wide identity onto its existing members.
+            # Future titles in the same series receive their own archive.
+            legacy = catalog.get("anime_membership_version") != 1
+            for asset_id, asset in manifests.items():
+                member = catalog["assets"][asset_id]
+                project = catalog["projects"].get(member["project_id"])
+                if legacy and "anime_profile" not in member and project and project.get("anime_profile"):
+                    member["anime_profile"] = copy.deepcopy(project["anime_profile"])
+                profile = member.get("anime_profile") or asset.get("anime_profile")
+                metadata = anime_metadata(asset, project, profile)
+                if "anime_title" not in member:
+                    member.update(metadata)
+                    changed = True
+                if "anime_profile" not in member:
+                    member["anime_profile"] = copy.deepcopy(profile or {"mode": "scratch"})
+                    changed = True
+            # A manually named, bound episode provides the identity for matching
+            # release filenames, including episodes restored from old archives.
+            anchors = {}
+            for member in catalog["assets"].values():
+                if member.get("anime_release_key") and (member.get("anime_profile") or {}).get("mode") == "bangumi":
+                    key = (member["project_id"], member["anime_release_key"], member.get("season"))
+                    existing = anchors.get(key)
+                    if (existing is None or existing["anime_title"].casefold() == member["anime_release_key"]
+                            and member["anime_title"].casefold() != member["anime_release_key"]):
+                        anchors[key] = member
+            for asset_id, member in catalog["assets"].items():
+                key = (member["project_id"], member.get("anime_release_key"), member.get("season"))
+                anchor = anchors.get(key)
+                was_unbound = "anime_profile" not in original_members.get(asset_id, {})
+                if (anchor and (legacy or was_unbound or member.get("anime_profile_inherited"))
+                        and (member.get("anime_profile") or {}).get("mode") != "bangumi"):
+                    member.update(anime_title=anchor["anime_title"], kind="animation",
+                                  anime_profile=copy.deepcopy(anchor["anime_profile"]), anime_profile_inherited=True)
+                    changed = True
+                elif anchor and legacy:
+                    from .anime_profiles import profile_key
+                    if (profile_key(member["anime_profile"]) == profile_key(anchor["anime_profile"])
+                            and member["anime_title"] != anchor["anime_title"]):
+                        member["anime_title"] = anchor["anime_title"]
+                        changed = True
+            if legacy:
+                catalog["anime_membership_version"] = 1
+                changed = True
+            # Restoring an archived record verifies its exact after-image. Carry
+            # inferred metadata into both recovery snapshots in this same
+            # transaction, so the upgrade cannot invalidate an old trash entry.
+            for entry in catalog.get("trash", {}).values():
+                for asset_id, patch in entry["patches"]["assets"].items():
+                    previous = original_members.get(asset_id, {})
+                    current = catalog["assets"][asset_id]
+                    additions = {key: value for key, value in current.items()
+                                 if key not in previous or previous[key] != value}
+                    for phase in ("before", "after"):
+                        patch[phase].update(copy.deepcopy(additions))
             if changed:
                 self._commit(catalog)
 
@@ -164,6 +266,24 @@ class OrganizationStore:
             "legacy_character_scope_id": asset.get("character_scope_id") or old_scope,
             "membership_revision": asset.get("membership_revision", 0), "bindings": {}, "previous_scopes": [],
         }
+        member = catalog["assets"][asset["id"]]
+        project = catalog["projects"].get(project_id)
+        profile = asset.get("anime_profile")
+        metadata = anime_metadata(asset, project, profile)
+        others = [value for identity, value in catalog["assets"].items()
+                  if identity != asset["id"] and value["project_id"] == project_id and not value.get("trash_id")]
+        matching = next((value for value in others if value.get("season") == metadata["season"]
+                         and (value.get("episode") is not None) == (metadata["episode"] is not None)
+                         and (value.get("anime_title", "").casefold() == metadata["anime_title"].casefold()
+                              or metadata["anime_release_key"] and value.get("anime_release_key") == metadata["anime_release_key"])), None)
+        if profile is None and matching:
+            profile = matching.get("anime_profile")
+            metadata["anime_title"] = matching.get("anime_title", metadata["anime_title"])
+        if (profile is None and project and not any(identity != asset["id"] and value["project_id"] == project_id
+                                                    for identity, value in catalog["assets"].items())):
+            profile = project.get("anime_profile")
+        member.update(metadata, anime_profile=copy.deepcopy(profile or {"mode": "scratch"}),
+                      anime_profile_inherited=profile is not None and not asset.get("anime_profile"))
 
     def project_asset(self, asset, *, include_deleted=False):
         with self.library.lock:
@@ -183,13 +303,37 @@ class OrganizationStore:
                     raise ValueError("文件夹层级包含循环")
                 ancestors.append(current)
                 current = catalog["folders"][current]["parent_id"]
-            return {**asset, **{key: membership[key] for key in (
+            projected = {**asset, **{key: membership[key] for key in (
                 "project_id", "character_scope_id", "membership_revision")},
+                **{key: membership[key] for key in ("anime_title", "kind", "season", "episode") if key in membership},
                 "project_name": project["name"] if project else None,
                 "series": project["name"] if project else asset.get("series", ""),
                 "folder_id": folder_id, "folder_ids": ancestors, "tags": project["tags"] if project else [],
-                "anime_profile": project.get("anime_profile") if project else membership.get("anime_profile"),
+                "anime_profile": membership.get("anime_profile"),
                 "deleted": bool(membership.get("trash_id")), "trash_id": membership.get("trash_id")}
+            projected.setdefault("anime_title", asset["title"])
+            if membership.get("anime_source_title", asset["title"]) != asset["title"]:
+                projected["anime_title"] = anime_metadata(asset, project, membership.get("anime_profile"))["anime_title"]
+            for key in ("season", "episode"):
+                if asset.get(key) is not None:
+                    projected[key] = asset[key]
+            projected["anime_id"] = anime_identity(projected)
+            return projected
+
+    def anime(self, project_id=None):
+        """Concrete works/seasons between series projects and episode assets."""
+        groups = {}
+        for asset in self.library.list_assets():
+            if project_id is not None and asset.get("project_id") != project_id:
+                continue
+            group = groups.setdefault(asset["anime_id"], {
+                "id": asset["anime_id"], "title": asset["anime_title"], "project_id": asset["project_id"],
+                "project_name": asset.get("project_name"), "season": asset.get("season"), "kind": asset["kind"],
+                "anime_profile": asset.get("anime_profile"), "asset_ids": [], "asset_count": 0,
+            })
+            group["asset_ids"].append(asset["id"])
+            group["asset_count"] += 1
+        return sorted(groups.values(), key=lambda value: (value["title"].casefold(), value["season"] or 0, value["id"]))
 
     def projects(self):
         self.migrate()
@@ -300,26 +444,24 @@ class OrganizationStore:
             if any(asset_id not in catalog["assets"] or catalog["assets"][asset_id].get("trash_id") for asset_id in ids):
                 raise FileNotFoundError("视频不存在")
             ids = [asset_id for asset_id in ids if catalog["assets"][asset_id]["project_id"] != project_id]
-            # Validate/inherit the archive before copying any cast or publishing
-            # membership. All episodes in a project share one show identity.
+            # Archive identity belongs to each concrete animation. Projects may
+            # contain multiple seasons and films sharing a character registry.
             source_archives = {}
             for asset_id in ids:
                 member = catalog["assets"][asset_id]
-                source_project = catalog["projects"].get(member["project_id"])
-                profile = source_project.get("anime_profile") if source_project else member.get("anime_profile")
+                profile = member.get("anime_profile")
                 source_archives[asset_id] = copy.deepcopy(profile)
                 if profile and project_id:
                     project = catalog["projects"][project_id]
-                    if project["kind"] != "animation":
+                    if profile["mode"] == "bangumi" and project["kind"] not in {"animation", "series"}:
                         raise OrganizationConflict("带有动画档案的视频须移入动画项目，或移至未归类")
                     previous = project.get("anime_profile")
-                    if (previous and previous["mode"] == profile["mode"] == "bangumi"
-                            and profile_key(previous) != profile_key(profile)):
-                        raise OrganizationConflict("源视频与目标项目使用不同 Bangumi 条目，请分别归入对应作品项目")
                     if not previous or (previous["mode"] == "scratch" and profile["mode"] == "bangumi"):
                         project["anime_profile"] = copy.deepcopy(profile)
-                    elif previous["mode"] == profile["mode"] == "bangumi":
-                        previous["dossier"] = merge_dossier(previous["dossier"], profile["dossier"])
+                    elif previous["mode"] == profile["mode"] == "bangumi" and profile_key(previous) == profile_key(profile):
+                        merged = {**profile, "dossier": merge_dossier(previous["dossier"], profile["dossier"])}
+                        project["anime_profile"] = copy.deepcopy(merged)
+                        source_archives[asset_id] = merged
             destination = catalog["projects"][project_id]["character_scope_id"] if project_id else None
             scopes = {catalog["assets"][asset_id]["character_scope_id"] for asset_id in ids}
             if destination:
@@ -340,8 +482,17 @@ class OrganizationStore:
                 if target_scope not in registries:
                     registries[target_scope] = store._read(target_scope)
                 target = registries[target_scope]
-                archive = (catalog["projects"][project_id].get("anime_profile") if project_id
-                           else source_archives[asset_id] or old.get("anime_profile"))
+                archive = source_archives[asset_id] or old.get("anime_profile")
+                if project_id and archive and archive["mode"] == "scratch":
+                    # Moving an unbound episode into an established matching
+                    # work can safely inherit its existing concrete roster.
+                    candidates = [member for identity, member in catalog["assets"].items()
+                                  if identity not in ids and member["project_id"] == project_id
+                                  and not member.get("trash_id") and member.get("anime_title") == old.get("anime_title")
+                                  and member.get("season") == old.get("season")]
+                    matching = next((member.get("anime_profile") for member in candidates
+                                     if (member.get("anime_profile") or {}).get("mode") == "bangumi"), None)
+                    archive = matching or archive
                 source_policy = store.cast_policy(old_registries[source_scope], source_archives[asset_id])
                 target_policy = store.cast_policy(target, archive)
                 imports = target.setdefault("imports", {})
@@ -439,10 +590,7 @@ class OrganizationStore:
                     "character_scope_id": target_scope, "membership_revision": old["membership_revision"] + 1,
                     "bindings": bindings,
                     "previous_scopes": list(dict.fromkeys([*old.get("previous_scopes", []), source_scope]))}
-                if not project_id and source_archives[asset_id]:
-                    catalog["assets"][asset_id]["anime_profile"] = source_archives[asset_id]
-                archive = (catalog["projects"][project_id].get("anime_profile") if project_id
-                           else catalog["assets"][asset_id].get("anime_profile"))
+                catalog["assets"][asset_id]["anime_profile"] = copy.deepcopy(archive or {"mode": "scratch"})
                 if archive and archive["mode"] == "bangumi":
                     registries[target_scope] = store.seed_registry(target, archive["dossier"])
             if delete_project_id is not None:

@@ -1,7 +1,9 @@
-"""Native dialog tests substitute the OS chooser; no test opens a real window."""
+"""Native chooser tests; only the explicit macOS smoke opts into real windows."""
 import base64
 import json
+import os
 import subprocess
+import time
 import zipfile
 
 import pytest
@@ -103,47 +105,111 @@ def test_malformed_native_result_is_actionable(output):
         native_picker._json_result(subprocess.CompletedProcess([], 0, output, ""))
 
 
-def test_finder_automation_permission_error_is_actionable(monkeypatch):
-    monkeypatch.setattr(native_picker.sys, "platform", "darwin")
-    monkeypatch.setattr(native_picker, "_run", lambda command, **kwargs: subprocess.CompletedProcess(
-        command, 0, '{"paths":[],"cancelled":false,"error":"finder_permission"}', ""))
-    with pytest.raises(FilePickerUnavailable, match="自动化.*Finder"):
-        pick_local_files(FilePickerInput())
-    assert native_picker._dialog_lock.acquire(blocking=False)
-    native_picker._dialog_lock.release()
+def test_mac_dialog_runs_in_its_own_process_without_finder_automation():
+    assert "ObjC.import('AppKit')" in native_picker._MAC_SCRIPT
+    assert "$.NSOpenPanel.openPanel" in native_picker._MAC_SCRIPT
+    assert "Application('com.apple.finder')" not in native_picker._MAC_SCRIPT
+    assert "chooseFile" not in native_picker._MAC_SCRIPT
+    assert "includeStandardAdditions" not in native_picker._MAC_SCRIPT
 
 
 @pytest.mark.skipif(native_picker.sys.platform != "darwin", reason="JXA runtime is macOS-only")
-@pytest.mark.parametrize("multiple,error", [(False, None), (True, None), (True, -128), (True, -1743)])
-def test_mac_script_serialization_and_cancellation_without_real_dialog(tmp_path, multiple, error):
-    # Replace only the Finder proxy; exercise Apple's real JXA Path conversion
-    # and the production run handler without launching or controlling an app.
-    fake_finder = r'''const finder = {
-        activate: function() {},
-        chooseFile: function(selection, modifiers) {
-            if (selection.withPrompt !== options.title ||
-                selection.defaultLocation.toString() !== options.directory ||
-                selection.multipleSelectionsAllowed !== options.multiple ||
-                JSON.stringify(selection.ofType) !== JSON.stringify(options.extensions) ||
-                modifiers.timeout !== 86400) throw new Error('invalid chooser options');
-            if (options.fakeError !== null) throw {errorNumber: options.fakeError};
-            const files = options.fakePaths.map(function(path) { return Path(path); });
-            return options.multiple ? files : files[0];
+@pytest.mark.parametrize("multiple,cancelled,directory", [(False, False, True), (True, False, True),
+                                                          (True, True, True), (True, False, False)])
+def test_mac_script_serialization_and_cancellation_without_real_dialog(tmp_path, multiple, cancelled, directory):
+    # Replace only the application and panel. Exercise Apple's real JXA NSURL
+    # conversion and the production run handler without showing a window.
+    fake_application = r'''const application = {
+        setActivationPolicy: function(policy) {
+            if (policy !== $.NSApplicationActivationPolicyAccessory) throw new Error('invalid activation policy');
+        },
+        activateIgnoringOtherApps: function(activate) {
+            if (!activate) throw new Error('panel would not come to foreground');
         }
     };'''
-    script = native_picker._MAC_SCRIPT.replace("const finder = Application('com.apple.finder');", fake_finder)
+    fake_panel = r'''const panel = {
+        get runModal() {
+            if (this.title !== options.title ||
+                (options.directory && ObjC.unwrap(this.directoryURL.path) !== options.directory) ||
+                (!options.directory && this.directoryURL !== undefined) ||
+                this.allowsMultipleSelection !== options.multiple ||
+                JSON.stringify(this.allowedFileTypes) !== JSON.stringify(options.extensions) ||
+                !this.canChooseFiles || this.canChooseDirectories || this.allowsOtherFileTypes ||
+                this.treatsFilePackagesAsDirectories) throw new Error('invalid chooser options');
+            return options.fakeCancelled ? $.NSModalResponseCancel : $.NSModalResponseOK;
+        },
+        get URLs() {
+            if (options.fakeCancelled) throw new Error('cancelled panel must not read selections');
+            const paths = options.multiple ? options.fakePaths : options.fakePaths.slice(0, 1);
+            return $(paths.map(function(path) { return $.NSURL.fileURLWithPath(path); }));
+        }
+    };'''
+    script = native_picker._MAC_SCRIPT.replace("const application = $.NSApplication.sharedApplication;", fake_application)
+    script = script.replace("const panel = $.NSOpenPanel.openPanel;", fake_panel)
     paths = [str(tmp_path / '字幕 "第一集".ass'), str(tmp_path / "字幕\n第二集.vtt")]
-    options = {"title": "SceneRecall test", "extensions": ["ass", "srt", "vtt"], "directory": str(tmp_path),
-               "multiple": multiple, "fakePaths": paths, "fakeError": error}
+    options = {"title": "SceneRecall test", "extensions": ["ass", "srt", "vtt"],
+               "directory": str(tmp_path) if directory else None,
+               "multiple": multiple, "fakePaths": paths, "fakeCancelled": cancelled}
     result = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-e", script,
                              json.dumps(options, ensure_ascii=False)], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stderr
-    if error == -1743:
-        assert json.loads(result.stdout) == {"paths": [], "cancelled": False, "error": "finder_permission"}
-    elif error == -128:
+    if cancelled:
         assert json.loads(result.stdout) == {"paths": [], "cancelled": True}
     else:
         assert json.loads(result.stdout) == {"paths": paths if multiple else paths[:1], "cancelled": False}
+
+
+@pytest.mark.skipif(native_picker.sys.platform != "darwin" or os.getenv("SCENERECALL_NATIVE_PICKER_SMOKE") != "1",
+                    reason="Opt-in macOS window smoke; ordinary tests never open real dialogs")
+@pytest.mark.parametrize("kind", ["video", "subtitle", "backup"])
+def test_mac_real_panel_is_visible_focused_and_cancellable(tmp_path, kind):
+    # A native timer on the main modal run loop observes readiness and cancels
+    # without choosing any files or needing access to another application.
+    probe = r'''
+    let attempts = 0;
+    ObjC.registerSubclass({
+        name: 'SceneRecallPickerSmokeProbe',
+        superclass: 'NSObject',
+        methods: {
+            'inspectAndCancel:': {
+                types: ['void', ['id']],
+                implementation: function(timer) {
+                    const state = {
+                        visible: Boolean(panel.visible),
+                        keyWindow: Boolean(panel.keyWindow),
+                        applicationActive: Boolean(application.active),
+                        openedSeconds: (Date.now() - startedAt) / 1000
+                    };
+                    attempts++;
+                    if (!(state.visible && state.keyWindow && state.applicationActive) && attempts < 250) return;
+                    console.log(JSON.stringify(state));
+                    timer.invalidate;
+                    panel.cancel(null);
+                }
+            }
+        }
+    });
+    const target = $.SceneRecallPickerSmokeProbe.alloc.init;
+    const timer = $.NSTimer.timerWithTimeIntervalTargetSelectorUserInfoRepeats(0.02, target, 'inspectAndCancel:', null, true);
+    $.NSRunLoop.mainRunLoop.addTimerForMode(timer, $.NSModalPanelRunLoopMode);
+    $.NSRunLoop.mainRunLoop.addTimerForMode(timer, $.NSRunLoopCommonModes);
+'''
+    script = "const startedAt = Date.now();\n" + native_picker._MAC_SCRIPT
+    script = script.replace("application.activateIgnoringOtherApps(true);", "application.activateIgnoringOtherApps(true);" + probe)
+    options = {"title": "SceneRecall · 文件选择自动测试", "extensions": sorted(ext[1:] for ext in native_picker.EXTENSIONS[kind]),
+               "multiple": kind != "backup", "directory": str(tmp_path)}
+    started = time.perf_counter()
+    result = subprocess.run(["/usr/bin/osascript", "-l", "JavaScript", "-e", script,
+                             json.dumps(options, ensure_ascii=False)], capture_output=True, text=True,
+                            encoding="utf-8", timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"paths": [], "cancelled": True}
+    states = [json.loads(line) for line in result.stderr.splitlines() if line.startswith('{"visible":')]
+    assert len(states) == 1, result.stderr
+    state = states[0]
+    assert state["visible"] and state["keyWindow"] and state["applicationActive"]
+    assert state["openedSeconds"] < 5
+    print(f"{kind}: panel ready {state['openedSeconds']:.3f}s; cancelled in {time.perf_counter() - started:.3f}s")
 
 
 def test_system_picker_failure_and_linux_missing_desktop(monkeypatch):

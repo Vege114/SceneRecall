@@ -137,29 +137,37 @@ class WorkflowQueueMixin:
                     payload = AssetInput.model_validate({key: value for key, value in config.items()
                                                         if key not in {"item_id", "anime_profile", "anime_dossier"}})
                     existing = await self._local_work(job_id, lambda _check: self.library.register(payload, import_item_key=item_key))
+                index_asset_ids = {existing["id"]}
                 if config.get("anime_profile"):
                     from .anime_profiles import AnimeProfileStore
+                    old_anime_id = existing.get("anime_id")
                     AnimeProfileStore(self.library).apply_asset(existing["id"], config["anime_profile"],
-                                                               config.get("anime_dossier"))
+                                                               config.get("anime_dossier"), for_import=True)
+                    existing = self.library.get_asset(existing["id"])
+                    # Binding a roster also updates earlier matching episodes,
+                    # changing their animation identity. Shared cast profiles
+                    # can update searchable names in other works of the series.
+                    # Refresh those projections without regenerating vectors or
+                    # touching their immutable analysis evidence.
+                    anime_ids = {old_anime_id, existing.get("anime_id")} - {None}
+                    index_asset_ids.update(asset["id"] for asset in self.library.list_assets()
+                                           if asset.get("anime_id") in anime_ids
+                                           or asset.get("character_scope_id") == existing.get("character_scope_id"))
                 items[item_id].update(status="completed", asset_id=existing["id"],
                                       warnings=existing.get("subtitle_import_warnings", []))
-                self.search.upsert(self.library.records(existing["id"]))
+                self.search.upsert([record for asset_id in sorted(index_asset_ids)
+                                    for record in self.library.records(asset_id)])
             except Exception as exc:
                 from .jobs import StopJob
                 if isinstance(exc, StopJob):
                     raise
-                if getattr(exc, "asset_id", None):
-                    asset = self.library.get_asset(exc.asset_id)
-                    items[item_id].update(status="existing", asset_id=exc.asset_id, error=None,
-                                          warnings=asset.get("subtitle_import_warnings", []))
-                else:
-                    # Source paths are input-only, not public task error strings.
-                    from .jobs import error_message
-                    detail = error_message(exc)
-                    for key in ("video_path", "subtitle_path"):
-                        if config.get(key):
-                            detail = detail.replace(config[key], Path(config[key]).name)
-                    items[item_id].update(status="failed", error=detail)
+                # Source paths are input-only, not public task error strings.
+                from .jobs import error_message
+                detail = error_message(exc)
+                for key in ("video_path", "subtitle_path"):
+                    if config.get(key):
+                        detail = detail.replace(config[key], Path(config[key]).name)
+                items[item_id].update(status="failed", error=detail)
             done = sum(item["status"] in {"completed", "existing", "failed"} for item in items.values())
             failures = [{"unit": item["item_id"], "message": item["error"]}
                         for item in items.values() if item["status"] == "failed"]

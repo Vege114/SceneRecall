@@ -405,15 +405,15 @@ def test_batch_original_ass_import_warns_and_retries_only_failure_offline(client
         assert len(cast["profiles"]) == 1 and cast["profiles"][0]["name"] == "合成角色"
         assert cast["profiles"][0]["appearance_count"] == 0
 
-    # Duplicate detection must keep the existing asset's import notices visible.
+    # A new import creates an independent archive and rechecks its own subtitles.
     duplicate = client.post("/api/imports", json={"request_id": "duplicate-ass", "items": [
         {key: value for key, value in payload["items"][0].items() if key != "anime_profile"}]})
     assert duplicate.status_code == 200, duplicate.text
     duplicate_result = execute(client, duplicate.json()["id"])
-    assert duplicate_result["items"][0]["status"] == "existing"
-    assert duplicate_result["items"][0]["asset_id"] == first_asset_id
+    assert duplicate_result["items"][0]["status"] == "completed"
+    assert duplicate_result["items"][0]["asset_id"] != first_asset_id
     assert duplicate_result["items"][0]["warnings"] == partial["items"][0]["warnings"]
-    assert len(client.get("/api/assets").json()) == 2
+    assert len(client.get("/api/assets").json()) == 3
 
 
 @pytest.mark.parametrize("legacy_filter", [False, True])

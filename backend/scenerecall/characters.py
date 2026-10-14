@@ -129,6 +129,8 @@ class CharacterStore:
 
     @staticmethod
     def cast_policy(registry: dict, archive: dict | None = None) -> dict:
+        if archive and archive.get("mode") == "scratch":
+            return copy.deepcopy(CAST_POLICY)
         if archive and archive.get("mode") == "bangumi":
             dossier = archive.get("dossier") or {}
             return {"mode": "bangumi", "allow_new_profiles": False,
@@ -411,6 +413,13 @@ class CharacterStore:
                 profile["description"] = profile.get("reference_description", "")
             if profile != before:
                 profile["updated_at"] = timestamp
+        subjects = {bangumi_id(source["subject_id"]) for profile in result["profiles"].values()
+                    for source in external_sources(profile)}
+        if len(subjects) > 1:
+            # A series can share role identities across several works. The
+            # concrete asset archive supplies the roster policy; retaining a
+            # last-viewed work policy here would mutate revisions on every view.
+            result.pop("cast_policy", None)
         if result != registry:
             result["revision"] += 1
         CharacterStore._validate_structure(result, scope)

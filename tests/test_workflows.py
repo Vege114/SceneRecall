@@ -118,9 +118,10 @@ def test_import_partial_retry_duplicate_and_no_models(client, videos, tmp_path):
     assert client.post("/api/imports", json=changed).status_code == 409
     done = run(client, job["id"])
     assert done["status"] == "partial", done
-    assert [item["status"] for item in done["items"]] == ["completed", "failed", "existing"]
+    assert [item["status"] for item in done["items"]] == ["completed", "failed", "completed"]
+    assert done["items"][0]["asset_id"] != done["items"][2]["asset_id"]
     assert str(tmp_path) not in str(done) and str(videos[0].parent) not in str(done)
-    assert len(client.get("/api/assets").json()) == 1
+    assert len(client.get("/api/assets").json()) == 2
     config = client.get(f"/api/imports/{job['id']}").json()
     assert config["items"][1]["video_path"].endswith("missing.mp4")
     retried = client.post(f"/api/imports/{job['id']}/retry", json={"items": [
@@ -128,7 +129,39 @@ def test_import_partial_retry_duplicate_and_no_models(client, videos, tmp_path):
     assert retried.status_code == 200, retried.text
     assert run(client, job["id"])["status"] == "completed"
     assets = client.get("/api/assets").json()
-    assert len(assets) == 2 and all(asset["project_id"] == project["id"] for asset in assets)
+    assert len(assets) == 3 and all(asset["project_id"] == project["id"] for asset in assets)
+    assert client.app.state.providers.calls == []
+
+
+@pytest.mark.parametrize("archived", [False, True])
+def test_new_import_request_creates_independent_asset_for_same_source(client, videos, archived):
+    original = register(client, videos[0], title="第一次导入", subtitle_mode="embedded")
+    trash_id = None
+    if archived:
+        trash_id = client.delete(f"/api/assets/{original['id']}").json()["trash"]["id"]
+    snapshot = videos[0].stat()
+    payload = {"request_id": "reimport", "items": [
+        {"item_id": "same-source", "video_path": str(videos[0]), "title": "新的独立档案",
+         "subtitle_mode": "embedded"}]}
+    response = client.post("/api/imports", json=payload)
+    assert response.status_code == 200, response.text
+    job = response.json()
+    done = run(client, job["id"])
+    assert done["status"] == "completed", done
+    imported = client.app.state.library.get_asset(done["items"][0]["asset_id"])
+    assert imported["id"] != original["id"]
+    assert imported["fingerprint"] == original["fingerprint"]
+    assert imported["title"] == "新的独立档案"
+    assert client.app.state.library.source_path(imported["id"]) == videos[0]
+    assert videos[0].stat().st_mtime_ns == snapshot.st_mtime_ns
+    assert videos[0].stat().st_size == snapshot.st_size
+    # Submitting the same request recovers its task, not another import.
+    assert client.post("/api/imports", json=payload).json()["id"] == job["id"]
+    assert len(client.app.state.library.list_assets(include_deleted=True)) == 2
+    if trash_id:
+        assert client.app.state.library.get_asset(original["id"], include_deleted=True)["deleted"]
+        assert client.post(f"/api/trash/{trash_id}/restore").status_code == 200
+    assert len(client.get("/api/assets").json()) == 2
     assert client.app.state.providers.calls == []
 
 

@@ -91,28 +91,34 @@ def local_file(raw: str, kind: str) -> Path:
 # Only fixed code is passed to the interpreter. Filenames and other input are
 # serialized separately, including Unicode, quotes and embedded newlines.
 _MAC_SCRIPT = r'''
+ObjC.import('AppKit');
 function run(argv) {
     const options = JSON.parse(argv[0]);
-    const finder = Application('com.apple.finder');
-    finder.includeStandardAdditions = true;
-    const selection = {
-        withPrompt: options.title,
-        ofType: options.extensions,
-        multipleSelectionsAllowed: options.multiple
-    };
-    if (options.directory) selection.defaultLocation = Path(options.directory);
-    try {
-        finder.activate();
-        // Finder commands otherwise inherit the short Apple-event timeout.
-        const selected = finder.chooseFile(selection, {timeout: 86400});
-        const files = Array.isArray(selected) ? selected : [selected];
-        return JSON.stringify({paths: files.map(function(file) { return file.toString(); }), cancelled: false});
-    } catch (error) {
-        const code = Number(error.errorNumber === undefined ? error.number : error.errorNumber);
-        if (code === -128) return JSON.stringify({paths: [], cancelled: true});
-        if (code === -1743) return JSON.stringify({paths: [], cancelled: false, error: 'finder_permission'});
-        throw error;
+    // Present directly from this process. Finder Apple Events can wait behind
+    // Finder's own work and require an unrelated Automation permission prompt.
+    const application = $.NSApplication.sharedApplication;
+    application.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+    const panel = $.NSOpenPanel.openPanel;
+    panel.title = options.title;
+    panel.canChooseFiles = true;
+    panel.canChooseDirectories = false;
+    panel.allowsMultipleSelection = options.multiple;
+    // allowedFileTypes is available on older macOS versions too, and accepts
+    // extensions such as MKV and ASS without relying on installed UTI handlers.
+    panel.allowedFileTypes = options.extensions;
+    panel.allowsOtherFileTypes = false;
+    panel.treatsFilePackagesAsDirectories = false;
+    if (options.directory) panel.directoryURL = $.NSURL.fileURLWithPath(options.directory);
+    application.activateIgnoringOtherApps(true);
+    if (Number(panel.runModal) !== Number($.NSModalResponseOK)) {
+        return JSON.stringify({paths: [], cancelled: true});
     }
+    const urls = panel.URLs;
+    const paths = [];
+    for (let index = 0; index < Number(urls.count); index++) {
+        paths.push(ObjC.unwrap(urls.objectAtIndex(index).path));
+    }
+    return JSON.stringify({paths: paths, cancelled: false});
 }
 '''
 
@@ -150,8 +156,6 @@ def _json_result(result):
         raise FilePickerUnavailable("无法打开系统文件选择窗口，请检查本机桌面环境后重试")
     try:
         value = json.loads(result.stdout)
-        if isinstance(value, dict) and value.get("error") == "finder_permission":
-            raise FilePickerUnavailable("请在 macOS 系统设置的“隐私与安全性 → 自动化”中，允许启动 SceneRecall 的程序控制 Finder 后重试")
         if not isinstance(value, dict) or not isinstance(value.get("cancelled"), bool):
             raise ValueError
         if not isinstance(value.get("paths"), list) or any(not isinstance(path, str) for path in value["paths"]):

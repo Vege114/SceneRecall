@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { message, post } from '../api';
-import type { AnimeProfile, AnimeProfileSelection, BangumiDossier, BangumiSearch, BangumiSubject, ImportInput, Project } from '../types';
+import type { AnimeProfile, AnimeProfileSelection, BangumiDossier, BangumiSearch, BangumiSubject, ImportInput, Project, Asset } from '../types';
 import { Alert, Field, Spinner } from './ui';
 
 type ArchiveStatus = 'waiting' | 'searching' | 'candidates' | 'not_found' | 'error' | 'reading' | 'ready' | 'scratch';
@@ -11,15 +11,15 @@ interface ArchiveState {
 }
 interface ArchiveScope { key: string; signature: string; query: string; existing?: AnimeProfile; preset?: AnimeProfileSelection }
 const normalizeTitle = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
-function scopeFor(row: ImportInput, project?: Project, sharedBatch = false): ArchiveScope | undefined {
+function scopeFor(row: ImportInput, project?: Project, sharedBatch = false, assets: Asset[] = []): ArchiveScope | undefined {
   if (row.kind !== 'animation') return;
-  const shared = project?.kind === 'animation' && (sharedBatch || !row.anime_profile);
-  const query = (shared ? project.name : row.title).trim();
-  const existing = shared && project.anime_profile && (!row.anime_profile || JSON.stringify(profileSelection(project.anime_profile)) === JSON.stringify(row.anime_profile)) ? project.anime_profile : undefined;
-  const identity = shared ? `project:${project.id}` : sharedBatch ? 'batch' : `item:${row.item_id}`;
-  return { key: identity, query,
-    signature: JSON.stringify([identity, query, project?.id || '', shared ? project.anime_profile : null]),
-    existing, preset: row.anime_profile };
+  const query = row.title.trim();
+  const matching = assets.find((asset) => (asset.project_id || null) === (project?.id || null) && normalizeTitle(asset.anime_title || asset.title) === normalizeTitle(query) && (asset.season ?? null) === row.season && asset.anime_profile);
+  const legacy = normalizeTitle(query) === normalizeTitle(project?.name || '') ? project?.anime_profile : undefined;
+  const saved = matching?.anime_profile || legacy;
+  const existing = saved && (!row.anime_profile || JSON.stringify(profileSelection(saved)) === JSON.stringify(row.anime_profile)) ? saved : undefined;
+  const identity = sharedBatch ? `batch:${normalizeTitle(query)}` : `item:${row.item_id}`;
+  return { key: identity, query, signature: JSON.stringify([identity, query, project?.id || '', existing]), existing, preset: row.anime_profile };
 }
 function profileSelection(profile: AnimeProfile): AnimeProfileSelection {
   return profile.mode === 'bangumi' ? { mode: 'bangumi', subject_id: profile.dossier.subject.id } : { mode: 'scratch' };
@@ -29,11 +29,11 @@ const initialState = (scope: ArchiveScope): ArchiveState => ({ signature: scope.
   dossier: scope.existing?.mode === 'bangumi' ? scope.existing.dossier : undefined,
   selection: scope.existing ? profileSelection(scope.existing) : scope.preset });
 
-export function useAnimeArchives(items: ImportInput[], project?: Project, sharedBatch = false) {
+export function useAnimeArchives(items: ImportInput[], project?: Project, sharedBatch = false, assets: Asset[] = []) {
   const [archives, setArchives] = useState<Record<string, ArchiveState>>({});
   const requests = useRef<Record<string, { signature: string; version: number; timer?: number }>>({});
   const sequence = useRef(0);
-  const scopes = [...new Map(items.map((row) => scopeFor(row, project, sharedBatch)).filter((scope): scope is ArchiveScope => !!scope).map((scope) => [scope.key, scope])).values()];
+  const scopes = [...new Map(items.map((row) => scopeFor(row, project, sharedBatch, assets)).filter((scope): scope is ArchiveScope => !!scope).map((scope) => [scope.key, scope])).values()];
   const scopeKey = JSON.stringify(scopes);
   const invalidate = (scope: ArchiveScope) => {
     const prior = requests.current[scope.key];
@@ -89,7 +89,7 @@ export function useAnimeArchives(items: ImportInput[], project?: Project, shared
     requests.current = {};
   }, []);
   const stateFor = (row: ImportInput) => {
-    const scope = scopeFor(row, project, sharedBatch);
+    const scope = scopeFor(row, project, sharedBatch, assets);
     if (!scope) return undefined;
     const state = archives[scope.key];
     return state?.signature === scope.signature ? state : initialState(scope);
@@ -97,17 +97,17 @@ export function useAnimeArchives(items: ImportInput[], project?: Project, shared
   return {
     stateFor,
     selectionFor: (row: ImportInput) => stateFor(row)?.selection,
-    existingFor: (row: ImportInput) => scopeFor(row, project, sharedBatch)?.existing,
+    existingFor: (row: ImportInput) => scopeFor(row, project, sharedBatch, assets)?.existing,
     setReference: (row: ImportInput, reference: string) => {
-      const scope = scopeFor(row, project, sharedBatch); if (!scope) return;
+      const scope = scopeFor(row, project, sharedBatch, assets); if (!scope) return;
       setArchives((current) => ({ ...current, [scope.key]: { ...stateFor(row)!, reference } }));
     },
-    read: (row: ImportInput, reference: string) => { const scope = scopeFor(row, project, sharedBatch); if (scope) void read(scope, reference); },
+    read: (row: ImportInput, reference: string) => { const scope = scopeFor(row, project, sharedBatch, assets); if (scope) void read(scope, reference); },
     scratch: (row: ImportInput) => {
-      const scope = scopeFor(row, project, sharedBatch); if (!scope) return;
+      const scope = scopeFor(row, project, sharedBatch, assets); if (!scope) return;
       const version = invalidate(scope); save(scope, version, { status: 'scratch', selection: { mode: 'scratch' }, dossier: undefined, error: '' });
     },
-    searchAgain: (row: ImportInput) => { const scope = scopeFor(row, project, sharedBatch); if (scope?.query) void search(scope, invalidate(scope)); },
+    searchAgain: (row: ImportInput) => { const scope = scopeFor(row, project, sharedBatch, assets); if (scope?.query) void search(scope, invalidate(scope)); },
   };
 }
 
@@ -133,7 +133,7 @@ export default function AnimeArchivePicker({ item, archives, readOnly = false }:
   const loading = ['searching', 'reading'].includes(state.status);
   return <section className="anime-archive-picker" aria-label="动画初始档案" aria-live="polite">
     <h3>动画初始档案</h3><p className="helper">使用 Bangumi 列出的角色档案，后续识别补充外观与出场证据。</p>
-    {existing && <p className="helper">沿用项目已保存的档案，同一作品的各集共享使用。</p>}
+    {existing && <p className="helper">沿用这部动画已保存的档案，同一作品的各集共享使用。</p>}
     {readOnly && !existing && <p className="helper">重试沿用这次导入已选择的档案。</p>}
     {loading && <Spinner label={state.status === 'reading' ? '正在读取 Bangumi 作品与角色资料' : `正在 Bangumi 查找「${state.query}」`} />}
     {state.status === 'waiting' && <p className="helper">填写作品名称后，自动查找 Bangumi。</p>}

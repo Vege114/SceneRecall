@@ -40,7 +40,7 @@ def check_binding(current, selection):
     # Adding a source to a scratch archive is safe. Switching an established
     # show's identity would contaminate its shared cast and past observations.
     if current and current["mode"] == "bangumi" and profile_key(current) != selection_key(selection):
-        raise ValueError("此项目已使用另一个 Bangumi 档案，请使用独立项目导入不同作品")
+        raise ValueError("此动画已使用另一个 Bangumi 档案，请作为另一部动画导入")
 
 
 def _name_priority(character, field, name):
@@ -161,10 +161,13 @@ class AnimeProfileStore:
                 raise ValueError("只有动画可以使用 Bangumi 初始档案")
             selection = item.anime_profile.model_dump(exclude_none=True)
             if project:
-                check_binding(project.get("anime_profile"), selection)
-                previous = selected.setdefault(project_id, selection_key(selection))
+                # A project is a series and can contain several TV seasons and
+                # films. Only episodes of the same concrete animation must agree.
+                from .characters import normalized
+                key = (project_id, normalized(item.title), item.season, item.episode is not None)
+                previous = selected.setdefault(key, selection_key(selection))
                 if previous != selection_key(selection):
-                    raise ValueError("同一动画项目的各集须使用同一个初始档案")
+                    raise ValueError("同一部动画的各集须使用同一个初始档案")
             if selection["mode"] == "bangumi":
                 subjects.add(selection["subject_id"])
         # Sequential subjects, concurrent bounded character reads inside the CLI
@@ -173,17 +176,15 @@ class AnimeProfileStore:
         return {item.item_id: dossiers[item.anime_profile.subject_id] for item in request.items
                 if item.anime_profile and item.anime_profile.mode == "bangumi"}
 
-    def apply_asset(self, asset_id, selection, dossier=None):
+    def apply_asset(self, asset_id, selection, dossier=None, *, for_import=False):
         with self.library.lock:
-            asset = self.library.get_asset(asset_id)
-            project_id = asset.get("project_id")
-            return self._apply(selection, dossier, project_id=project_id,
-                               asset_id=None if project_id else asset_id)
+            self.library.get_asset(asset_id)
+            return self._apply(selection, dossier, asset_id=asset_id, for_import=for_import)
 
     def apply_project(self, project_id, selection, dossier=None):
         return self._apply(selection, dossier, project_id=project_id)
 
-    def _apply(self, selection, dossier, *, project_id=None, asset_id=None):
+    def _apply(self, selection, dossier, *, project_id=None, asset_id=None, for_import=False):
         from .characters import CharacterStore
         with self.library.lock:
             organization = self.library.organization
@@ -192,14 +193,27 @@ class AnimeProfileStore:
                 target = catalog["projects"].get(project_id)
                 if not target or target.get("trash_id"):
                     raise FileNotFoundError("项目不存在")
-                if target["kind"] != "animation":
+                if target["kind"] not in {"animation", "series"}:
                     raise ValueError("只有动画项目可以使用 Bangumi 初始档案")
+                members = [member for member in catalog["assets"].values()
+                           if member["project_id"] == project_id and not member.get("trash_id")]
+                # Retain the legacy project default endpoint for single-work
+                # projects; it cannot rewrite several concrete work identities.
+                from .organization import anime_identity
+                groups = {anime_identity({**member, "project_id": project_id}) for member in members}
+                if len(groups) > 1:
+                    raise ValueError("此项目包含多部动画，请在具体动画内设置初始档案")
             else:
                 asset = self.library.get_asset(asset_id)
                 if asset["kind"] != "animation":
                     raise ValueError("只有动画可以使用 Bangumi 初始档案")
                 target = catalog["assets"][asset_id]
-            check_binding(target.get("anime_profile"), selection)
+                project_id = asset.get("project_id")
+                members = [target]
+            previous = target.get("anime_profile")
+            replacing_inheritance = bool(for_import and asset_id and target.get("anime_profile_inherited"))
+            if not replacing_inheritance:
+                check_binding(previous, selection)
             profile = {"mode": selection["mode"]}
             if selection["mode"] == "bangumi":
                 if not dossier or dossier["subject"]["id"] != selection["subject_id"]:
@@ -207,21 +221,54 @@ class AnimeProfileStore:
                 dossier = normalize_dossier_names(dossier)
                 profile["dossier"] = copy.deepcopy(dossier)
             validate_profile(profile)
-            previous = target.get("anime_profile")
+            # A refreshed default may be newer than a frozen import snapshot,
+            # but another animation's default is never applied here.
+            project = catalog["projects"].get(project_id)
+            default = project.get("anime_profile") if project else None
+            if default and profile_key(default) == profile_key(profile):
+                if profile.get("dossier"):
+                    profile["dossier"] = merge_dossier(default["dossier"], profile["dossier"])
             if previous and profile_key(previous) == profile_key(profile):
                 if dossier:
-                    profile["dossier"] = merge_dossier(previous["dossier"], dossier)
+                    profile["dossier"] = merge_dossier(previous["dossier"], profile["dossier"])
                 else:
                     return copy.deepcopy(previous)
+            if asset_id:
+                # Propagate only within this animation, retaining independent
+                # Bangumi rosters for other works sharing the series cast store.
+                for identity, member in catalog["assets"].items():
+                    if identity == asset_id or member.get("trash_id") or member["project_id"] != project_id:
+                        continue
+                    matching = (member.get("anime_title", "").casefold() == target.get("anime_title", "").casefold()
+                                or target.get("anime_release_key") and member.get("anime_release_key") == target["anime_release_key"])
+                    bound = member.get("anime_profile") or {"mode": "scratch"}
+                    if (matching and member.get("season") == target.get("season")
+                            and (member.get("episode") is not None) == (target.get("episode") is not None)
+                            and (bound["mode"] == "scratch" or profile_key(bound) == profile_key(profile))):
+                        members.append(member)
+                        if bound.get("dossier") and profile.get("dossier"):
+                            profile["dossier"] = merge_dossier(bound["dossier"], profile["dossier"])
             store = CharacterStore(self.library)
             scope = target["character_scope_id"]
             registry = store._read(scope)
             seeded = store.seed_registry(registry, profile["dossier"]) if dossier else registry
-            if previous == profile and seeded == registry:
+            if (previous == profile and seeded == registry
+                    and all(member.get("anime_profile") == profile and not member.get("anime_profile_inherited")
+                            and member.get("kind") == "animation" for member in members)):
                 return copy.deepcopy(previous)
             if seeded["revision"] == registry["revision"]:
                 seeded["revision"] += 1
             target["anime_profile"] = profile
+            for member in members:
+                member["anime_profile"] = copy.deepcopy(profile)
+                member["anime_profile_inherited"] = False
+                member["kind"] = "animation"
+                if asset_id:
+                    member["anime_title"] = target["anime_title"]
+            if project and (not default or profile_key(default) == profile_key(profile)):
+                # Compatibility read for existing clients; membership is always
+                # the authoritative archive for a concrete animation.
+                project["anime_profile"] = copy.deepcopy(profile)
             # The existing roll-forward journal publishes the cast before the
             # catalog, and recovers both after a crash.
             organization._commit(catalog, {scope: seeded})

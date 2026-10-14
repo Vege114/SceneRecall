@@ -35,7 +35,7 @@ describe('Animation-focused entry points', () => {
     await user.click(screen.getByRole('button', { name: '新建项目' }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).queryByLabelText('项目类型')).toBeNull();
-    expect(within(dialog).getByText(/支持分集动画和剧场版动画/)).toBeTruthy();
+    expect(within(dialog).getByText(/TV 动画、不同季度和剧场版/)).toBeTruthy();
     await user.type(within(dialog).getByLabelText('项目名称'), '动画剧场版');
     await user.click(within(dialog).getByRole('button', { name: '保存分类' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());

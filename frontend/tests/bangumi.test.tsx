@@ -121,7 +121,8 @@ describe('Bangumi animation import', () => {
     await user.selectOptions(screen.getByLabelText('归属项目'), 'other');
     expect(importButton().disabled).toBe(true); expect(screen.queryByRole('link', { name: '查看 Bangumi 条目' })).toBeNull();
     await screen.findByText('没有找到对应的 Bangumi 条目。你可以提供链接，或从零建立档案。');
-    expect(JSON.parse(String(fetch.mock.calls.find(([url]) => url === '/api/bangumi/search')![1]?.body))).toEqual({ query: '另一部动画' });
+    expect(JSON.parse(String(fetch.mock.calls.find(([url]) => url === '/api/bangumi/search')![1]?.body))).toEqual({ query: '星海' });
+    expect((screen.getByLabelText(/^作品名称/) as HTMLInputElement).value).toBe('星海');
   });
 
   it('shares one unassigned batch archive, keeps it when adding or removing files, and resets all rows on a title change', async () => {

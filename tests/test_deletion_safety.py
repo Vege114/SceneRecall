@@ -195,6 +195,17 @@ def test_shared_source_with_unselected_historical_asset_blocks_removal(client, s
     assert client.get(f"/api/assets/{second_id}").status_code == 200
 
 
+def test_repeat_import_shared_source_blocks_partial_removal(client, sources):
+    first = register(client, sources[0])
+    second = register(client, sources[0])
+    assert first["id"] != second["id"]
+    prepared = preview(client, [first], delete_source=True)
+    assert prepared["source_files"][0]["status"] == "shared"
+    assert_rejected(delete(client, [first], prepared, delete_source=True))
+    assert sources[0].is_file()
+    assert client.get(f"/api/assets/{second['id']}").json()["asset"]["source_available"]
+
+
 def test_new_shared_reference_during_final_hash_prevents_unlink(client, sources, monkeypatch):
     from scenerecall import media
 

@@ -16,7 +16,7 @@ class AssetInput(Contract):
     video_path: str
     project_id: str | None = None
     title: str = ""
-    kind: Literal["movie", "animation", "series"] = "movie"
+    kind: Literal["movie", "animation", "series"] = "animation"
     series: str = ""
     season: int | None = Field(default=None, ge=0)
     episode: int | None = Field(default=None, ge=0)

@@ -167,6 +167,8 @@ export interface KeyframePlan {
   frame_count?: number; batch_count?: number; shots?: unknown[]; batches?: unknown[];
 }
 export interface Asset {
+  anime_id?: string;
+  anime_title?: string;
   anime_profile?: AnimeProfile;
   project_id?: string | null;
   project_name?: string;
