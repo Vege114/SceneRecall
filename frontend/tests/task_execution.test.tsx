@@ -41,21 +41,24 @@ describe('Stage execution selection', () => {
     expect(screen.queryByLabelText('字幕识别执行方式')).toBeNull();
     expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).value).toBe('16');
     expect(screen.getAllByText('连接并发上限 4；本次最多同时 4 个请求')).toHaveLength(2);
-    expect(screen.getByText(/共享开始时的此前记忆/)).toBeTruthy();
+    expect(screen.getByText(/各集台词先独立并行整理，再按集理解画面/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
     await screen.findByRole('button', { name: '重新扫描关键帧' });
     await runEstimate(user);
     expect(body(fetch, '/api/jobs/estimate').execution).toEqual(DEFAULT_EXECUTION);
     await user.selectOptions(screen.getByLabelText('台词整理执行方式'), 'serial');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await runEstimate(user);
     await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), '5');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     expect(screen.getByText('连接并发上限 4；本次最多同时 4 个请求')).toBeTruthy();
     await runEstimate(user);
     const updated = { ...app, bootstrap: { ...app.bootstrap, provider_profiles: [{ ...model, max_concurrency: 2 }] } };
     view.rerender(<AppContext.Provider value={updated}><JobModal asset={asset} onClose={close} /></AppContext.Provider>);
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     expect(screen.getByText('连接并发上限 2；本次最多同时 2 个请求')).toBeTruthy();
     await runEstimate(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
@@ -222,7 +225,8 @@ describe('Stage execution selection', () => {
     await runEstimate(user, '估算重新识别用量', '开始重新识别');
     expect(body(fetch, '/api/jobs/estimate').execution).toEqual(mixed);
     await user.selectOptions(screen.getByLabelText('视觉分块执行方式'), 'serial');
-    expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await runEstimate(user, '估算重新识别用量', '开始重新识别');
     await user.click(screen.getByRole('button', { name: '开始重新识别' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -276,7 +280,7 @@ describe('Stage execution selection', () => {
   it('explains dependent deep analysis as serial without offering unrelated execution controls', async () => {
     const user = userEvent.setup(); mount(<DeepenSceneButton assetId={asset.id} chunkId="chunk" title="场景" />);
     await user.click(screen.getByRole('button', { name: '深入分析此片段' }));
-    expect(screen.getByText('深入理解与连续理解更新依赖前序记忆，始终串行。')).toBeTruthy();
+    expect(screen.getByText(/深入理解与连续理解更新依赖前序记忆，始终串行。/)).toBeTruthy();
     expect(screen.queryByLabelText('并发请求上限')).toBeNull();
     expect(screen.queryByLabelText('台词整理执行方式')).toBeNull();
     expect(screen.queryByRole('checkbox', { name: '设为默认值' })).toBeNull();

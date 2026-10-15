@@ -41,10 +41,9 @@ class SceneCheckpointMixin:
     def _transcript_receipt(self, job, config, prep_profile, batches, index, story, directory):
         """Import old durable successes without executing the call admission path."""
         from .jobs import model_identity
-        from .scene_jobs import STRATEGY, canonical
-        from .scene_preparation import SUBTITLE_PREPARATION_PROMPT_VERSION
+        from .scene_jobs import STRATEGY, canonical, prompt_versions
 
-        unit, version = str(index), SUBTITLE_PREPARATION_PROMPT_VERSION
+        unit, version = str(index), prompt_versions(config)["transcript"]
         frozen = read_json(directory / "scene-inputs" / f"{digest(['transcript', version, unit])}.json")
         if frozen is None:
             return None
@@ -52,7 +51,9 @@ class SceneCheckpointMixin:
                 or not isinstance(frozen.get("args"), list) or len(frozen["args"]) != 2
                 or canonical(frozen["args"]) != canonical([batches[index], story])):
             raise ValueError("已保存的台词整理输入与当前批次不一致")
-        key = digest([STRATEGY, "transcript", version, unit, config["scene_dependencies"],
+        dependencies = (config["transcript_dependencies"] if self.independent_transcript(config)
+                        else config["scene_dependencies"])
+        key = digest([STRATEGY, "transcript", version, unit, dependencies,
                       model_identity(prep_profile), canonical(frozen["args"])])
         output = directory / "scene-receipts" / f"{key}.json"
         receipt = read_json(output)
@@ -76,10 +77,13 @@ class SceneCheckpointMixin:
     async def prepare_transcript_stage(self, job_id, config, prior, cues, batches, prep_profile):
         """Restore completed batches first, then schedule only missing work."""
         from .jobs import model_identity
-        from .scene_jobs import bounded_memory, canonical
-        from .scene_preparation import SUBTITLE_PREPARATION_PROMPT_VERSION
+        from .scene_jobs import bounded_memory, canonical, prompt_versions
 
         job = self.checkpoint(job_id)
+        independent = self.independent_transcript(config)
+        if independent:
+            self.check_transcript_dependencies(job["asset_id"], config)
+            prior = {}
         directory = self.library.asset_dir(job["asset_id"]) / "analyses" / safe_id(job["run_id"])
         target = directory / "scene-transcript.json"
         batches = list(batches)
@@ -87,8 +91,9 @@ class SceneCheckpointMixin:
             raise ValueError("台词整理批次未完整覆盖当前字幕")
         parallel = (config.get("execution") or {}).get("transcript") == "parallel"
         header = {"version": 1, "asset_id": job["asset_id"], "run_id": job["run_id"],
-                  "dependencies": copy.deepcopy(config["scene_dependencies"]),
-                  "prompt_version": SUBTITLE_PREPARATION_PROMPT_VERSION,
+                  "dependencies": copy.deepcopy(config["transcript_dependencies"] if independent
+                                                  else config["scene_dependencies"]),
+                  "prompt_version": prompt_versions(config)["transcript"],
                   "profile": model_identity(prep_profile), "parallel": parallel,
                   "prior_digest": digest(canonical(prior)),
                   "batch_digests": [digest(canonical(batch)) for batch in batches]}

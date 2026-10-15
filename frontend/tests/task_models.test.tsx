@@ -52,14 +52,16 @@ describe('Task model selection by source', () => {
     const firstOverrides = body(fetch, '/api/jobs/estimate').model_overrides;
     expect(firstOverrides).toEqual({ preparation: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: 'low' }, vision: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-deep', reasoning_effort: 'xhigh' } });
     await user.selectOptions(screen.getByLabelText('画面理解模型'), 'model:test-fast');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     expect((screen.getByLabelText('画面理解思考等级') as HTMLSelectElement).value).toBe('');
     expect(screen.getByText('test-fast · 仅发送内容关键帧')).toBeTruthy();
     expect(screen.getByText(/台词整理 → 视觉分块（test-fast）/)).toBeTruthy();
     expect(within(screen.getByLabelText('画面理解思考等级')).queryByRole('option', { name: /xhigh/ })).toBeNull();
     await estimateJob(user);
     await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'medium');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await estimateJob(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(body(fetch, '/api/jobs').model_overrides).toEqual(body(fetch, '/api/jobs/estimate').model_overrides);
@@ -146,7 +148,8 @@ describe('Task model selection by source', () => {
     expect(within(unavailable).getByRole('option', { name: /已选等级，目录暂不可验证/ }).textContent).toContain('high');
     await user.click(screen.getByRole('button', { name: '重新读取模型' }));
     await waitFor(() => expect((screen.getByLabelText('画面理解思考等级') as HTMLSelectElement).value).toBe(''));
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await estimateJob(user);
     expect(body(fetch, '/api/jobs/estimate').model_overrides.vision.reasoning_effort).toBeNull();
     expect(catalogCalls).toBe(4);
@@ -173,7 +176,8 @@ describe('Task model selection by source', () => {
     await screen.findByText(catalog.message!); await scan(user); await estimateJob(user);
     const updated = { ...app, bootstrap: { ...app.bootstrap, provider_profiles: [{ ...codex, model: '' }] } };
     view.rerender(<AppContext.Provider value={updated}><JobModal asset={asset} onClose={vi.fn()} /></AppContext.Provider>);
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     expect((screen.getByLabelText(/^画面理解思考等级/) as HTMLSelectElement).disabled).toBe(true);
     await estimateJob(user);
     expect(body(fetch, '/api/jobs/estimate')).not.toHaveProperty('model_overrides');
@@ -192,7 +196,8 @@ describe('Task model selection by source', () => {
     const updated = { ...app, bootstrap: { ...app.bootstrap, settings: { ...app.bootstrap.settings, bindings: { ...app.bootstrap.settings.bindings, vision: apiProfile.id } } } };
     view.rerender(<AppContext.Provider value={updated}><JobModal asset={asset} onClose={vi.fn()} /></AppContext.Provider>);
     expect(screen.queryByLabelText('画面理解思考等级')).toBeNull();
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await estimateJob(user);
     expect(body(fetch, '/api/jobs/estimate').model_overrides).toEqual({ preparation: { provider_type: 'codex_cli', profile_id: secondCodex.id, reasoning_effort: 'low' } });
   });
@@ -208,7 +213,8 @@ describe('All analysis entry points keep task selections', () => {
     expect(screen.getByText(/模型：test-fast。/)).toBeTruthy();
     await estimateJob(user, '开始深入分析');
     await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'low');
-    expect((screen.getByRole('button', { name: '开始深入分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始深入分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await estimateJob(user, '开始深入分析');
     await user.click(screen.getByRole('button', { name: '开始深入分析' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -231,7 +237,8 @@ describe('All analysis entry points keep task selections', () => {
     await user.click(screen.getByRole('button', { name: '估算重新识别用量' }));
     await waitFor(() => expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false));
     await user.selectOptions(screen.getByLabelText('分块与简要索引思考等级'), 'low');
-    expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await user.click(screen.getByRole('button', { name: '估算重新识别用量' }));
     await waitFor(() => expect((screen.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole('button', { name: '开始重新识别' }));

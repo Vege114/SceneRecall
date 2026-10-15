@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import math
+import os
 import sqlite3
 import time
 from contextlib import nullcontext
@@ -17,6 +18,7 @@ from .providers import (AIResult, CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_RE
 from .workflows import WorkflowQueueMixin
 from .scene_jobs import CODEX_CORE_FRAMES, CORE_FRAMES, SceneJobMixin
 from .execution import ReservationBusy, bounded_map, execution_width, finish_on_cancel
+from .pipeline import EpisodePipelineMixin
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -79,7 +81,7 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
     return result
 
 
-class JobQueue(SceneJobMixin, WorkflowQueueMixin):
+class JobQueue(EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
     def __init__(self, library: Library, providers, search):
         from .characters import CharacterStore
 
@@ -90,6 +92,8 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
         self.closed = False
         self._reservation_events = {}
         self._executing_jobs = set()
+        self.scan_concurrency = max(1, min(4, os.cpu_count() or 1))
+        self._scan_slots = asyncio.Semaphore(self.scan_concurrency)
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
         self.init_workflows()
@@ -214,6 +218,11 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                   "model_overrides": {stage: selected.model_dump(exclude_unset=True)
                                       for stage, selected in request.model_overrides.items()}}
         if strategy == "scene-chunks-v1" and "preparation" in snapshots:
+            from .scene_jobs import prompt_versions
+            # Raw dialogue preparation must not depend on an earlier episode's
+            # inferred plot or automatically enriched character dossier.
+            config["transcript_context"] = "independent-v1"
+            config["scene_prompt_versions"] = prompt_versions()
             config["visual_batch_size"] = (CODEX_CORE_FRAMES
                 if snapshots["preparation"].get("provider_type") == "codex_cli" else CORE_FRAMES)
         if "vision" in request.stages:
@@ -235,7 +244,7 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                 raise ValueError("请先扫描内容关键帧，再按实际选帧数量估算用量")
             plan = self.validated_plan(request.asset_id, request.start_ms, config["end_ms"], request.keyframe_plan_id)
         if config.get("analysis_strategy") == "scene-chunks-v1" and plan:
-            return self.estimate_scenes(config, plan)
+            return self.with_timing(config, self.estimate_scenes(config, plan))
         vision = len(plan["batches"]) if plan else 0
         subtitle_frames = math.ceil(duration / 1000 * request.subtitle_fps) if "subtitle" in request.stages else 0
         subtitle_requests = math.ceil(subtitle_frames / 8)
@@ -262,9 +271,11 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             warnings.append("Codex CLI 由已登录账户的订阅额度管理，金额费用未知，并不表示免费；请求数预算仍生效。")
         if request.model_fields_set & {"window_ms", "frames_per_window"}:
             warnings.append("window_ms / frames_per_window 已弃用；新画面任务统一使用内容关键帧。")
-        return {"duration_ms": duration, "estimated_frames": len((plan or {}).get("frames", [])) + subtitle_frames,
+        return self.with_timing(config, {"duration_ms": duration, "estimated_frames": len((plan or {}).get("frames", [])) + subtitle_frames,
                 "estimated_requests": vision + subtitle_requests, "cost_estimate": None if unknown else round(estimate_cost, 6),
-                "currency": "USD", "warnings": warnings}
+                "stage_estimates": {"vision": {"requests_min": vision, "requests_max": vision},
+                                    "subtitle": {"requests_min": subtitle_requests, "requests_max": subtitle_requests}},
+                "currency": "USD", "warnings": warnings})
 
     @staticmethod
     def estimated_call_cost(profile: dict, frames: int = 0, text_count: int = 1, context_tokens: int = 0):
@@ -512,14 +523,9 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
                 pass
 
     async def loop(self):
-        while not self.closed:
-            queued = [job for job in reversed(self.list()) if job["status"] == "queued"]
-            if not queued:
-                await asyncio.sleep(.5)
-                continue
-            await self.execute(queued[0]["id"])
+        await self.pipeline_loop()
 
-    async def execute(self, job_id: str):
+    async def execute(self, job_id: str, *, prepare_only=False):
         with self.library.lock:
             current = self.get(job_id)
             if current["status"] != "queued":
@@ -532,6 +538,12 @@ class JobQueue(SceneJobMixin, WorkflowQueueMixin):
             job = self.update(job_id, status="running", error=None)
             self._executing_jobs.add(job_id)
         try:
+            if prepare_only:
+                await self.prepare_episode_inputs(job_id)
+                self.checkpoint(job_id)
+                self.update(job_id, status="queued", transcript_prefetched=True,
+                            message="台词整理完成，等待按集进行画面理解")
+                return
             if job["type"] == "analysis":
                 await self.analyze(job_id)
             elif job["type"] == "index":

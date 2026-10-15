@@ -213,6 +213,7 @@ describe('Existing asset extraction and OCR exclusion', () => {
 
   it('disables OCR for container subtitles and submits only the independent visual stage', async () => {
     const user = userEvent.setup(); const value = context(); value.bootstrap.settings.bindings.vision = 'vision-test'; value.bootstrap.settings.bindings.preparation = 'vision-test';
+    value.bootstrap.provider_profiles = [{ id: 'vision-test', name: '视觉测试连接', base_url: 'https://example.invalid/v1', model: 'synthetic', capabilities: ['preparation', 'vision'], secret_mode: 'none' }];
     const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-test', status: 'completed', frames: [] } : url.endsWith('/estimate') ? { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] } : { id: 'visual-job' });
     const onClose = vi.fn();
     renderApp(<JobModal asset={{ ...asset, subtitle_mode: 'container' }} onClose={onClose} />, value);

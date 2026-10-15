@@ -14,7 +14,17 @@ class BangumiSubject(Contract):
 
 def register_bangumi_routes(app, library, search):
     from .anime_profiles import AnimeProfileStore
+    from .anime_credits import AnimeCreditsStore
     app.state.bangumi = AnimeProfileStore(library)
+    app.state.anime_credits = AnimeCreditsStore(library, app.state.bangumi.client)
+
+    @app.get("/api/assets/{asset_id}/credits")
+    def asset_credits(asset_id: str):
+        return app.state.anime_credits.get(asset_id)
+
+    @app.post("/api/assets/{asset_id}/credits")
+    async def fetch_asset_credits(asset_id: str):
+        return await app.state.anime_credits.fetch(asset_id)
 
     @app.post("/api/bangumi/search")
     async def search_subject(payload: BangumiSearch):

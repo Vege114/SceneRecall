@@ -57,6 +57,6 @@ async def test_preparation_deep_selection_is_returned_without_an_additional_requ
     assert result.data == data
     assert result.request_count == len(requests) == 1
     prompt = json.loads(requests[0].content)["messages"][0]["content"]
-    assert "scene-visual-preparation-v3" in prompt
+    assert "scene-visual-preparation-v4" in prompt
     assert "For fast action or changes that cannot safely be summarized, select every core frame" in prompt
     assert "frame_ids must still retain every core frame" in prompt

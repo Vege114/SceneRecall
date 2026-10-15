@@ -306,7 +306,9 @@ class WorkflowQueueMixin:
             self.library.require_source(asset_id)
             return data
 
-        data = await self._local_work(job_id, work)
+        async with self._scan_slots:
+            self.checkpoint(job_id)
+            data = await self._local_work(job_id, work)
         plan = {**data, "id": plan_id, "plan_id": plan_id, "asset_id": asset_id,
                 "fingerprint": asset["fingerprint"], "start_ms": start_ms, "end_ms": end_ms,
                 "status": "completed", "job_id": job_id, "created_at": now()}
@@ -316,21 +318,16 @@ class WorkflowQueueMixin:
         return plan
 
     def estimate_batch(self, items, settings):
+        from .timing import batch_timing
         if len({item.asset_id for item in items}) != len(items):
             raise ValueError("同一批分析不能重复选择同一视频")
         estimates = [{"asset_id": item.asset_id, **self.estimate(item, settings)} for item in items]
         known = all(item["cost_estimate"] is not None for item in estimates)
-        stages = {}
-        for item in estimates:
-            for stage, counts in item.get("stage_estimates", {}).items():
-                target = stages.setdefault(stage, {"requests_min": 0, "requests_max": 0})
-                for key in target:
-                    target[key] += counts[key]
         return {"items": estimates, "estimated_frames": sum(item["estimated_frames"] for item in estimates),
                 "estimated_requests": sum(item["estimated_requests"] for item in estimates),
                 "estimated_requests_min": sum(item.get("estimated_requests_min", item["estimated_requests"]) for item in estimates),
                 "estimated_requests_max": sum(item.get("estimated_requests_max", item["estimated_requests"]) for item in estimates),
-                "stage_estimates": stages,
+                **batch_timing(estimates),
                 "cost_estimate_min": (sum(item.get("cost_estimate_min", item["cost_estimate"]) for item in estimates)
                                       if known else None),
                 "cost_estimate_max": (sum(item.get("cost_estimate_max", item["cost_estimate"]) for item in estimates)

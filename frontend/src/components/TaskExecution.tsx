@@ -47,7 +47,7 @@ export default function TaskExecution({ value, onChange, stages, disabled = fals
     </Field>
     {!defaults && <p className="helper">这里调整本次任务；长期设置在「模型与设置 → 执行与并发」集中管理。</p>}
     {onSaveDefaultChange && <><label className="check-line"><input type="checkbox" checked={saveDefault} disabled={disabled} onChange={(event) => onSaveDefaultChange(event.target.checked)} /><span>设为默认值</span></label><p className="helper">开始任务时，将本次并发上限与当前阶段的执行方式保存为后续任务的默认值。</p></>}
-    {stages.some((stage) => stage === 'transcript' || stage === 'preparation') && <p className="helper">并行台词整理与视觉分块共享开始时的此前记忆，并参考相邻的原始台词或画面证据，结果按时间顺序合并。深入理解与连续理解更新依赖前序结果，始终串行。</p>}
+    {stages.some((stage) => stage === 'transcript' || stage === 'preparation') && <p className="helper">新任务的各集台词先独立并行整理，再按集理解画面；视觉分块参考此前记忆与相邻原始画面，结果按时间顺序合并。深入理解与连续理解更新依赖前序结果，始终串行。</p>}
     {stages.includes('subtitle') && <p className="helper">字幕 OCR 可并行识别图片，完成后按时间顺序合并与去重。</p>}
     {defaults && <p className="helper">保存后用于新任务；创建时会保存执行方式，恢复或重试沿用原任务的选择。</p>}
   </section>;

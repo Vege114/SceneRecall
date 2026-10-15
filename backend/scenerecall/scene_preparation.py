@@ -7,16 +7,17 @@ from __future__ import annotations
 
 import json
 import unicodedata
+from typing import Literal
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 PREPARATION_PROMPT_VERSION = "scene-preparation-v1"
-SUBTITLE_PREPARATION_PROMPT_VERSION = "scene-subtitle-preparation-v1"
-VISUAL_PREPARATION_PROMPT_VERSION = "scene-visual-preparation-v3"
-CONTEXTUAL_VISION_PROMPT_VERSION = "scene-contextual-vision-v5"
-RECONCILIATION_PROMPT_VERSION = "scene-reconciliation-v2"
+SUBTITLE_PREPARATION_PROMPT_VERSION = "scene-subtitle-preparation-v2"
+VISUAL_PREPARATION_PROMPT_VERSION = "scene-visual-preparation-v4"
+CONTEXTUAL_VISION_PROMPT_VERSION = "scene-contextual-vision-v6"
+RECONCILIATION_PROMPT_VERSION = "scene-reconciliation-v3"
 MAX_CORE_FRAMES = 56
 MAX_CONTEXT_FRAMES = 8
 MAX_SUBTITLE_CUES = 256
@@ -47,6 +48,7 @@ class SceneValue(BaseModel):
 
 
 class SubtitleSegment(SceneValue):
+    content_kind: Literal["dialogue", "credits"] = "dialogue"
     cue_ids: list[str] = Field(min_length=1, max_length=MAX_SUBTITLE_CUES)
     summary: str = Field(min_length=1, max_length=2000)
 
@@ -73,6 +75,8 @@ class SceneInference(SceneValue):
 
 
 class PreparedChunk(SceneValue):
+    content_kind: Literal["narrative", "credits"] = "narrative"
+    entities: list[dict] = Field(default_factory=list, max_length=128)
     frame_ids: list[str] = Field(min_length=1, max_length=MAX_CORE_FRAMES)
     summary: str = Field(min_length=1, max_length=2000)
     scene_key: str = Field(default="", max_length=120)
@@ -194,7 +198,11 @@ def validate_subtitle_preparation(raw, cues: list[dict]) -> dict:
     result = SubtitlePreparation.model_validate(raw)
     if [cue_id for segment in result.segments for cue_id in segment.cue_ids] != [cue["id"] for cue in cues]:
         raise ValueError("字幕分段必须按顺序恰好覆盖每条字幕一次")
-    return result.model_dump()
+    value = result.model_dump(exclude_unset=True)
+    for segment in value["segments"]:
+        if segment.get("content_kind") == "credits":
+            segment["summary"] = "片头／片尾演职员信息"
+    return value
 
 
 def _references(values: list[str], allowed: set[str]) -> None:
@@ -270,6 +278,14 @@ def validate_visual_preparation(raw, frames: list[dict], cue_ids: set[str], *, h
                 raise ValueError("深入理解帧必须按原始关键帧时间顺序排列")
         if chunk.continues_previous and (index or not has_context):
             raise ValueError("只有有边界上下文的首个片段可以延续前段")
+        identities = [entity.get("id") for entity in chunk.entities]
+        if any(not isinstance(identity, str) or not identity for identity in identities) or len(set(identities)) != len(identities):
+            raise ValueError("片段角色实体 ID 缺失或重复")
+        for entity in chunk.entities:
+            evidence = entity.get("evidence_frame_ids")
+            if not isinstance(evidence, list) or not evidence or any(not isinstance(value, str) for value in evidence):
+                raise ValueError("片段角色实体必须引用当前画面")
+            _references(evidence, own)
         for fact in chunk.visual_facts:
             _references(fact.frame_ids, own)
         for fact in chunk.dialogue_facts:
@@ -282,4 +298,12 @@ def validate_visual_preparation(raw, frames: list[dict], cue_ids: set[str], *, h
         if chunk.needs_deep and not chunk.reason.strip():
             raise ValueError("深入理解标记必须说明原因")
     # Older cached/fixture responses may omit optional navigation metadata.
-    return result.model_dump(exclude_unset=True)
+    values = result.model_dump(exclude_unset=True)
+    for chunk in values["chunks"]:
+        if chunk.get("content_kind") == "credits":
+            # Keep all original frames and subtitle references. Credits are
+            # episode metadata, not story facts, characters, or deep work.
+            chunk.update(summary="片头／片尾演职员信息", visual_facts=[], dialogue_facts=[],
+                         inferences=[], entities=[], needs_deep=False, reason="", scene_key="",
+                         continues_previous=False)
+    return values

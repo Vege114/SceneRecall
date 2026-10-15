@@ -13,7 +13,7 @@ class SceneResumeMixin:
         total = (len(frames) + batch_size - 1) // batch_size
         header = {"asset_id": asset_id, "run_id": run_id, "dependencies": config["scene_dependencies"],
                   "profile": model_identity(profile), "plan_id": plan["id"], "batch_size": batch_size,
-                  "prompt_version": prompt_versions()["preparation"]}
+                  "prompt_version": prompt_versions(config)["preparation"]}
         saved = read_json(target)
         if saved is None:
             saved = {"header": header, "results": [None] * total}
@@ -56,6 +56,8 @@ class SceneResumeMixin:
 
     @staticmethod
     def _understanding_kind(chunk, config, context_changed):
+        if chunk.get("content_kind") == "credits":
+            return "initial"
         if chunk["needs_deep"] or config.get("character_reanalysis"):
             return "deep_analysis"
         return "context_refresh" if context_changed else "initial"
@@ -137,7 +139,10 @@ class SceneResumeMixin:
             state["understanding"] = cursor
             atomic_json(state_path, state)
         annotations = store._annotations(asset_id)
-        return cursor, [store._project_semantics(asset_id, row, annotations) for row in recent]
+        # Initial publication may have allocated persistent character IDs.
+        # Keep the immutable preparation plan for cursor identity, but use the
+        # already-read active revisions for all pending semantic updates.
+        return cursor, [store._project_semantics(asset_id, row, annotations) for row in recent], raw
 
     def _commit_scene_understanding(self, cursor, chunk, kind, deep_completed, state, state_path, store):
         cursor["completed"] += 1

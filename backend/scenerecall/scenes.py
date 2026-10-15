@@ -146,7 +146,8 @@ class SceneStore:
                   "frame_ids", "evidence_frame_ids", "subtitle_ids", "entities", "events", "spatial_observations",
                   "uncertainties", "understanding_level", "dependencies")
         return digest({**{key: chunk.get(key) for key in fields},
-                       **({"scene_key": chunk["scene_key"]} if chunk.get("scene_key") else {})})
+                       **({"scene_key": chunk["scene_key"]} if chunk.get("scene_key") else {}),
+                       **({"content_kind": chunk["content_kind"]} if "content_kind" in chunk else {})})
 
     @staticmethod
     def _relative(chunk: dict) -> str:
@@ -168,6 +169,11 @@ class SceneStore:
             raise ValueError("场景块不属于当前视频")
         from .scene_preparation import normalize_scene_key
         value["scene_key"] = normalize_scene_key(value.get("scene_key", ""))
+        if value.get("content_kind", "narrative") not in {"narrative", "credits"}:
+            raise ValueError("场景内容类型无效")
+        if value.get("content_kind") == "credits" and (value.get("needs_deep") or any(value.get(field) for field in (
+                "visual_facts", "dialogue_facts", "inferences", "entities", "events", "spatial_observations"))):
+            raise ValueError("纯演职员信息不能混入剧情事实或角色")
         related = value.setdefault("related_chunk_ids", [])
         if (not isinstance(related, list) or any(not isinstance(item, str) for item in related)
                 or len(set(related)) != len(related) or identity in related):
@@ -383,6 +389,8 @@ class SceneStore:
             if source_gaps and not same_asset:
                 continue
             for row in accepted:
+                if row.get("content_kind") == "credits":
+                    continue
                 summaries.append({"chunk_id": row["id"], "asset_id": source["id"],
                                   "start_ms": row["start_ms"], "end_ms": row["end_ms"],
                                   "summary": row["summary"][:2000],

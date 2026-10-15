@@ -196,7 +196,7 @@ describe('Reinterpret video with revised dossiers', () => {
     await user.click(await screen.findByRole('button', { name: '按新版档案重新识别' }));
     const dialog = within(screen.getByRole('dialog', { name: '按新版档案重新识别' }));
     const start = dialog.getByRole('button', { name: '开始重新识别' }) as HTMLButtonElement;
-    expect(start.disabled).toBe(true);
+    expect(start.disabled).toBe(false);
     await user.selectOptions(dialog.getByLabelText('重新识别范围'), 'series');
     await user.click(dialog.getByRole('button', { name: '估算重新识别用量' }));
     await waitFor(() => expect(start.disabled).toBe(false));
@@ -204,7 +204,7 @@ describe('Reinterpret video with revised dossiers', () => {
     expect(estimateCalls.map((entry) => JSON.parse(entry[1]!.body as string).asset_id)).toEqual([asset.id, episodeTwo.id]);
     expect(JSON.parse(estimateCalls[0][1]!.body as string)).toMatchObject({ stages: ['vision'], start_ms: 0, end_ms: null, force: true });
     await user.clear(dialog.getByLabelText(/^每个视频最多模型请求数/)); await user.type(dialog.getByLabelText(/^每个视频最多模型请求数/), '50');
-    expect(start.disabled).toBe(true);
+    expect(start.disabled).toBe(false);
     await user.click(dialog.getByRole('button', { name: '估算重新识别用量' }));
     await waitFor(() => expect(start.disabled).toBe(false));
     await user.click(start);

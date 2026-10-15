@@ -64,7 +64,7 @@ describe('Scene preparation and budgets', () => {
 });
 
 describe('Explicit scene deepening and evidence', () => {
-  it('searches existing scenes without model analysis, then requires a current estimate before budgeted deepening', async () => {
+  it('searches existing scenes without model analysis, allows optional current estimates before budgeted deepening', async () => {
     const user = userEvent.setup(); const fetch = mockFetch((url) => url === '/api/search' ? { results: [result], degraded: [] } : url.endsWith('/estimate') ? estimate : { id: 'deep-job' });
     mount(<SearchPage />);
     await user.type(screen.getByRole('textbox', { name: /用自然语言搜索/ }), '站台告别');
@@ -76,12 +76,12 @@ describe('Explicit scene deepening and evidence', () => {
     const dialog = screen.getByRole('dialog');
     expect(fetch).toHaveBeenCalledOnce();
     const start = within(dialog).getByRole('button', { name: '开始深入分析' }) as HTMLButtonElement;
-    expect(start.disabled).toBe(true);
+    expect(start.disabled).toBe(false);
     await user.click(within(dialog).getByRole('button', { name: '估算用量' }));
     await waitFor(() => expect(start.disabled).toBe(false));
     const maxRequests = within(dialog).getByLabelText(/最多模型请求数/);
     await user.clear(maxRequests); await user.type(maxRequests, '6');
-    expect(start.disabled).toBe(true);
+    expect(start.disabled).toBe(false);
     await user.click(within(dialog).getByRole('button', { name: '估算用量' }));
     await waitFor(() => expect(start.disabled).toBe(false));
     await user.click(start);
@@ -179,7 +179,7 @@ describe('Explicit scene deepening and evidence', () => {
     await user.click(screen.getByRole('button', { name: '深入分析此片段' }));
     await user.click(screen.getByRole('button', { name: '估算用量' }));
     await screen.findByText('该片段已被新方案替换');
-    expect((screen.getByRole('button', { name: '开始深入分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始深入分析' }) as HTMLButtonElement).disabled).toBe(false);
     expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets/episode-one/chunks/chunk-one/deepen/estimate']);
   });
 
@@ -216,4 +216,12 @@ describe('Explicit scene deepening and evidence', () => {
     expect(within(screen.getByLabelText('深入理解阶段')).getByText('已完成 0 / 0')).toBeTruthy();
     expect(within(screen.getByLabelText('深入理解阶段')).getByText('已完成')).toBeTruthy();
   });
+});
+
+
+it('labels production credits as metadata and omits paid deepening in search results', () => {
+  mount(<ResultCard result={{ ...result, content_kind: 'credits', summary: '片头／片尾演职员信息', visual_facts: [], dialogue_facts: [], inferences: [] }} />);
+  expect(screen.getByText('演职员信息')).toBeTruthy();
+  expect(screen.queryByRole('button', { name: '深入分析此片段' })).toBeNull();
+  expect(screen.getByRole('link', { name: /查看原片/ })).toBeTruthy();
 });

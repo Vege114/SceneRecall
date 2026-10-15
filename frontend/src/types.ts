@@ -167,6 +167,7 @@ export interface KeyframePlan {
   frame_count?: number; batch_count?: number; shots?: unknown[]; batches?: unknown[];
 }
 export interface Asset {
+  source_filename?: string;
   anime_id?: string;
   anime_title?: string;
   anime_profile?: AnimeProfile;
@@ -275,6 +276,7 @@ export interface SceneFact {
   cue_ids?: string[];
 }
 export interface SceneEvidence {
+  content_kind?: 'narrative' | 'credits';
   chunk_id?: string;
   scene_key?: string;
   related_chunk_ids?: string[];
@@ -371,7 +373,10 @@ export interface Estimate {
   estimated_requests: number;
   estimated_requests_min?: number;
   estimated_requests_max?: number;
-  stage_estimates?: Record<string, { requests_min: number; requests_max: number }>;
+  estimated_wall_ms_min?: number;
+  estimated_wall_ms_max?: number;
+  timing_basis?: string;
+  stage_estimates?: Record<string, { requests_min: number; requests_max: number; concurrency?: number; waves_min?: number; waves_max?: number; estimated_wall_ms_min?: number; estimated_wall_ms_max?: number; latency_source?: 'history' | 'assumption' }>;
   cost_estimate: number | null;
   cost_estimate_min?: number | null;
   cost_estimate_max?: number | null;

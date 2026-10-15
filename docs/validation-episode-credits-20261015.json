@@ -1,0 +1,83 @@
+{
+  "checked_at": "2026-10-15T02:39:35.695977+00:00",
+  "subject_id": 214265,
+  "source": "Bangumi public subject staff via pinned bgm-cli 1.1.7",
+  "saved_position_entries": 288,
+  "episode_projections": [
+    {
+      "episode": 1,
+      "explicit_entries": 3,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 2,
+      "explicit_entries": 4,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 3,
+      "explicit_entries": 4,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 4,
+      "explicit_entries": 3,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 5,
+      "explicit_entries": 2,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 6,
+      "explicit_entries": 4,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 7,
+      "explicit_entries": 3,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 8,
+      "explicit_entries": 3,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 9,
+      "explicit_entries": 3,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 10,
+      "explicit_entries": 7,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 11,
+      "explicit_entries": 5,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    },
+    {
+      "episode": 12,
+      "explicit_entries": 5,
+      "unspecified_entries": 266,
+      "unparsed_entries": 3
+    }
+  ],
+  "warnings": [],
+  "model_requests": 0,
+  "user_media_accessed": false
+}

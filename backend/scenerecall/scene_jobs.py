@@ -6,6 +6,7 @@ same bounded input memory, never a later automatically enriched character state.
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 import math
 import time
 
@@ -73,11 +74,14 @@ def join_visual_results(results, args):
     from pydantic import ValidationError
     from .scene_preparation import PreparedChunk, subtitle_context_data, validate_visual_preparation
     chunks, unresolved = [], []
-    for result in results:
+    for child_index, result in enumerate(results):
         unresolved.extend(result.get("unresolved", []))
         for number, raw in enumerate(result["chunks"]):
             chunk = copy.deepcopy(raw)
-            if number == 0 and chunks and chunk.get("continues_previous"):
+            for entity in chunk.get("entities", []):
+                entity["id"] = f"c{child_index}_{entity['id']}"
+            if (number == 0 and chunks and chunk.get("continues_previous")
+                    and chunk.get("content_kind") != "credits" and chunks[-1].get("content_kind") != "credits"):
                 previous = chunks[-1]
                 separate = copy.deepcopy(chunk)
                 separate["continues_previous"] = False
@@ -87,7 +91,7 @@ def join_visual_results(results, args):
                 chunk["summary"] = previous["summary"] + "；" + chunk["summary"]
                 chunk["reason"] = (previous.get("reason", "") + "；" + chunk.get("reason", "")).strip("；")
                 chunk["scene_key"] = chunk.get("scene_key") or previous.get("scene_key", "")
-                for field in ("visual_facts", "dialogue_facts", "inferences"):
+                for field in ("visual_facts", "dialogue_facts", "inferences", "entities"):
                     chunk[field] = previous.get(field, []) + chunk.get(field, [])
                 chunk["needs_deep"] = previous["needs_deep"] or chunk["needs_deep"]
                 chunk["continues_previous"] = previous.get("continues_previous", False)
@@ -145,11 +149,24 @@ def annotation_digest(store, asset_id):
     return digest(sorted(values, key=lambda value: str(value)))
 
 
-def prompt_versions():
+LEGACY_PROMPT_VERSIONS = {
+    "transcript": "scene-subtitle-preparation-v1", "preparation": "scene-visual-preparation-v3",
+    "deep_analysis": "scene-contextual-vision-v5", "context_refresh": "scene-reconciliation-v2",
+}
+
+
+def prompt_versions(config=None):
     from .scene_preparation import (CONTEXTUAL_VISION_PROMPT_VERSION, RECONCILIATION_PROMPT_VERSION,
                                     SUBTITLE_PREPARATION_PROMPT_VERSION, VISUAL_PREPARATION_PROMPT_VERSION)
-    return {"transcript": SUBTITLE_PREPARATION_PROMPT_VERSION, "preparation": VISUAL_PREPARATION_PROMPT_VERSION,
-            "deep_analysis": CONTEXTUAL_VISION_PROMPT_VERSION, "context_refresh": RECONCILIATION_PROMPT_VERSION}
+    current = {"transcript": SUBTITLE_PREPARATION_PROMPT_VERSION, "preparation": VISUAL_PREPARATION_PROMPT_VERSION,
+               "deep_analysis": CONTEXTUAL_VISION_PROMPT_VERSION, "context_refresh": RECONCILIATION_PROMPT_VERSION}
+    if config is None:
+        return current
+    frozen = (config.get("scene_prompt_versions") or (config.get("scene_dependencies") or {}).get("prompt_versions")
+              or LEGACY_PROMPT_VERSIONS)
+    if frozen not in (current, LEGACY_PROMPT_VERSIONS):
+        raise ValueError("任务使用了不支持的场景提示词版本；已保存结果仍然保留")
+    return copy.deepcopy(frozen)
 
 
 def cue_batches(cues):
@@ -170,6 +187,8 @@ def bounded_memory(prior, chunks):
     # Evidence types stay separate even in the compressed rolling state.
     entries = []
     for chunk in chunks:
+        if chunk.get("content_kind") == "credits":
+            continue
         entries.append({"chunk_id": chunk["id"], "asset_id": chunk["asset_id"],
                         "start_ms": chunk["start_ms"], "end_ms": chunk["end_ms"],
                         "summary": chunk["summary"][:1600],
@@ -246,7 +265,7 @@ def subtitle_context(cues, segments, start, end):
             selected = selected[::2]
     ids = {c["id"] for c in selected}
     summaries = [{"cue_ids": [i for i in s["cue_ids"] if i in ids], "summary": s["summary"][:600]}
-                 for s in segments if set(s["cue_ids"]) & ids]
+                 for s in segments if s.get("content_kind") != "credits" and set(s["cue_ids"]) & ids]
     while summaries and encoded_size(summaries) > 5000:
         summaries.pop()
     return {"cues": selected, "segments": summaries, "start_ms": start, "end_ms": end,
@@ -351,20 +370,16 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         await yield_to_io()
         from .jobs import model_identity
         from .models import normalize_observation_evidence
-        from .scene_preparation import (CONTEXTUAL_VISION_PROMPT_VERSION, SUBTITLE_PREPARATION_PROMPT_VERSION,
-                                        VISUAL_PREPARATION_PROMPT_VERSION)
-        versions = {"transcript": SUBTITLE_PREPARATION_PROMPT_VERSION,
-                    "preparation": VISUAL_PREPARATION_PROMPT_VERSION, "deep_analysis": CONTEXTUAL_VISION_PROMPT_VERSION}
-        if stage == "context_refresh":
-            from .scene_preparation import RECONCILIATION_PROMPT_VERSION
-            versions[stage] = RECONCILIATION_PROMPT_VERSION
         job = self.checkpoint(job_id)
+        versions = prompt_versions(job["config"])
         from .scenes import SceneStore
         root = self.library.asset_dir(job["asset_id"])
         run = root / "analyses" / job["run_id"]
         inputs = run / "scene-inputs" / f"{digest([stage, versions[stage], unit])}.json"
         frozen = read_json(inputs)
         if frozen is None:
+            if stage == "preparation" and versions[stage] == prompt_versions()[stage]:
+                images += len((args[4] or {}).get("reference_frames", [])) if len(args) > 4 else 0
             frozen = {"args": args, "images": images}
             atomic_json(inputs, frozen)
         args, images = frozen["args"], frozen["images"]
@@ -374,7 +389,10 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             # against those frozen inputs without replacing or repaying it.
             return (normalize_observation_evidence(data, [frame["id"] for frame in args[0]])
                     if stage == "deep_analysis" else copy.deepcopy(data))
-        key = digest([STRATEGY, stage, versions[stage], unit, job["config"]["scene_dependencies"],
+        independent = stage == "transcript" and self.independent_transcript(job["config"])
+        dependencies = (job["config"]["transcript_dependencies"] if independent
+                        else job["config"]["scene_dependencies"])
+        key = digest([STRATEGY, stage, versions[stage], unit, dependencies,
                       model_identity(profile), canonical(args)])
         output = run / "scene-receipts" / f"{key}.json"
         receipt = read_json(output)
@@ -386,7 +404,10 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             self._account_scene_receipt(job_id, receipt)
             self._scene_metric(job_id, stage, cache=1)
             return observation_data(receipt["data"])
-        self._check_scene_dependencies(job["asset_id"], job["config"], SceneStore(self.library))
+        if independent:
+            self.check_transcript_dependencies(job["asset_id"], job["config"])
+        else:
+            self._check_scene_dependencies(job["asset_id"], job["config"], SceneStore(self.library))
         split_path = run / "scene-splits" / f"{key}.json"
         split = read_json(split_path) if stage == "preparation" else None
         if split is not None:
@@ -400,7 +421,10 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         async def perform():
             started = time.monotonic()
             try:
-                result = await self.invoke_profile(profile, method, *args)
+                scope = (self.providers.scene_prompt_version(versions[stage])
+                         if hasattr(self.providers, "scene_prompt_version") else nullcontext())
+                with scope:
+                    result = await self.invoke_profile(profile, method, *args)
             except Exception as exc:
                 self.account(job_id, exc, call_id)
                 self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
@@ -475,7 +499,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             return value
 
         ptext = price("preparation", 0, 32000)
-        pvisual = price("preparation", math.ceil((batch_size + CONTEXT_FRAMES) / 16), 50000)
+        reference_images = 8 if prompt_versions(config)["preparation"] == prompt_versions()["preparation"] else 0
+        pvisual = price("preparation", math.ceil((batch_size + CONTEXT_FRAMES) / 16) + reference_images, 50000)
         pdeep = price("vision", deep_batch_size(config["profile_snapshots"]["vision"]) + 8, 50000)
         pocr = price("subtitle", 8, 0) if ocr else 0
         low = high = None
@@ -489,11 +514,17 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 "warnings": ["视觉分块上限包含超时或无效输出后的逐级细分；深入理解与上下文更新按每帧独立复杂片段计算，不含传输重试和向量索引。",
                              "先复用本机关键帧并建立简要索引，复杂片段继续深入分析；费用与耗时以实际调用为准。"]}
 
+    @staticmethod
+    def _check_deepen_content(chunk):
+        if chunk.get("content_kind") == "credits":
+            raise ValueError("纯演职员信息无需深入理解，请在动画档案中查看 Bangumi 演职员资料")
+
     def deepen_config(self, asset_id, chunk_id, payload, settings):
         from .models import AnalysisInput
         from .scenes import SceneStore
         store = SceneStore(self.library)
         chunk = store.get(asset_id, chunk_id)
+        self._check_deepen_content(chunk)
         request = AnalysisInput(asset_id=asset_id, analysis_strategy=STRATEGY,
                                 start_ms=chunk["start_ms"], end_ms=chunk["end_ms"],
                                 max_requests=payload.max_requests, max_cost=payload.max_cost,
@@ -505,17 +536,18 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         return config, chunk
 
     def estimate_deepen(self, config, chunk):
+        self._check_deepen_content(chunk)
         profile = config["profile_snapshots"]["vision"]
         batch_size = deep_batch_size(profile)
         calls = math.ceil(len(chunk["frame_ids"]) / batch_size)
         costs = [self.estimated_call_cost(profile, frames=min(batch_size, len(chunk["frame_ids"]) - offset) + 8,
                                            context_tokens=50000) for offset in range(0, len(chunk["frame_ids"]), batch_size)]
         cost = sum(costs) if all(c is not None for c in costs) else None
-        return {"duration_ms": chunk["end_ms"] - chunk["start_ms"], "estimated_frames": len(chunk["frame_ids"]),
+        return self.with_timing(config, {"duration_ms": chunk["end_ms"] - chunk["start_ms"], "estimated_frames": len(chunk["frame_ids"]),
                 "estimated_requests": calls, "estimated_requests_min": calls, "estimated_requests_max": calls,
                 "cost_estimate": cost, "currency": "USD",
                 "stage_estimates": {"vision": {"requests_min": calls, "requests_max": calls}},
-                "warnings": ["逐批读取该片段保留的关键帧；最多三次重试，继续复用同一片段的收藏和引用。"]}
+                "warnings": ["逐批读取该片段保留的关键帧；最多三次重试，继续复用同一片段的收藏和引用。"]})
 
     @staticmethod
     def _bounded_scene_profiles(context):
@@ -598,6 +630,14 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     or not set(chunk.get("representative_frame_ids", [])).issubset(deep_frames)
                     or chunk["deep_frame_ids"] != [frame_id for frame_id in frame_ids if frame_id in deep_frames]):
                 raise ValueError("已保存的深入理解选帧与视觉分块不一致")
+            entities = chunk.get("entities", [])
+            if not isinstance(entities, list):
+                raise ValueError("已保存的视觉分块角色实体无效")
+            from .providers import Entity
+            parsed_entities = [Entity.model_validate(entity) for entity in entities]
+            if (len({entity.id for entity in parsed_entities}) != len(parsed_entities)
+                    or any(not set(entity.evidence_frame_ids).issubset(frames) for entity in parsed_entities)):
+                raise ValueError("已保存的视觉分块角色证据引用无效")
             subtitle_ids = set(chunk.get("subtitle_ids", []))
             if any(cue_id not in cues or cues[cue_id]["start_ms"] >= end
                    or cues[cue_id]["end_ms"] <= start for cue_id in subtitle_ids):
@@ -670,6 +710,9 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         from .scenes import SceneStore
         store = SceneStore(self.library)
         job = self.checkpoint(job_id)
+        if self.independent_transcript(job["config"]) and not job.get("transcript_prefetched"):
+            await self.prepare_episode_inputs(job_id)
+            job = self.update(job_id, transcript_prefetched=True)
         config, asset_id, run_id = job["config"], job["asset_id"], job["run_id"]
         directory = self.library.asset_dir(asset_id) / "analyses" / run_id
         state_path = directory / "scene-state.json"
@@ -720,7 +763,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         "membership_revision": config["character_snapshot"].get("membership_revision", 0),
                         "annotation_digest": annotation_digest(store, asset_id),
                         "prior_memory_digest": prior["digest"], "keyframe_plan_id": config.get("keyframe_plan_id"),
-                        "strategy": STRATEGY, "prompt_versions": prompt_versions(),
+                        "strategy": STRATEGY, "prompt_versions": prompt_versions(config),
                         "deep_batch_size": deep_batch_size(config["profile_snapshots"]["vision"])}
         if visual_batch_size(config) != CORE_FRAMES:
             dependencies["visual_batch_size"] = visual_batch_size(config)
@@ -740,6 +783,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     raise ValueError("片段已更新，请刷新后重新发起补查")
                 state["original"] = original
                 atomic_json(state_path, state)
+            self._check_deepen_content(original)
             frames = self._scene_frames(asset_id, original["frame_ids"])
             self._scene_progress(job_id, "deep_analysis",
                 total=math.ceil(len(frames) / deep_batch_size(config["profile_snapshots"]["vision"])))
@@ -843,7 +887,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     else:
                         self._scene_progress(job_id, "preparation", status="running")
                         self.update(job_id, message=f"视觉分块与简要索引：{index + 1}/{total}")
-                        version = prompt_versions()["preparation"]
+                        version = prompt_versions(config)["preparation"]
                         frozen = read_json(directory / "scene-inputs" / f"{digest(['preparation', version, str(index)])}.json")
                         args = (frozen["args"] if frozen is not None else
                                 [core, context_frames, sub_context, memory_for(chunks), self._scene_context(asset_id, config)])
@@ -851,6 +895,9 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                             self.providers.prepare_visual, args,
                             images=math.ceil((len(core) + len(context_frames)) / 16))
                     for number, raw in enumerate(result["chunks"]):
+                        raw = copy.deepcopy(raw)
+                        for entity in raw.get("entities", []):
+                            entity["id"] = f"v{index}_{number}_{entity['id']}"
                         chosen = [frame_lookup[fid] for fid in raw["frame_ids"]]
                         start = a if number == 0 else chosen[0]["at_ms"]
                         next_raw = result["chunks"][number + 1] if number + 1 < len(result["chunks"]) else None
@@ -864,24 +911,26 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                                  "understanding_level": "initial", "dependencies": dependencies,
                                  "provenance": {"strategy": STRATEGY, "keyframe_plan_id": plan["id"],
                                                 "profile_id": prep_profile["id"], "model": prep_profile.get("model", "")},
-                                 "uncertainties": result.get("unresolved", []),
+                                 "uncertainties": [] if raw.get("content_kind") == "credits" else result.get("unresolved", []),
                                  "memory_before": copy.deepcopy(frozen_memory) if parallel_preparation else memory_for(chunks)}
                         # Keep transcript-only semantic coverage even when sparse frames
                         # required a bounded cue sample for the visual model.
                         own_cues = set(chunk["subtitle_ids"])
                         for segment in segments:
-                            if set(segment["cue_ids"]).issubset(own_cues):
+                            if (chunk.get("content_kind") != "credits" and segment.get("content_kind") != "credits"
+                                    and set(segment["cue_ids"]).issubset(own_cues)):
                                 fact = {"text": segment["summary"], "cue_ids": segment["cue_ids"]}
                                 if fact not in chunk["dialogue_facts"]:
                                     chunk["dialogue_facts"].append(fact)
-                        if number == 0 and raw.get("continues_previous") and chunks:
+                        if (number == 0 and raw.get("continues_previous") and chunks
+                                and chunk.get("content_kind") != "credits" and chunks[-1].get("content_kind") != "credits"):
                             previous = chunks.pop()
                             required_frames = list(dict.fromkeys(deep_frame_ids(previous) + deep_frame_ids(chunk)))
                             chunk["start_ms"] = previous["start_ms"]
                             chunk["summary"] = (previous["summary"] + "；" + chunk["summary"])[-6000:]
                             for key in ("frame_ids", "evidence_frame_ids", "subtitle_ids", "shot_ids"):
                                 chunk[key] = list(dict.fromkeys(previous.get(key, []) + chunk.get(key, [])))
-                            for key in ("visual_facts", "dialogue_facts", "inferences"):
+                            for key in ("visual_facts", "dialogue_facts", "inferences", "entities"):
                                 chunk[key] = previous.get(key, []) + chunk.get(key, [])
                             chunk["needs_deep"] = previous["needs_deep"] or chunk["needs_deep"]
                             chunk["deep_frame_ids"] = required_frames
@@ -903,21 +952,30 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 self._save_scene_preparation(asset_id, run_id, config, plan, chunks, len(batches), total)
             if not state.get("published"):
                 self._check_scene_dependencies(asset_id, config, store)
-                store.publish(asset_id, run_id, chunks, config["start_ms"], config["end_ms"])
+                with self.library.lock:
+                    self._scene_context(asset_id, config)
+                    published = []
+                    for chunk in chunks:
+                        if chunk.get("entities"):
+                            chunk = self.characters.apply_observation(asset_id,
+                                {**chunk, "window_id": chunk["id"], "shot_id": "scene"},
+                                config["character_snapshot"]["revision"])
+                        published.append(chunk)
+                    store.publish(asset_id, run_id, published, config["start_ms"], config["end_ms"])
                 state["published"] = True
                 state["index_dirty"] = True
                 atomic_json(state_path, state)
             self._repair_scene_index(job_id, asset_id, state, state_path)
             batch_size = deep_batch_size(config["profile_snapshots"]["vision"])
             deep_total = sum(math.ceil(len(deep_frame_ids(c, all_frames=config.get("character_reanalysis"))) / batch_size) for c in chunks
-                             if c["needs_deep"] or config.get("character_reanalysis"))
+                             if self._understanding_kind(c, config, False) == "deep_analysis")
             deep_seen, refresh_total, refresh_completed = False, 0, 0
             for chunk in chunks:
-                if chunk["needs_deep"] or config.get("character_reanalysis"):
+                if self._understanding_kind(chunk, config, False) == "deep_analysis":
                     deep_seen = True
-                elif deep_seen:
+                elif deep_seen and chunk.get("content_kind") != "credits":
                     refresh_total += 1
-            cursor, completed_chunks = self._load_scene_understanding(
+            cursor, completed_chunks, active_chunks = self._load_scene_understanding(
                 asset_id, run_id, config, chunks, state, state_path, store)
             self._repair_scene_index(job_id, asset_id, state, state_path)
             context_changed = cursor["context_changed"]
@@ -929,7 +987,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             self.update(job_id, deep_request_count=deep_total, total=len(chunks),
                         completed=cursor["completed"], progress=.5 + .5 * cursor["completed"] / len(chunks))
             for index in range(cursor["completed"], len(chunks)):
-                chunk = chunks[index]
+                chunk = copy.deepcopy(active_chunks[chunks[index]["id"]])
                 await yield_to_io()
                 self.checkpoint(job_id)
                 memory = bounded_memory(prior, completed_chunks)
@@ -967,7 +1025,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
     def _check_scene_dependencies(self, asset_id, config, store):
         self._check_scene_range(asset_id, config, store)
         self._scene_context(asset_id, config)
-        if config["scene_dependencies"].get("prompt_versions") != prompt_versions():
+        if config["scene_dependencies"].get("prompt_versions") != prompt_versions(config):
             raise ValueError("理解提示词已升级，请创建新任务以保留清晰的版本与缓存边界")
         if store.subtitle_digest(asset_id) != config["scene_dependencies"]["subtitle_digest"]:
             raise ValueError("分析期间字幕已改变，旧结果未提交；请创建新任务")

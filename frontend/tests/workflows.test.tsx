@@ -282,7 +282,7 @@ describe('Analysis budgeting and independent stages', () => {
     expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/jobs/estimate']);
   });
 
-  it('requires re-estimation after a sampling change and submits only the selected stage', async () => {
+  it('keeps estimation optional after a budget change and submits only the selected stage', async () => {
     const user = userEvent.setup();
     const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-one', status: 'completed', frames: [] } : url.endsWith('/estimate') ? estimate : { id: 'synthetic-job', status: 'queued' });
     const onClose = vi.fn();
@@ -296,7 +296,8 @@ describe('Analysis budgeting and independent stages', () => {
     await waitFor(() => expect(startButton.disabled).toBe(false));
     const requests = screen.getByLabelText(/最多模型请求数/);
     await user.clear(requests); await user.type(requests, '50');
-    expect(startButton.disabled).toBe(true);
+    expect(startButton.disabled).toBe(false);
+    expect(screen.queryByText('重新估算')).toBeNull();
     await user.click(screen.getByRole('button', { name: /估算用量/ }));
     await waitFor(() => expect(startButton.disabled).toBe(false));
     await user.click(startButton);

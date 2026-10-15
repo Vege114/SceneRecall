@@ -189,7 +189,7 @@ describe('Content keyframe review and batch budgets', () => {
     const user = userEvent.setup(); const fetch = mockFetch((url, body) => url === '/api/keyframe-plans' ? plan(body.asset_id) : url.endsWith('/estimate') ? { ...estimate, items: body.items.map((entry: any) => ({ ...estimate, asset_id: entry.asset_id })) } : { jobs: [] }); const close = vi.fn(); show(<JobModal assets={[asset, second]} onClose={close} />);
     expect((screen.getByRole('button', { name: '估算用量' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByLabelText(/画面窗口|每窗口画面/)).toBeNull();
-    await user.click(screen.getByRole('button', { name: '先试运行前 60 秒' })); await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第二集 00:00:00 关键帧');
+    await user.click(screen.getByRole('button', { name: '先试运行前 60 秒' })); await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第二集 · 视频 ep2 00:00:00 关键帧');
     expect(requests(fetch).map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/keyframe-plans']);
     expect(requests(fetch).map((call) => JSON.parse(call[1]!.body as string).end_ms)).toEqual([12000, 8000]);
     await user.clear(screen.getByLabelText(/每集最多模型请求数/)); await user.type(screen.getByLabelText(/每集最多模型请求数/), '50');
@@ -200,28 +200,28 @@ describe('Content keyframe review and batch budgets', () => {
 
   it('invalidates the selected keyframe plan when the range changes', async () => {
     const user = userEvent.setup(); mockFetch((_url, body) => plan(body.asset_id)); show(<JobModal asset={asset} onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第一集 00:00:00 关键帧'); await user.type(screen.getByLabelText(/结束时间/), '5');
+    await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第一集 · 视频 ep1 00:00:00 关键帧'); await user.type(screen.getByLabelText(/结束时间/), '5');
     expect(screen.getByText('分析范围已变化，请重新扫描关键帧。')).toBeTruthy(); expect((screen.getByRole('button', { name: '估算用量' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('loads the preview of an already cached scan before allowing estimates', async () => {
     const user = userEvent.setup(); const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-ep1', status: 'completed', job_id: 'cached' } : plan('ep1')); show(<JobModal asset={asset} onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第一集 00:00:00 关键帧'); expect(requests(fetch).map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/keyframe-plans/plan-ep1']);
+    await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第一集 · 视频 ep1 00:00:00 关键帧'); expect(requests(fetch).map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/keyframe-plans/plan-ep1']);
   });
 
   it('polls a pending local scan and does not call model endpoints during scanning', async () => {
     const user = userEvent.setup();
     const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { ...plan('ep1'), status: 'queued', frames: undefined } : plan('ep1'));
     show(<JobModal asset={asset} onClose={vi.fn()} />); await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await waitFor(() => expect(screen.getByAltText('第一集 00:00:00 关键帧')).toBeTruthy(), { timeout: 3000 });
-    expect(screen.getByAltText('第一集 00:00:00 关键帧')).toBeTruthy(); expect(requests(fetch).every((call) => call[0].startsWith('/api/keyframe-plans'))).toBe(true);
+    await waitFor(() => expect(screen.getByAltText('第一集 · 视频 ep1 00:00:00 关键帧')).toBeTruthy(), { timeout: 3000 });
+    expect(screen.getByAltText('第一集 · 视频 ep1 00:00:00 关键帧')).toBeTruthy(); expect(requests(fetch).every((call) => call[0].startsWith('/api/keyframe-plans'))).toBe(true);
   });
 
   it('shows scan progress and cancels a local scan without creating analysis work', async () => {
     const user = userEvent.setup(); const fetch = mockFetch((url) => url.endsWith('/cancel') ? { status: 'cancelled', message: '已取消' } : { ...plan('ep1'), status: 'running', progress: 0.25, message: '本地关键帧扫描 3 / 12 秒', frames: [] });
     show(<JobModal asset={asset} onClose={vi.fn()} />); await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
     expect(await screen.findByText('本地关键帧扫描 3 / 12 秒')).toBeTruthy(); expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25');
-    await user.click(screen.getByRole('button', { name: '取消「第一集」扫描' })); await screen.findByText('已取消');
+    await user.click(screen.getByRole('button', { name: '取消「第一集 · 视频 ep1」扫描' })); await screen.findByText('已取消');
     expect(requests(fetch).map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/jobs/scan-ep1/cancel']); expect((screen.getByRole('button', { name: '估算用量' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -233,7 +233,7 @@ describe('Content keyframe review and batch budgets', () => {
   it('shows per-episode failures after a partially successful batch control', async () => {
     const user = userEvent.setup(); const value = context({ jobs: [{ ...baseJob, batch_id: 'batch1' }, { ...baseJob, id: 'job2', asset_id: 'ep2', batch_id: 'batch1' }] });
     mockFetch(() => ({ jobs: [{ ...baseJob, status: 'paused' }], failures: [{ job_id: 'job2', message: '项目归属已变化，请重新创建分析任务' }] })); show(<Jobs />, value);
-    await user.click(screen.getByRole('button', { name: '暂停整批' })); await screen.findByText(/第二集：项目归属已变化/);
+    await user.click(screen.getByRole('button', { name: '暂停整批' })); await screen.findByText(/第二集 · 视频 ep2：项目归属已变化/);
     expect(screen.getByRole('alert').textContent).toContain('1 集未处理成功'); expect(value.notify).toHaveBeenCalledWith('批次部分完成，1 集未能处理，请查看原因', 'error');
   });
 

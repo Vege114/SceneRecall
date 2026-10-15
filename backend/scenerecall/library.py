@@ -173,6 +173,9 @@ class Library:
             raise ValueError("资产清单不完整或 ID 与目录不一致")
         location = read_json(self.root / "private" / "media-locations.json", {}).get(asset_id)
         path = self.source_path(asset_id)
+        # Public identity needs only the basename; private source directories
+        # remain in media-locations.json, including when the file is offline.
+        result["source_filename"] = str(result.get("file_name") or (path.name if path else "")).replace("\\", "/").rsplit("/", 1)[-1]
         exists = bool(path and path.is_file())
         result["source_changed"] = bool(exists and (not isinstance(location, dict) or source_snapshot(path) != location))
         result["source_available"] = exists and not result["source_changed"]
@@ -751,7 +754,7 @@ class Library:
                                "entities": entities, "events": record.get("events", []),
                                "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
                                "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", []),
-                               **({key: record.get(key) for key in ("chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
+                               **({key: record.get(key) for key in ("content_kind", "chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
                                    "visual_facts", "dialogue_facts", "inferences", "representative_frame_ids",
                                    "understanding_level", "needs_deep", "reason", "provenance", "dependencies",
                                    "context_stale", "stale_reasons")} if is_scene else {})})

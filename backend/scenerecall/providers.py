@@ -316,6 +316,42 @@ def _vision_output_schema(frame_ids: set[str], character_ids: set[str], start_ms
     return schema
 
 
+def _validate_character_entities(entities, supplied_entities, character_context, subtitle_context, story_context):
+    character_ids = {profile["id"] for profile in (character_context or {}).get("profiles", [])}
+    for entity, supplied in zip(entities, supplied_entities, strict=True):
+        if entity.portrait_frame_id is not None and entity.portrait_frame_id not in entity.evidence_frame_ids:
+            raise ValueError("portrait must belong to current character evidence")
+        if entity.portrait_box is not None and entity.portrait_frame_id is None:
+            raise ValueError("portrait coordinates need a current evidence frame")
+        eligible = (entity.kind != "object" and (entity.is_character is True or (
+            entity.is_character is None and entity.kind in {"person", "character", "anthropomorphic_character"})))
+        if entity.kind == "object" and entity.is_character:
+            raise ValueError("ordinary objects cannot be characters")
+        if character_context is not None and eligible and not {
+            "character_id", "match_confidence", "match_reason", "observed_traits"
+        }.issubset(supplied):
+            raise ValueError("character observations require an explicit identity decision")
+        if entity.character_id is not None:
+            if not eligible or entity.character_id not in character_ids:
+                raise ValueError("unknown or ineligible character identity")
+            if entity.match_confidence < 0.65 or not entity.match_reason.strip():
+                raise ValueError("character matches require confident visual evidence")
+        if character_context is not None and eligible and not entity.match_reason.strip():
+            raise ValueError("character decisions must explain visible matching evidence or uncertainty")
+        if entity.name is not None:
+            if (character_context or {}).get("cast_policy", {}).get("mode") == "bangumi":
+                raise ValueError("Bangumi observations use only supplied dossier IDs; name must be null")
+            from .characters import named_identity, normalized
+            if not eligible or named_identity(entity.name) is None:
+                raise ValueError("character names must be supported proper identities, not anonymous labels")
+            name_sources = json.dumps({"description": entity.description, "reason": entity.match_reason,
+                                       "subtitles": subtitle_context, "story": story_context}, ensure_ascii=False)
+            if (entity.match_confidence < 0.65 or not entity.match_reason.strip()
+                    or normalized(entity.name) not in normalized(name_sources)):
+                raise ValueError("character names require confident named evidence and an identity explanation")
+        entity.is_character = eligible
+
+
 class SubtitleLine(BaseModel):
     text: str
     language: str = "und"
@@ -450,9 +486,21 @@ class ProviderManager:
         self._lock = threading.RLock()
         self._limiters: dict[str, ConnectionLimiter] = {}
         self._task_profile: ContextVar[dict | None] = ContextVar("scenerecall_task_profile", default=None)
+        self._scene_prompt: ContextVar[str | None] = ContextVar("scenerecall_scene_prompt", default=None)
         # Separate instances/libraries must never share a keychain credential.
         import hashlib
         self._keyring_service = "SceneRecall:" + hashlib.sha256(str(self.path.resolve()).encode()).hexdigest()[:20]
+
+    @contextmanager
+    def scene_prompt_version(self, version: str):
+        token = self._scene_prompt.set(version)
+        try:
+            yield
+        finally:
+            self._scene_prompt.reset(token)
+
+    def _scene_version(self, current: str) -> str:
+        return self._scene_prompt.get() or current
 
     def _profiles(self) -> dict[str, dict]:
         from .concurrency import recover_concurrency
@@ -792,15 +840,23 @@ class ProviderManager:
     async def prepare_subtitles(self, id: str, cues: list[dict], story_context: dict | None = None) -> AIResult:
         self._profile(id, "preparation")
         cues = checked_cues(cues)
+        version = self._scene_version(SUBTITLE_PREPARATION_PROMPT_VERSION)
         content = bounded_json({"cues": cues, "story_context": story_context})
         prompt = (
-            f"SceneRecall {SUBTITLE_PREPARATION_PROMPT_VERSION}. Prepare chronological Chinese dialogue summaries. "
+            f"SceneRecall {version}. Prepare chronological Chinese dialogue summaries. "
             "Partition all supplied cues into coherent contiguous segments, preserving their exact order and IDs "
             "once each. Describe what the dialogue says, not what is visually happening. A speaker's claim, "
             "name or relationship is not a confirmed visible fact. Story context is prior data only. "
             "Keep each summary concise, preserve silence by not extending cue coverage, and put ambiguity in "
             'unresolved. Return {"segments":[{"cue_ids":["supplied ID"],"summary":"..."}],"unresolved":["..."]}.'
         )
+        if version == SUBTITLE_PREPARATION_PROMPT_VERSION:
+            prompt += (
+                " Opening/ending staff, cast, production, copyright, fansub and karaoke credits are not "
+                "narrative dialogue. Set each segment content_kind to dialogue or credits. Keep credits cue IDs in a separate contiguous segment with a short generic "
+                "summary such as 片头／片尾演职员信息; do not transcribe names, roles or production details. "
+                "Preserve actual dialogue and story actions even when credits overlap them."
+            )
         return await self._chat(id, "preparation", prompt, content,
                                 lambda raw: validate_subtitle_preparation(raw, cues),
                                 max_output_tokens=MAX_PREPARATION_OUTPUT_TOKENS)
@@ -810,6 +866,7 @@ class ProviderManager:
                              character_context: dict | None = None) -> AIResult:
         self._profile(id, "preparation")
         checked_frames(frames, context_frames)
+        version = self._scene_version(VISUAL_PREPARATION_PROMPT_VERSION)
         subtitles, cue_ids = subtitle_context_data(subtitle_context)
         cues = subtitles.get("cues", []) if isinstance(subtitles, dict) else subtitles or []
         bounds = ({key: subtitles[key] for key in ("start_ms", "end_ms") if key in subtitles}
@@ -818,7 +875,7 @@ class ProviderManager:
                                 "character_context": (json.loads(self.character_context_text(character_context))
                                                       if character_context is not None else None)})
         prompt = (
-            f"SceneRecall {VISUAL_PREPARATION_PROMPT_VERSION}. Read the numbered chronological contact-sheet "
+            f"SceneRecall {version}. Read the numbered chronological contact-sheet "
             "tiles and their original frame-ID map. Write concise Chinese searchable scene summaries. "
             "Partition CORE frames into coherent contiguous chunks, crossing shot cuts when the same scene or "
             "conversation continues. Include EVERY core frame exactly once and in input order, including silent "
@@ -851,15 +908,65 @@ class ProviderManager:
             "inferences:[{text:string,frame_ids:[string],cue_ids:[string]}],representative_frame_ids:[string],deep_frame_ids:[string],"
             "needs_deep:boolean,reason:string,continues_previous:boolean}],unresolved:[string]}."
         )
+        if version == VISUAL_PREPARATION_PROMPT_VERSION:
+            prompt = prompt.replace("Return exactly {chunks:[{frame_ids:[string]",
+                                    "Return exactly {chunks:[{content_kind:string,entities:[object],frame_ids:[string]")
+            prompt += (
+                " Ignore staff/cast credits, production logos, copyright, fansub labels and karaoke text as "
+                "story facts, identities or relationships. Do not OCR or list production names. Preserve "
+                "narrative visual actions and real dialogue underneath overlaid credits. Use content_kind=credits "
+                "only for a pure credit card/scroll with no narrative action; keep its frame coverage, write a "
+                "generic summary, leave visual_facts/dialogue_facts/inferences/entities empty and needs_deep=false. "
+                "Otherwise set content_kind=narrative. For each narrative chunk also return entities for every "
+                "clearly visible character, with id, kind, description, position, name, evidence_frame_ids, "
+                "is_character, character_id, match_confidence, match_reason, observed_traits, portrait_frame_id "
+                "and portrait_box. Entity IDs must be unique within a chunk. Compare current visible appearance "
+                "with supplied dossiers and reference images, including aliases and human corrections. Return "
+                "the supplied persistent character_id only with visible matching evidence, confidence>=0.65 and "
+                "a concise visual match_reason. Biography, subtitle names and cast order alone do not identify "
+                "a visible person. Use character_id=null when unsure; never guess IDs. In Bangumi mode name is "
+                "always null and the roster is closed; otherwise a proper name needs confident named evidence, "
+                "never an appearance label. Keep portrait_frame_id/portrait_box null unless a clear current "
+                "frame and reliable normalized character region can be identified. Evidence must belong to that "
+                "chunk's CORE frames. A confident lightweight identity does not require an extra deep request; "
+                "reserve needs_deep for a material story/action/identity detail the contact sheets cannot resolve."
+            )
+
+        def validate(raw):
+            result = validate_visual_preparation(raw, frames, cue_ids, has_context=bool(context_frames),
+                                                 cues=cues, **bounds)
+            if version == VISUAL_PREPARATION_PROMPT_VERSION:
+                for chunk in result["chunks"]:
+                    supplied = chunk.get("entities", [])
+                    entities = [Entity.model_validate(entity) for entity in supplied]
+                    if len({entity.id for entity in entities}) != len(entities):
+                        raise ValueError("duplicate entities")
+                    for entity in entities:
+                        if not set(entity.evidence_frame_ids).issubset(chunk["frame_ids"]):
+                            raise ValueError("unknown evidence")
+                    _validate_character_entities(entities, supplied, character_context, subtitle_context, story_context)
+                    if "entities" in chunk:
+                        chunk["entities"] = [entity.model_dump() for entity in entities]
+            return result
+
         with tempfile.TemporaryDirectory(prefix="scenerecall-scenes-") as directory:
             sheets, mapping = contact_sheets(frames, context_frames, Path(directory))
             content = [{"type": "text", "text": "Context data: " + context},
                        {"type": "text", "text": "Original frame map: " + bounded_json(mapping)}]
+            if version == VISUAL_PREPARATION_PROMPT_VERSION:
+                allowed = {profile["id"] for profile in (character_context or {}).get("profiles", [])}
+                references = (character_context or {}).get("reference_frames", [])
+                if len(references) > MAX_CHARACTER_REFERENCES:
+                    raise ProviderError("角色参考图数量超过单次请求上限")
+                for reference in references:
+                    if reference.get("character_id") not in allowed:
+                        raise ProviderError("角色参考图不属于当前档案范围")
+                    content.append({"type": "text", "text": "Dossier reference only, never current evidence: "
+                                    + reference["character_id"]})
+                    content.extend(self._images([{**reference, "id": "reference:" + reference["character_id"], "at_ms": 0}]))
             content.extend(self._images(sheets))
             return await self._chat(id, "preparation", prompt, content,
-                                    lambda raw: validate_visual_preparation(raw, frames, cue_ids,
-                                                                          has_context=bool(context_frames),
-                                                                          cues=cues, **bounds),
+                                    validate,
                                     max_output_tokens=MAX_PREPARATION_OUTPUT_TOKENS,
                                     # Scene jobs shrink invalid image partitions and
                                     # save each smaller result. Repeating the same
@@ -868,10 +975,11 @@ class ProviderManager:
 
     async def reconcile_scene(self, id: str, scene: dict, story_context: dict | None) -> AIResult:
         self._profile(id, "preparation")
+        version = self._scene_version(RECONCILIATION_PROMPT_VERSION)
         current, frame_ids, cue_ids = reconciliation_scene_data(scene)
         content = bounded_json({"current_scene": current, "story_context": story_context})
         prompt = (
-            f"SceneRecall {RECONCILIATION_PROMPT_VERSION}. Update a concise Chinese scene understanding after "
+            f"SceneRecall {version}. Update a concise Chinese scene understanding after "
             "prior chronological memory changed. Use ONLY the supplied current visual_facts/dialogue_facts as "
             "current evidence; story_context is historical context, not new visual proof. Preserve the distinction "
             "between visible facts, what dialogue says, and tentative interpretation. Do not invent or modify "
@@ -882,6 +990,8 @@ class ProviderManager:
             "is only a visual-similarity hint, not proof of the same setting, people or event. Return exactly "
             "{summary:string,inferences:[{text:string,frame_ids:[string],cue_ids:[string]}],unresolved:[string]}."
         )
+        if version == RECONCILIATION_PROMPT_VERSION:
+            prompt += " Exclude staff/cast/production credits and other non-narrative overlays from story understanding."
         return await self._chat(id, "preparation", prompt, content,
                                 lambda raw: validate_scene_reconciliation(raw, frame_ids, cue_ids),
                                 max_output_tokens=MAX_PREPARATION_OUTPUT_TOKENS)
@@ -889,6 +999,7 @@ class ProviderManager:
     async def analyze(self, id: str, frames: list[dict], start_ms: int, end_ms: int,
                       character_context: dict | None = None, subtitle_context: dict | list | None = None,
                       story_context: dict | None = None) -> AIResult:
+        version = self._scene_version(CONTEXTUAL_VISION_PROMPT_VERSION)
         valid_ids = {f["id"] for f in frames}
         if start_ms < 0 or end_ms <= start_ms or any(not start_ms <= f["at_ms"] < end_ms for f in frames):
             raise ProviderError("观察窗口或证据帧时间无效")
@@ -906,38 +1017,8 @@ class ProviderManager:
             for part in [item, *item.entities, *item.events, *item.spatial_observations]:
                 if not set(part.evidence_frame_ids).issubset(valid_ids):
                     raise ValueError("unknown evidence")
-            for entity, supplied in zip(item.entities, raw.get("entities", []), strict=True):
-                if entity.portrait_frame_id is not None and entity.portrait_frame_id not in entity.evidence_frame_ids:
-                    raise ValueError("portrait must belong to current character evidence")
-                if entity.portrait_box is not None and entity.portrait_frame_id is None:
-                    raise ValueError("portrait coordinates need a current evidence frame")
-                eligible = (entity.kind != "object" and (entity.is_character is True or (
-                    entity.is_character is None and entity.kind in {"person", "character", "anthropomorphic_character"})))
-                if entity.kind == "object" and entity.is_character:
-                    raise ValueError("ordinary objects cannot be characters")
-                if character_context is not None and eligible and not {
-                    "character_id", "match_confidence", "match_reason", "observed_traits"
-                }.issubset(supplied):
-                    raise ValueError("character observations require an explicit identity decision")
-                if entity.character_id is not None:
-                    if not eligible or entity.character_id not in character_ids:
-                        raise ValueError("unknown or ineligible character identity")
-                    if entity.match_confidence < 0.65 or not entity.match_reason.strip():
-                        raise ValueError("character matches require confident visual evidence")
-                if character_context is not None and eligible and not entity.match_reason.strip():
-                    raise ValueError("character decisions must explain visible matching evidence or uncertainty")
-                if entity.name is not None:
-                    if (character_context or {}).get("cast_policy", {}).get("mode") == "bangumi":
-                        raise ValueError("Bangumi observations use only supplied dossier IDs; name must be null")
-                    from .characters import named_identity, normalized
-                    if not eligible or named_identity(entity.name) is None:
-                        raise ValueError("character names must be supported proper identities, not anonymous labels")
-                    name_sources = json.dumps({"description": entity.description, "reason": entity.match_reason,
-                                               "subtitles": subtitle_context, "story": story_context}, ensure_ascii=False)
-                    if (entity.match_confidence < 0.65 or not entity.match_reason.strip()
-                            or normalized(entity.name) not in normalized(name_sources)):
-                        raise ValueError("character names require confident named evidence and an identity explanation")
-                entity.is_character = eligible
+            _validate_character_entities(item.entities, raw.get("entities", []), character_context,
+                                         subtitle_context, story_context)
             for event in item.events:
                 if not start_ms <= event.start_ms <= event.end_ms <= end_ms or event.start_ms >= end_ms:
                     raise ValueError("event outside window")
@@ -989,12 +1070,19 @@ class ProviderManager:
             "Evidence IDs must be supplied frame IDs; event times must fit the window. Schema: "
             + json.dumps(VisionObservation.model_json_schema(), ensure_ascii=False)
         )
+        if version == CONTEXTUAL_VISION_PROMPT_VERSION and (subtitle_context is not None or story_context is not None):
+            prompt += (
+                " Ignore staff/cast credits, production logos, copyright, fansub and karaoke overlays in "
+                "summaries, entities, actions and relationships. Do not OCR or enumerate production names; "
+                "episode staff metadata comes from the archive. Keep visible narrative characters/actions "
+                "even beneath credits. A pure credit card/scroll needs only a generic summary, no story entities."
+            )
         content = []
         if subtitle_context is not None or story_context is not None:
             subtitles, _ = subtitle_context_data(subtitle_context)
             contextual_data = bounded_json({"subtitle_context": subtitles, "story_context": story_context})
             prompt += (
-                f" Context format {CONTEXTUAL_VISION_PROMPT_VERSION}: supplied dialogue and story memory are "
+                f" Context format {version}: supplied dialogue and story memory are "
                 "context only. They can resolve continuity, but cannot establish visible actions, speakers, "
                 "identities or relationships. Record unsupported interpretation in uncertainties. Only current "
                 "frame IDs may be cited in any evidence_frame_ids; never cite remembered frame or cue IDs. "

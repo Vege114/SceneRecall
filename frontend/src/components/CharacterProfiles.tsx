@@ -6,6 +6,8 @@ import { DEFAULTS, executionDefaults, taskModelLabel, type Asset, type Character
 import { Alert, Empty, Field, Modal, Spinner } from './ui';
 import TaskModels, { useTaskModels } from './TaskModels';
 import TaskExecution, { saveExecutionDefaults } from './TaskExecution';
+import { assetTaskLabel, settleConcurrent } from '../taskHelpers';
+import { StageEstimates } from './SceneAnalysis';
 
 const characterPath = (assetId: string, characterId?: string) => `/assets/${encodeURIComponent(assetId)}/characters${characterId ? `/${encodeURIComponent(characterId)}` : ''}`;
 const frameUrl = (assetId: string, frameId: string) => `/api/assets/${encodeURIComponent(assetId)}/frames/${encodeURIComponent(frameId)}`;
@@ -99,12 +101,13 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   const [saveDefault, setSaveDefault] = useState(false);
   const [estimates, setEstimates] = useState<Estimate[] | null>(null);
   const [estimateKey, setEstimateKey] = useState('');
-  const [busy, setBusy] = useState<'estimate' | 'start' | null>(null);
+  const [busy, setBusy] = useState<'scan' | 'estimate' | 'start' | null>(null);
   const [error, setError] = useState('');
   const [stale, setStale] = useState(false);
   const [plans, setPlans] = useState<Record<string, KeyframePlan>>({});
-  const [scanningPlan, setScanningPlan] = useState<KeyframePlan | null>(null);
-  const [cancellingScan, setCancellingScan] = useState(false);
+  const [scanningPlans, setScanningPlans] = useState<Record<string, KeyframePlan>>({});
+  const [cancellingScan, setCancellingScan] = useState('');
+  const form = useRef<HTMLFormElement>(null);
   const alive = useRef(true);
   const submitted = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -115,40 +118,60 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   const key = JSON.stringify([scope, requestLimit, maxCost, library.revision, defaults, model?.id, preparation?.id, preparation?.max_concurrency, taskModels.overrides, taskModels.sourceKey, execution]);
   const validEstimate = estimates && estimateKey === key;
   const blocked = !model || (usesPreparation && !preparation) || unavailable.length > 0 || active || stale;
+  const preparePlans = async () => {
+    const ready = { ...plans };
+    const outcomes = await settleConcurrent(assets, async (candidate) => {
+      if (!alive.current) return;
+      let plan = ready[candidate.id];
+      if (plan?.status !== 'completed') {
+        plan = await post<KeyframePlan>('/keyframe-plans', { asset_id: candidate.id, start_ms: 0, end_ms: null });
+        if (!alive.current) return;
+        setScanningPlans((current) => ({ ...current, [candidate.id]: plan }));
+        while (['queued', 'pending', 'running', 'cancelling', 'pausing'].includes(plan.status) && alive.current) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          if (!alive.current) return;
+          plan = await api<KeyframePlan>(`/keyframe-plans/${encodeURIComponent(plan.plan_id || plan.id)}`);
+          setScanningPlans((current) => ({ ...current, [candidate.id]: plan }));
+        }
+        if (!alive.current) return;
+        if (plan.status === 'completed' && !plan.frames) plan = await api<KeyframePlan>(`/keyframe-plans/${encodeURIComponent(plan.plan_id || plan.id)}`);
+        if (plan.status !== 'completed') throw new Error(plan.error || '关键帧预扫描未完成，请重试。');
+        ready[candidate.id] = plan;
+        setPlans((current) => ({ ...current, [candidate.id]: plan }));
+      }
+    });
+    const failures = outcomes.flatMap((outcome, index) => outcome.status === 'rejected' ? [`${assetTaskLabel(assets[index])}：${message(outcome.reason)}`] : []);
+    if (failures.length) throw new Error(failures.join('；'));
+    if (!alive.current) throw new Error('已关闭重新识别窗口。');
+    return ready;
+  };
+  const scan = async () => {
+    if (busy || unavailable.length || active || stale) return;
+    setBusy('scan'); setError('');
+    try { await preparePlans(); }
+    catch (caught) { if (alive.current) setError(message(caught)); }
+    finally { if (alive.current) { setBusy(null); setScanningPlans({}); } }
+  };
   const estimate = async (event: FormEvent) => {
     event.preventDefault();
     if (busy || blocked) return;
     setBusy('estimate'); setError('');
     try {
-      const results: Estimate[] = [];
-      for (const candidate of assets) {
-        let plan = plans[candidate.id];
-        if (!plan || plan.status !== 'completed') {
-          plan = await post<KeyframePlan>('/keyframe-plans', { asset_id: candidate.id, start_ms: 0, end_ms: null });
-          setScanningPlan(plan);
-          while (['queued', 'pending', 'running', 'cancelling', 'pausing'].includes(plan.status) && alive.current) {
-            await new Promise((resolve) => window.setTimeout(resolve, 1000));
-            if (!alive.current) return;
-            plan = await api<KeyframePlan>(`/keyframe-plans/${encodeURIComponent(plan.plan_id || plan.id)}`);
-            setScanningPlan(plan);
-          }
-          if (!alive.current) return;
-          if (plan.status === 'completed' && !plan.frames) plan = await api<KeyframePlan>(`/keyframe-plans/${encodeURIComponent(plan.plan_id || plan.id)}`);
-          if (plan.status !== 'completed') throw new Error(plan.error || '关键帧预扫描未完成，请重试。');
-          setPlans((current) => ({ ...current, [candidate.id]: plan }));
-        }
-        results.push(await post<Estimate>('/jobs/estimate', { ...modelOptions, execution: { ...execution }, analysis_strategy: analysisStrategy, asset_id: candidate.id, keyframe_plan_id: plan.plan_id || plan.id, stages: ['vision'], start_ms: 0, end_ms: null, force: true, subtitle_fps: defaults.subtitle_fps, subtitle_crop: defaults.subtitle_crop, max_requests: requestLimit, max_cost: maxCost }));
-      }
-      setEstimates(results); setEstimateKey(key);
-    } catch (caught) { setError(message(caught)); } finally { setBusy(null); setScanningPlan(null); }
+      const ready = await preparePlans();
+      const results = await settleConcurrent(assets, (candidate) => post<Estimate>('/jobs/estimate', { ...modelOptions, execution: { ...execution }, analysis_strategy: analysisStrategy, asset_id: candidate.id, keyframe_plan_id: ready[candidate.id].plan_id || ready[candidate.id].id, stages: ['vision'], start_ms: 0, end_ms: null, force: true, subtitle_fps: defaults.subtitle_fps, subtitle_crop: defaults.subtitle_crop, max_requests: requestLimit, max_cost: maxCost }));
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+      setEstimates(results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : [])); setEstimateKey(key);
+    } catch (caught) { setError(message(caught)); } finally { setBusy(null); setScanningPlans({}); }
   };
   const start = async () => {
-    if (busy || submitted.current || blocked || !validEstimate) return;
+    if (busy || submitted.current || blocked || !form.current?.reportValidity()) return;
     setBusy('start'); setError('');
     let defaultsSaved = false;
     try {
+      const ready = await preparePlans();
       if (saveDefault && usesPreparation) { await saveExecutionDefaults(execution, ['transcript', 'preparation']); defaultsSaved = true; }
-      const result = await post<{ jobs: Job[]; revision: number }>(`${characterPath(asset.id)}/reanalyze`, { ...modelOptions, execution: { ...execution }, scope, max_requests: requestLimit, max_cost: maxCost, expected_revision: library.revision, keyframe_plan_ids: Object.fromEntries(assets.map((candidate) => [candidate.id, plans[candidate.id].plan_id || plans[candidate.id].id])) });
+      const result = await post<{ jobs: Job[]; revision: number }>(`${characterPath(asset.id)}/reanalyze`, { ...modelOptions, execution: { ...execution }, scope, max_requests: requestLimit, max_cost: maxCost, expected_revision: library.revision, keyframe_plan_ids: Object.fromEntries(assets.map((candidate) => [candidate.id, ready[candidate.id].plan_id || ready[candidate.id].id])) });
       submitted.current = true;
       let refreshError = '';
       try { await refresh(); } catch (error) { refreshError = message(error); }
@@ -158,25 +181,25 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
       if (defaultsSaved) { try { await refresh(); } catch { /* Keep the creation error visible. */ } }
       setError(defaultsSaved ? `默认执行方式已保存，但任务创建失败：${message(caught)}。请重试创建任务。` : message(caught));
       if (caught instanceof ApiError && caught.status === 409) setStale(true);
-    } finally { setBusy(null); }
+    } finally { setBusy(null); setScanningPlans({}); }
   };
   const totalRequests = estimates?.reduce((sum, item) => sum + item.estimated_requests, 0) || 0;
   const totalCost = estimates?.every((item) => item.cost_estimate != null) ? estimates.reduce((sum, item) => sum + (item.cost_estimate || 0), 0) : null;
-  return <Modal title="按新版档案重新识别" subtitle={`使用当前角色档案 · 修订 ${library.revision}`} onClose={() => { if (!busy) onClose(); }} wide><form onSubmit={estimate}><div className="modal-body">
+  return <Modal title="按新版档案重新识别" subtitle={`使用当前角色档案 · 修订 ${library.revision}`} onClose={() => { if (!busy) onClose(); }} wide><form ref={form} onSubmit={estimate}><div className="modal-body">
     <div className="character-reanalyze-intro"><RefreshCw size={24} /><div><strong>把你确认的人物，交回给 AI</strong><p>从头重新分析所选视频的画面，优先匹配这些角色档案，并更新人物关联、动作与场景理解。原有分析版本和人工笔记保留。</p></div></div>
-    <Field label="重新识别范围"><select value={scope} onChange={(event) => setScope(event.target.value as 'asset' | 'series')} disabled={Boolean(busy)}><option value="asset">当前作品 · {asset.title}</option>{library.assets.length > 1 && <option value="series">同一作品全部 {library.assets.length} 个视频</option>}</select></Field>
+    <Field label="重新识别范围"><select value={scope} onChange={(event) => setScope(event.target.value as 'asset' | 'series')} disabled={Boolean(busy)}><option value="asset">当前作品 · {assetTaskLabel(asset)}</option>{library.assets.length > 1 && <option value="series">同一作品全部 {library.assets.length} 个视频</option>}</select></Field>
     <p className="helper character-scope-summary">{assets.length} 个视频 · 共 {duration(assets.reduce((sum, candidate) => sum + candidate.duration_ms, 0))} · {taskModelLabel(model, taskModels.overrides?.vision)}</p>
     <TaskModels roles={modelRoles} value={taskModels.overrides} onChange={taskModels.change} disabled={!!busy} />
     {usesPreparation ? <TaskExecution stages={['transcript', 'preparation']} value={execution} onChange={setExecution} disabled={!!busy} connectionLimits={{ transcript: preparation?.max_concurrency ?? 16, preparation: preparation?.max_concurrency ?? 16 }} saveDefault={saveDefault} onSaveDefaultChange={setSaveDefault} /> : <p className="helper">当前使用逐镜头画面分析，依赖连续人物记忆，始终串行。使用场景分块策略可分别选择台词整理与视觉分块的执行方式。</p>}
     {usesPreparation && !preparation && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配分块与简要索引模型。</Alert>}
-    {!model && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配画面理解模型。</Alert>}{unavailable.length > 0 && <Alert>这些视频的原文件暂不可用：{unavailable.map((candidate) => candidate.title).join('、')}。请先在各自详情页定位原文件。</Alert>}{active && <Alert>所选作品仍有任务正在进行。请等待任务结束后重新识别。</Alert>}
+    {!model && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中分配画面理解模型。</Alert>}{unavailable.length > 0 && <Alert>这些视频的原文件暂不可用：{unavailable.map(assetTaskLabel).join('、')}。请先在各自详情页定位原文件。</Alert>}{active && <Alert>所选作品仍有任务正在进行。请等待任务结束后重新识别。</Alert>}
     <div className="form-grid"><Field label="每个视频最多模型请求数" hint="每个视频独立计数；达到上限后停止，可在任务队列重试。"><input type="number" min={1} max={100000} step={1} value={requestLimit} onChange={(event) => setRequestLimit(Number(event.target.value))} required disabled={Boolean(busy)} /></Field><Field label="每个视频费用上限（USD）" hint={usesCodex ? 'Codex 订阅费用未知，金额上限已停用。' : '留空不限制；费用取决于模型连接的定价。'}><input type="number" min={0.01} step={0.01} value={usesCodex ? '' : costLimit} onChange={(event) => setCostLimit(event.target.value)} placeholder="不限制" disabled={Boolean(busy) || usesCodex} /></Field></div>
-    {scanningPlan && ['queued', 'pending', 'running', 'cancelling', 'pausing'].includes(scanningPlan.status) && <div className="keyframe-preview"><p className="helper">{scanningPlan.message || '正在本机扫描关键帧'} · {Math.round((scanningPlan.progress || 0) * 100)}%</p><div className="progress-track" role="progressbar" aria-label="角色重识别关键帧扫描进度" aria-valuenow={Math.round((scanningPlan.progress || 0) * 100)} aria-valuemin={0} aria-valuemax={100}><div style={{ width: `${Math.min(100, (scanningPlan.progress || 0) * 100)}%` }} /></div><button type="button" className="text-button" disabled={cancellingScan || scanningPlan.status === 'cancelling'} onClick={async () => { setCancellingScan(true); try { await post(`/jobs/${encodeURIComponent(scanningPlan.job_id)}/cancel`); } catch (error) { setError(message(error)); } finally { setCancellingScan(false); } }}>取消当前扫描</button></div>}
-    <p className="helper">估算前先在本机扫描内容关键帧，不调用识别模型。请核对候选画面后开始重新识别。</p>
-    {assets.filter((candidate) => plans[candidate.id]?.status === 'completed').map((candidate) => <div className="keyframe-asset" key={candidate.id}><strong>{candidate.title} · {plans[candidate.id].frame_count ?? plans[candidate.id].frames?.length ?? 0} 张关键帧</strong><div className="keyframe-grid">{plans[candidate.id].frames?.slice(0, 12).map((frame) => <a key={frame.id} href={frame.thumbnail_url} target="_blank" rel="noreferrer"><img src={frame.thumbnail_url} alt={`${candidate.title} ${formatTime(frame.at_ms)} 关键帧`} loading="lazy" /><span>{formatTime(frame.at_ms)}</span></a>)}</div></div>)}
-    {validEstimate && <><div className="estimate"><div><span>预计请求总数</span><strong>{totalRequests}</strong></div><div><span>预计总费用</span><strong>{totalCost == null ? '未知' : `$${totalCost.toFixed(4)}`}</strong></div><div><span>档案修订</span><strong>{library.revision}</strong></div></div>{[...new Set(estimates.flatMap((item) => item.warnings))].map((warning) => <Alert key={warning}>{warning}</Alert>)}{estimates.some((item) => item.estimated_requests > requestLimit) && <Alert>部分视频的预计请求数超过上限，可能只能完成部分分析。</Alert>}</>}
+    <div className="section-row"><p className="helper">估算用量为可选步骤。可先扫描预览；直接开始时也会自动完成本机关键帧扫描。</p><button type="button" className="button secondary" disabled={Boolean(busy) || unavailable.length > 0 || active || stale} onClick={() => void scan()}>{busy === 'scan' ? <Spinner label="正在扫描关键帧" /> : '扫描关键帧'}</button></div>
+    {assets.map((candidate) => { const plan = scanningPlans[candidate.id]; return plan && ['queued', 'pending', 'running', 'cancelling', 'pausing'].includes(plan.status) ? <div className="keyframe-preview" key={candidate.id}><strong>{assetTaskLabel(candidate)}</strong><p className="helper">{plan.message || '正在本机扫描关键帧'} · {Math.round((plan.progress || 0) * 100)}%</p><div className="progress-track" role="progressbar" aria-label={`${assetTaskLabel(candidate)}角色重识别关键帧扫描进度`} aria-valuenow={Math.round((plan.progress || 0) * 100)} aria-valuemin={0} aria-valuemax={100}><div style={{ width: `${Math.min(100, (plan.progress || 0) * 100)}%` }} /></div><button type="button" className="text-button" disabled={cancellingScan === candidate.id || plan.status === 'cancelling'} onClick={async () => { setCancellingScan(candidate.id); try { await post(`/jobs/${encodeURIComponent(plan.job_id)}/cancel`); } catch (error) { setError(message(error)); } finally { setCancellingScan(''); } }}>取消「{assetTaskLabel(candidate)}」扫描</button></div> : null; })}
+    {assets.filter((candidate) => plans[candidate.id]?.status === 'completed').map((candidate) => <div className="keyframe-asset" key={candidate.id}><strong>{assetTaskLabel(candidate)} · {plans[candidate.id].frame_count ?? plans[candidate.id].frames?.length ?? 0} 张关键帧</strong><div className="keyframe-grid">{plans[candidate.id].frames?.slice(0, 12).map((frame) => <a key={frame.id} href={frame.thumbnail_url} target="_blank" rel="noreferrer"><img src={frame.thumbnail_url} alt={`${assetTaskLabel(candidate)} ${formatTime(frame.at_ms)} 关键帧`} loading="lazy" /><span>{formatTime(frame.at_ms)}</span></a>)}</div></div>)}
+    {validEstimate && <><div className="estimate"><div><span>预计请求总数</span><strong>{totalRequests}</strong></div><div><span>预计总费用</span><strong>{totalCost == null ? '未知' : `$${totalCost.toFixed(4)}`}</strong></div><div><span>档案修订</span><strong>{library.revision}</strong></div></div>{[...new Set(estimates.flatMap((item) => item.warnings))].map((warning) => <Alert key={warning}>{warning}</Alert>)}{estimates.map((entry, index) => <div key={assets[index].id}><strong>{assetTaskLabel(assets[index])}</strong><StageEstimates estimate={entry} /></div>)}{estimates.some((item) => item.estimated_requests > requestLimit) && <Alert>部分视频的预计请求数超过上限，可能只能完成部分分析。</Alert>}</>}
     {error && <Alert tone="error">{error}</Alert>}{stale && <button type="button" className="button secondary" onClick={async () => { await onReload(); onClose(); }}>刷新档案后重新操作</button>}
-  </div><footer className="modal-footer"><button className="button secondary" type="submit" disabled={Boolean(busy) || blocked}>{busy === 'estimate' ? <Spinner label="正在估算" /> : validEstimate ? '重新估算' : '估算重新识别用量'}</button><button className="button primary" type="button" disabled={Boolean(busy) || blocked || !validEstimate} onClick={start}>{busy === 'start' ? <Spinner label="正在创建任务" /> : <><ScanLine size={16} />开始重新识别</>}</button></footer></form></Modal>;
+  </div><footer className="modal-footer"><button className="button secondary" type="submit" disabled={Boolean(busy) || blocked}>{busy === 'estimate' ? <Spinner label="正在估算" /> : validEstimate ? '重新估算' : '估算重新识别用量'}</button><button className="button primary" type="button" disabled={Boolean(busy) || blocked} onClick={start}>{busy === 'start' ? <Spinner label="正在创建任务" /> : <><ScanLine size={16} />开始重新识别</>}</button></footer></form></Modal>;
 }
 
 export default function CharacterProfiles({ asset, selectedId, onSeek, onSaved }: { asset: Asset; selectedId?: string; onSeek: (atMs: number) => void; onSaved: () => Promise<void> }) {
