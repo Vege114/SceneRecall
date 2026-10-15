@@ -98,9 +98,13 @@ def test_unrelated_process_identity_is_rejected(target, tmp_path, mismatch):
     process.terminate.assert_not_called()
 
 
-def test_relative_launcher_and_equals_arguments_are_identified(target):
+def test_relative_launcher_and_equals_arguments_are_identified(target, tmp_path, monkeypatch):
     process, data_dir = target
-    process.cmdline.return_value[1] = os.path.relpath(process.cmdline.return_value[1], process.cwd.return_value)
+    # A relative launcher must share the server cwd's volume. CI can install
+    # the real virtual environment on D: while pytest temp directories use C:.
+    scripts = tmp_path / "installation"
+    monkeypatch.setattr(service.sysconfig, "get_path", lambda name: str(scripts))
+    process.cmdline.return_value[1] = os.path.relpath(scripts / "scenerecall", process.cwd.return_value)
     process.cmdline.return_value[2:] = ["start", "--data-dir=library", f"--port={TEST_PORT}"]
     assert service.find_service(data_dir, TEST_PORT) is process
     process.terminate.assert_not_called()
@@ -426,9 +430,31 @@ def test_windows_event_server_requests_normal_shutdown_and_closes_handle(tmp_pat
 def test_native_windows_event_acl_and_lifetime(tmp_path):
     import ctypes
     from ctypes import wintypes
-    import re
 
     events = windows_service._Events()
+    events.security.GetSecurityDescriptorOwner.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                                                           ctypes.POINTER(wintypes.BOOL)]
+    events.security.GetSecurityDescriptorOwner.restype = wintypes.BOOL
+
+    def numeric_sid(trustee):
+        # SDDL abbreviates built-in identities, including the Administrator
+        # account as LA. Ask Windows to resolve the actual SID rather than
+        # comparing aliases or granting any additional trustee permission.
+        descriptor = ctypes.c_void_p()
+        assert events.security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            f"O:{trustee}", 1, ctypes.byref(descriptor), None)
+        try:
+            sid, defaulted = ctypes.c_void_p(), wintypes.BOOL()
+            assert events.security.GetSecurityDescriptorOwner(descriptor, ctypes.byref(sid), ctypes.byref(defaulted))
+            text = wintypes.LPWSTR()
+            assert events.security.ConvertSidToStringSidW(sid, ctypes.byref(text))
+            try:
+                return text.value
+            finally:
+                events.kernel.LocalFree(text)
+        finally:
+            events.kernel.LocalFree(descriptor)
+
     name = windows_service._event_name(psutil.Process(), tmp_path, TEST_PORT)
     handle = events.create(name)
     try:
@@ -449,7 +475,9 @@ def test_native_windows_event_acl_and_lifetime(tmp_path):
             assert convert(descriptor, 1, 4, ctypes.byref(text), None)
             try:
                 assert text.value.startswith("D:P")
-                assert set(re.findall(r";;;([^)]*)\)", text.value)) == {"SY", events._user_sid()}
+                trustees = re.findall(r";;;([^)]*)\)", text.value)
+                assert len(trustees) == 2
+                assert {numeric_sid(trustee) for trustee in trustees} == {"S-1-5-18", events._user_sid()}
             finally:
                 events.kernel.LocalFree(text)
         finally:
@@ -595,7 +623,27 @@ def test_real_cli_stop_preserves_library_and_refuses_wrong_directory(tmp_path, s
 def test_real_unrelated_http_server_is_not_stopped(tmp_path):
     port = _unused_port()
     (tmp_path / "health.txt").write_text("synthetic test server", encoding="utf-8")
-    command = [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", str(tmp_path)]
+    # HTTPServer.server_bind() performs getfqdn() before listening. A hosted
+    # runner's reverse DNS must not determine whether this unrelated local
+    # process can be tested. TCPServer needs only the numeric loopback address;
+    # retain the real stdlib HTTP handler and fail if DNS is ever reintroduced.
+    script = """
+from functools import partial
+from http.server import SimpleHTTPRequestHandler
+import socket
+from socketserver import TCPServer
+import sys
+
+def forbid_dns(*args):
+    raise AssertionError('the isolated loopback fixture must not perform DNS')
+
+socket.getfqdn = socket.gethostbyaddr = forbid_dns
+handler = partial(SimpleHTTPRequestHandler, directory=sys.argv[2])
+with TCPServer(('127.0.0.1', int(sys.argv[1])), handler) as server:
+    print('synthetic HTTP server ready', flush=True)
+    server.serve_forever()
+"""
+    command = [sys.executable, "-u", "-c", script, str(port), str(tmp_path)]
     with _running_server(command, tmp_path, port, "/health.txt", tmp_path / "http.log") as process:
         with pytest.raises(service.ServiceError, match="无法确认.*未发送停止信号"):
             service.stop_service(tmp_path / "not-a-library", port)

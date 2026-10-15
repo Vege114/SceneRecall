@@ -31,7 +31,7 @@ def test_srt_bilingual_keeps_each_original_language_and_applies_offset(tmp_path)
     assert cues[-1]["end_ms"] == 4250
     assert len({c["id"] for c in cues}) == 3
     assert all(c["source"] == "external" and not c["evidence_frame_ids"] for c in cues)
-    assert path.read_text().startswith("1\n")  # Original file is never rewritten.
+    assert path.read_text(encoding="utf-8").startswith("1\n")  # Original file is never rewritten.
 
 
 def test_vtt_ids_settings_notes_and_wrapped_text(tmp_path):

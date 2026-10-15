@@ -1,5 +1,6 @@
 """Visual overload recovery uses synthetic media, owned receipts and real validators."""
 import asyncio
+import os
 from collections import Counter
 
 import pytest
@@ -207,6 +208,9 @@ async def test_aggregate_receipt_does_not_release_parallel_sibling_reservation(s
     original = worker.provider.prepare_visual
     sibling_started, release_sibling, aggregate_saved = asyncio.Event(), asyncio.Event(), asyncio.Event()
     observed = []
+    # NTFS publication of 120 frame records and fallback receipts can exceed
+    # two seconds on CI. The event and reservation assertions prove ordering.
+    io_timeout = 30 if os.name == "nt" else 2
 
     async def prepare(identity, frames, *args):
         if frames[0]["at_ms"] == 56250:
@@ -231,11 +235,13 @@ async def test_aggregate_receipt_does_not_release_parallel_sibling_reservation(s
     job = enqueue(worker, execution={"preparation": "parallel", "max_concurrency": 2})
     running = asyncio.create_task(worker.queue.execute(job["id"]))
     try:
-        await asyncio.wait_for(aggregate_saved.wait(), 2)
+        await asyncio.wait_for(aggregate_saved.wait(), io_timeout)
         assert observed == [(1, 3)]
     finally:
+        # Release both fake-provider gates if setup or an assertion failed.
+        sibling_started.set()
         release_sibling.set()
-        await asyncio.wait_for(running, 2)
+        await asyncio.wait_for(running, io_timeout)
     done = worker.queue.get(job["id"])
     assert done["status"] == "completed" and done["request_count"] == 5
     assert done["inflight_calls"] == {} and done["inflight_attempts"] == 0

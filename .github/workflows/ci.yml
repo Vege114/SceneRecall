@@ -32,8 +32,9 @@ jobs:
       - run: ffprobe -version
       - run: uv sync --frozen --python 3.12 --extra dev
       - run: npm ci --ignore-scripts
-      - run: uv run --frozen pytest -q -rs
-      - run: uv run --frozen ruff check backend tests
+      - name: Backend regression tests
+        run: uv run --frozen pytest -vv -rs --durations=20 -o faulthandler_timeout=90
+      - run: uv run --frozen ruff check backend tests scripts
       - run: npm ci
         working-directory: frontend
       - run: npm test -- --pool=threads --maxWorkers=2

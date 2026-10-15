@@ -324,16 +324,27 @@ async def test_codex_concurrency_limit_and_cancelled_call_release_slot(tmp_path,
 
     monkeypatch.setattr(codex_cli, "complete", complete)
     first = asyncio.create_task(providers.interpret("codex", "first"))
-    await first_started.wait()
-    second = asyncio.create_task(providers.interpret("codex", "second"))
-    await asyncio.sleep(0)
-    assert calls == 1
-    first.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await first
-    release.set()
-    assert (await second).data["search_text"] == "结果"
-    assert calls == 2
+    tasks = [first]
+    try:
+        await asyncio.wait_for(first_started.wait(), timeout=5)
+        second = asyncio.create_task(providers.interpret("codex", "second"))
+        tasks.append(second)
+        await asyncio.sleep(0)
+        assert calls == 1
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first, timeout=5)
+        release.set()
+        assert (await asyncio.wait_for(second, timeout=5)).data["search_text"] == "结果"
+        assert calls == 2
+    finally:
+        # A provider failure before fake complete() must fail this test instead
+        # of leaving it waiting forever for an event that will never be set.
+        release.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
 
 
 def test_local_codex_status_and_test_routes_require_session(tmp_path, monkeypatch):

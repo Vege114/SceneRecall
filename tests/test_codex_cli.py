@@ -370,7 +370,7 @@ async def test_cancellation_kills_reaps_and_cleans_up(cli):
             await asyncio.sleep(0.01)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=5)
     [call] = calls()
     assert not Path(call["cwd"]).exists()
     _assert_process_stopped(call["pid"], call["created"])

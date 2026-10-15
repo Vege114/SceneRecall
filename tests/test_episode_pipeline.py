@@ -1,5 +1,6 @@
 """Synthetic episode scheduling proves overlap, barriers and durable recovery."""
 import asyncio
+import os
 import threading
 
 import pytest
@@ -28,11 +29,11 @@ def episode_batch(worker, count=3, *, stages=None, concurrency=4):
     return assets, result["jobs"]
 
 
-async def wait_for_jobs(queue, jobs):
+async def wait_for_jobs(queue, jobs, timeout=5):
     async def finished():
         while any(queue.get(job["id"])["status"] in {"queued", "running", "pausing", "cancelling"} for job in jobs):
             await asyncio.sleep(.01)
-    await asyncio.wait_for(finished(), 5)
+    await asyncio.wait_for(finished(), timeout)
 
 
 @pytest.mark.asyncio
@@ -227,6 +228,9 @@ async def test_ocr_overlaps_between_files_before_any_visual_understanding(scene_
     entered, release = asyncio.Event(), asyncio.Event()
     original = worker.provider.recognize_subtitles
     calls, active, peak = 0, 0, 0
+    # The completion phase publishes OCR, frames and scene receipts for both
+    # files. This test proves overlap with a gate, not filesystem throughput.
+    io_timeout = 30 if os.name == "nt" else 5
 
     async def blocked(*args):
         nonlocal calls, active, peak
@@ -235,23 +239,24 @@ async def test_ocr_overlaps_between_files_before_any_visual_understanding(scene_
         peak = max(peak, active)
         if calls == 2:
             entered.set()
-        await asyncio.wait_for(release.wait(), 3)
-        result = await original(*args)
-        active -= 1
-        return result
+        try:
+            await release.wait()
+            return await original(*args)
+        finally:
+            active -= 1
 
     monkeypatch.setattr(worker.provider, "recognize_subtitles", blocked)
     await worker.queue.start()
     try:
-        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(entered.wait(), io_timeout if os.name == "nt" else 2)
         assert peak == 2
         assert not any(call["stage"] == "preparation" for call in worker.provider.calls)
         release.set()
-        await wait_for_jobs(worker.queue, jobs)
+        await wait_for_jobs(worker.queue, jobs, timeout=io_timeout)
         assert all(worker.queue.get(job["id"])["status"] == "completed" for job in jobs)
     finally:
         release.set()
-        await worker.queue.stop()
+        await asyncio.wait_for(worker.queue.stop(), io_timeout)
 
 
 @pytest.mark.asyncio

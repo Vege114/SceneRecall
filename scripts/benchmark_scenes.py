@@ -285,7 +285,7 @@ async def run(args):
     plan["id"] = plan["plan_id"] = "plan_" + digest([original["id"], args.start_ms, args.end_ms])
     settings = read_json(args.library / "private/settings.json")
     profile_id = settings["bindings"]["vision"]
-    profiles = json.loads((args.library / "private/profiles.json").read_text())
+    profiles = json.loads((args.library / "private/profiles.json").read_text(encoding="utf-8"))
     profile = next(p for p in profiles["profiles"] if p["id"] == profile_id)
     if profile.get("provider_type") != "codex_cli":
         raise ValueError("This benchmark only supports the explicitly authorized current Codex connection")

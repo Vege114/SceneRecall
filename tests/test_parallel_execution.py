@@ -13,6 +13,20 @@ from test_scene_jobs import counts, enqueue, execute
 from test_scene_jobs import scene_worker as scene_worker
 
 
+# Admission and receipt barriers also include durable fixture writes. Keep the
+# overlap assertions independent of slower NTFS writes on hosted Windows CI.
+_BARRIER_TIMEOUT = 15 if os.name == "nt" else 2
+
+
+async def _cleanup_tasks(*tasks):
+    tasks = [task for task in tasks if task is not None]
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), _BARRIER_TIMEOUT)
+
+
 def options(**changes):
     return {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel",
             "max_concurrency": 4, **changes}
@@ -125,18 +139,20 @@ async def test_controls_drain_started_calls_and_resume_without_repaying(scene_wo
 
     monkeypatch.setattr(worker.provider, "prepare_visual", blocked)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
-    # Reaching the calls includes generating and durably registering 170 local
-    # frame files. Keep the model barrier strict without timing NTFS setup.
-    await asyncio.wait_for(both_started.wait(), 15 if os.name == "nt" else 2)
-    assert len(worker.queue.get(job["id"])["inflight_calls"]) == 2
-    worker.queue.control(job["id"], action)
-    release.set()
-    await running
-    stopped = worker.queue.get(job["id"])
-    assert stopped["status"] == {"pause": "paused", "cancel": "cancelled"}[action]
-    assert entered == 2 and stopped["request_count"] == 2
-    assert stopped["inflight_calls"] == {} and stopped["inflight_attempts"] == 0
-    assert worker.store.list(worker.asset["id"]) == []
+    try:
+        await asyncio.wait_for(both_started.wait(), _BARRIER_TIMEOUT)
+        assert len(worker.queue.get(job["id"])["inflight_calls"]) == 2
+        worker.queue.control(job["id"], action)
+        release.set()
+        await asyncio.wait_for(running, _BARRIER_TIMEOUT)
+        stopped = worker.queue.get(job["id"])
+        assert stopped["status"] == {"pause": "paused", "cancel": "cancelled"}[action]
+        assert entered == 2 and stopped["request_count"] == 2
+        assert stopped["inflight_calls"] == {} and stopped["inflight_attempts"] == 0
+        assert worker.store.list(worker.asset["id"]) == []
+    finally:
+        release.set()
+        await _cleanup_tasks(running)
     worker.queue.control(job["id"], "resume")
     completed = await execute(worker, job)
     assert completed["status"] == "completed", completed
@@ -161,17 +177,22 @@ async def test_shutdown_drains_success_and_does_not_start_budget_waiter(scene_wo
 
     monkeypatch.setattr(worker.provider, "prepare_visual", blocked)
     worker.queue.task = asyncio.create_task(worker.queue.execute(job["id"]))
-    await asyncio.wait_for(started.wait(), 2)
-    stopping = asyncio.create_task(worker.queue.stop())
-    await asyncio.sleep(0)
-    release.set()
-    await asyncio.wait_for(stopping, 2)
-    stopped = worker.queue.get(job["id"])
-    assert entered == 1 and stopped["request_count"] == 1
-    assert stopped["inflight_calls"] == {} and len(stopped["scene_receipts"]) == 1
-    restarted = JobQueue(worker.library, worker.provider, worker.queue.search)
-    assert restarted.get(job["id"])["request_count"] == 1
-    assert restarted.get(job["id"]).get("uncertain_request_count", 0) == 0
+    stopping = None
+    try:
+        await asyncio.wait_for(started.wait(), _BARRIER_TIMEOUT)
+        stopping = asyncio.create_task(worker.queue.stop())
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.wait_for(stopping, _BARRIER_TIMEOUT)
+        stopped = worker.queue.get(job["id"])
+        assert entered == 1 and stopped["request_count"] == 1
+        assert stopped["inflight_calls"] == {} and len(stopped["scene_receipts"]) == 1
+        restarted = JobQueue(worker.library, worker.provider, worker.queue.search)
+        assert restarted.get(job["id"])["request_count"] == 1
+        assert restarted.get(job["id"]).get("uncertain_request_count", 0) == 0
+    finally:
+        release.set()
+        await _cleanup_tasks(stopping, worker.queue.task)
 
 
 @pytest.mark.parametrize("action", ["pause", "cancel"])
@@ -201,19 +222,24 @@ async def test_terminal_control_status_waits_until_all_paid_calls_drain(scene_wo
     monkeypatch.setattr(fixture.provider, "prepare_visual", blocked)
     monkeypatch.setattr(fixture.queue, "_account_scene_receipt", signal_account)
     running = asyncio.create_task(fixture.queue.execute(job["id"]))
-    await asyncio.wait_for(started.wait(), 2)
-    fixture.queue.control(job["id"], action)
-    gates[0].set()
-    await asyncio.wait_for(accounted.wait(), 2)
-    await asyncio.sleep(0)
-    state = fixture.queue.get(job["id"])
-    assert state["status"] == {"pause": "pausing", "cancel": "cancelling"}[action]
-    assert state["request_count"] == 1 and state["inflight_attempts"] == 3
-    with pytest.raises(ValueError, match="不支持"):
-        fixture.queue.control(job["id"], "resume")
-    gates[1].set()
-    await running
-    assert fixture.queue.get(job["id"])["status"] == {"pause": "paused", "cancel": "cancelled"}[action]
+    try:
+        await asyncio.wait_for(started.wait(), _BARRIER_TIMEOUT)
+        fixture.queue.control(job["id"], action)
+        gates[0].set()
+        await asyncio.wait_for(accounted.wait(), _BARRIER_TIMEOUT)
+        await asyncio.sleep(0)
+        state = fixture.queue.get(job["id"])
+        assert state["status"] == {"pause": "pausing", "cancel": "cancelling"}[action]
+        assert state["request_count"] == 1 and state["inflight_attempts"] == 3
+        with pytest.raises(ValueError, match="不支持"):
+            fixture.queue.control(job["id"], "resume")
+        gates[1].set()
+        await asyncio.wait_for(running, _BARRIER_TIMEOUT)
+        assert fixture.queue.get(job["id"])["status"] == {"pause": "paused", "cancel": "cancelled"}[action]
+    finally:
+        for gate in gates:
+            gate.set()
+        await _cleanup_tasks(running)
 
 
 @pytest.mark.asyncio
@@ -421,10 +447,11 @@ async def test_factory_four_and_saved_widths_schedule_the_selected_number(scene_
         peak = max(peak, active)
         if entered == expected:
             wave_started.set()
-        await asyncio.wait_for(wave_started.wait(), 2)
-        result = await original(*args)
-        active -= 1
-        return result
+        try:
+            await asyncio.wait_for(wave_started.wait(), _BARRIER_TIMEOUT)
+            return await original(*args)
+        finally:
+            active -= 1
 
     monkeypatch.setattr(fixture.provider, "prepare_subtitles", overlap)
     execution = {"transcript": "parallel", "max_concurrency": saved_width}
