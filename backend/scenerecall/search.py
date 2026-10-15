@@ -135,7 +135,7 @@ class SearchEngine:
         for record in records:
             if not isinstance(record.get("id"), str) or not record["id"] or record["id"] in seen:
                 raise ValueError("搜索记录 ID 缺失或重复")
-            if not record.get("asset_id") or record.get("kind") not in {"visual", "subtitle", "scene"}:
+            if not record.get("asset_id") or record.get("kind") not in {"visual", "subtitle", "scene", "audio"}:
                 raise ValueError("搜索记录缺少媒体或证据类型")
             if not isinstance(record.get("text"), str):
                 raise ValueError("搜索记录正文无效")  # noqa: TRY004 - API exposes validation errors consistently

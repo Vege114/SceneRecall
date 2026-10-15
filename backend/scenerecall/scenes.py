@@ -52,8 +52,10 @@ class SceneStore:
     def dependencies(self, asset_id: str) -> dict:
         from .characters import CharacterStore, scope_id
         asset = self.library.get_asset(asset_id, include_deleted=True)
+        registry = CharacterStore(self.library)._read(scope_id(asset))
         return {"fingerprint": asset["fingerprint"], "subtitle_digest": self.subtitle_digest(asset_id),
-                "character_revision": CharacterStore(self.library)._read(scope_id(asset))["revision"],
+                "character_revision": registry["revision"],
+                "character_semantic_revision": registry.get("semantic_revision", registry["revision"]),
                 "membership_revision": asset.get("membership_revision", 0)}
 
     def _raw(self, asset_id: str) -> list[dict]:
@@ -96,9 +98,36 @@ class SceneStore:
         current = cache[asset_id, "dependencies"]
         marked = self.library.active(asset_id).get("scene_staleness", {})
         labels = {"fingerprint": "视频来源已变化", "subtitle_digest": "字幕来源或时间轴已变化",
-                  "character_revision": "角色人工档案已变化", "membership_revision": "所属项目已变化"}
+                  "character_revision": "角色人工档案已变化", "character_semantic_revision": "角色人工档案已变化",
+                  "membership_revision": "所属项目已变化"}
         reasons = list(marked.get(row["id"], []))
+        if row.get("inferences") or row.get("memory_after"):
+            # A paid receipt may be published after the human correction. Check
+            # mappings at read time too, so this narrow race cannot make an old
+            # identity-dependent inference look current.
+            regions = [entity for entity in row.get("entities", []) if entity.get("identity_region_id")]
+            changed_identity = False
+            if regions:
+                from .visual_identity import decorate_identity_records
+                projected = decorate_identity_records(self.library, asset_id, [row])[0]
+                current_entities = {entity["id"]: entity.get("character_id") for entity in projected.get("entities", [])}
+                changed_identity = any(entity.get("character_id") != current_entities.get(entity["id"]) for entity in regions)
+            if row.get("audio_evidence"):
+                if (asset_id, "audio_identity") not in cache:
+                    from .audio_identity import AudioIdentityService
+                    try:
+                        cache[asset_id, "audio_identity"] = {item["id"]: item.get("character_id")
+                            for item in AudioIdentityService(self.library).records(asset_id)}
+                    except FileNotFoundError:
+                        cache[asset_id, "audio_identity"] = {}
+                current_audio = cache[asset_id, "audio_identity"]
+                changed_identity |= any(item.get("character_id") != current_audio.get(item["id"])
+                                        for item in row["audio_evidence"])
+            if changed_identity:
+                reasons.append("关联身份已纠正，相关剧情推断待复核")
         for key, expected in row.get("dependencies", {}).items():
+            if key == "character_revision" and "character_semantic_revision" in row.get("dependencies", {}):
+                continue
             if key in current and expected != current[key]:
                 reasons.append(labels[key])
         memory = row.get("memory_before", {})
@@ -188,6 +217,11 @@ class SceneStore:
             raise ValueError("场景块摘要不能为空")
         if value.get("understanding_level", "initial") not in {"initial", "deep"}:
             raise ValueError("场景理解层级无效")
+        for field in ("needs_identity_review", "needs_action_deep"):
+            if field in value and type(value[field]) is not bool:
+                raise ValueError("身份复核和动作深入标记必须为布尔值")
+        if "needs_action_deep" in value:
+            value["needs_deep"] = value["needs_action_deep"]
         value.setdefault("understanding_level", "initial")
         registry = read_json(self.library.asset_dir(asset_id) / "frames" / "registry.json", {})
         for field in ("frame_ids", "evidence_frame_ids", "subtitle_ids", "representative_frame_ids", "deep_frame_ids", "shot_ids"):
@@ -302,7 +336,11 @@ class SceneStore:
             values = []
             defaults = self.dependencies(asset_id)
             for row in ordered:
-                row = {**row, "dependencies": {**defaults, **row.get("dependencies", {})}}
+                current_defaults = dict(defaults)
+                if "character_revision" in row.get("dependencies", {}) and "character_semantic_revision" not in row["dependencies"]:
+                    # Preserve frozen legacy dependencies/receipt compatibility.
+                    current_defaults.pop("character_semantic_revision", None)
+                row = {**row, "dependencies": {**current_defaults, **row.get("dependencies", {})}}
                 value, relative = self._write(asset_id, run_id, row)
                 previous = next((item for item in old if item["id"] == value["id"]), None)
                 if (previous and previous["run_id"] == run_id and previous.get("understanding_level") == "deep"
@@ -408,6 +446,30 @@ class SceneStore:
             omitted += 1
         value = {"summaries": summaries, "provenance": provenance, "gaps": gaps[-24:], "omitted_count": omitted}
         return {**value, "digest": digest(value)}
+
+    def invalidate_identity_inferences(self, asset_id: str, *, region_ids=(), audio_ids=()) -> None:
+        """Invalidate only derived reasoning that explicitly used changed identities.
+
+        Mapping-only actions/facts remain readable. Existing provenance checks
+        propagate the affected scene's stale state to actual downstream users.
+        """
+        regions, audio = set(region_ids), set(audio_ids)
+        if not regions and not audio:
+            return
+        with self.library.lock:
+            active = self.library.active(asset_id)
+            marked = active.setdefault("scene_staleness", {})
+            changed = False
+            for row in self._raw(asset_id):
+                relevant = (any(entity.get("identity_region_id") in regions for entity in row.get("entities", []))
+                            or any(item.get("id") in audio for item in row.get("audio_evidence", [])))
+                if not relevant or not (row.get("inferences") or row.get("memory_after")):
+                    continue
+                reason = "关联身份已纠正，相关剧情推断待复核"
+                marked[row["id"]] = list(dict.fromkeys([*marked.get(row["id"], []), reason]))
+                changed = True
+            if changed:
+                atomic_json(self.library.asset_dir(asset_id) / "active-analysis.json", active)
 
     def mark_dependents_stale(self, asset_id: str, start_ms: int, reason: str) -> None:
         asset = self.library.get_asset(asset_id)

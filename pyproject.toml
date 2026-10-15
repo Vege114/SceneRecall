@@ -13,9 +13,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.9,<1"]
+visual-identity = ["dghs-imgutils>=0.19,<0.20"]
+audio = ["torch>=2.8,<2.9", "torchaudio>=2.8,<2.9", "torchcodec>=0.7,<0.8", "pyannote.audio>=4,<5", "speechbrain>=1,<2"]
+asr = ["faster-whisper>=1,<2"]
 
 [project.scripts]
 scenerecall = "scenerecall.main:run"
+
+[tool.uv]
+# imgutils 0.19 uses NumPy 1.x; pyannote 4 requires NumPy 2.x. Run the
+# imgutils worker from its own Python 3.12 venv via SCENERECALL_VISUAL_PYTHON.
+conflicts = [[{ extra = "visual-identity" }, { extra = "audio" }]]
 
 [build-system]
 requires = ["hatchling"]

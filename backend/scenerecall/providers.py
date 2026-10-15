@@ -226,11 +226,12 @@ class Entity(BaseModel):
     evidence_frame_ids: list[str] = Field(min_length=1)
     is_character: bool | None = Field(default=None, strict=True)
     character_id: str | None = Field(default=None, min_length=1, max_length=100)
-    match_confidence: float = Field(default=0, ge=0, le=1, allow_inf_nan=False, strict=True)
+    match_confidence: float | None = Field(default=0, ge=0, le=1, allow_inf_nan=False, strict=True)
     match_reason: str = Field(default="", max_length=2000)
     observed_traits: list[str] = Field(default_factory=list, max_length=40)
     portrait_frame_id: str | None = None
     portrait_box: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    identity_region_id: str | None = Field(default=None, max_length=200)
 
     @field_validator("portrait_box", mode="before")
     @classmethod
@@ -334,7 +335,7 @@ def _validate_character_entities(entities, supplied_entities, character_context,
         if entity.character_id is not None:
             if not eligible or entity.character_id not in character_ids:
                 raise ValueError("unknown or ineligible character identity")
-            if entity.match_confidence < 0.65 or not entity.match_reason.strip():
+            if entity.match_confidence is None or entity.match_confidence < 0.65 or not entity.match_reason.strip():
                 raise ValueError("character matches require confident visual evidence")
         if character_context is not None and eligible and not entity.match_reason.strip():
             raise ValueError("character decisions must explain visible matching evidence or uncertainty")
@@ -346,7 +347,7 @@ def _validate_character_entities(entities, supplied_entities, character_context,
                 raise ValueError("character names must be supported proper identities, not anonymous labels")
             name_sources = json.dumps({"description": entity.description, "reason": entity.match_reason,
                                        "subtitles": subtitle_context, "story": story_context}, ensure_ascii=False)
-            if (entity.match_confidence < 0.65 or not entity.match_reason.strip()
+            if (entity.match_confidence is None or entity.match_confidence < 0.65 or not entity.match_reason.strip()
                     or normalized(entity.name) not in normalized(name_sources)):
                 raise ValueError("character names require confident named evidence and an identity explanation")
         entity.is_character = eligible
@@ -828,6 +829,9 @@ class ProviderManager:
         if context is None:
             return ""
         value = {key: context.get(key) for key in ("scope_id", "revision", "profiles")}
+        for key in ("identity_regions", "retrieval", "dossier_detail_omitted"):
+            if key in context:
+                value[key] = context[key]
         if context.get("cast_policy"):
             value["cast_policy"] = context["cast_policy"]
         if context.get("work_summary"):
@@ -908,7 +912,7 @@ class ProviderManager:
             "inferences:[{text:string,frame_ids:[string],cue_ids:[string]}],representative_frame_ids:[string],deep_frame_ids:[string],"
             "needs_deep:boolean,reason:string,continues_previous:boolean}],unresolved:[string]}."
         )
-        if version == VISUAL_PREPARATION_PROMPT_VERSION:
+        if version in {VISUAL_PREPARATION_PROMPT_VERSION, "scene-visual-preparation-v4"}:
             prompt = prompt.replace("Return exactly {chunks:[{frame_ids:[string]",
                                     "Return exactly {chunks:[{content_kind:string,entities:[object],frame_ids:[string]")
             prompt += (
@@ -932,10 +936,23 @@ class ProviderManager:
                 "reserve needs_deep for a material story/action/identity detail the contact sheets cannot resolve."
             )
 
+        if version == VISUAL_PREPARATION_PROMPT_VERSION:
+            prompt = prompt.replace("complex interactions/actions, unclear identity, tiny/obscured detail, contradictory ",
+                                    "complex interactions/actions, tiny/obscured action detail, contradictory action ")
+            prompt = prompt.replace("material story/action/identity detail", "material story/action detail")
+            prompt += (
+                " Return needs_identity_review and needs_action_deep separately. needs_deep must equal "
+                "needs_action_deep. Unknown static identity alone sets only needs_identity_review=true; it "
+                "must not trigger full story deepening. Include events:[{actor_ids,action,target_ids,start_ms,"
+                "end_ms,evidence_frame_ids}] for visible actions, referring to this chunk's local entity IDs. "
+                "Focus on who does what to whom and when; do not repeat stable dossier appearance. "
+                + self._identity_instruction()
+            )
+
         def validate(raw):
             result = validate_visual_preparation(raw, frames, cue_ids, has_context=bool(context_frames),
                                                  cues=cues, **bounds)
-            if version == VISUAL_PREPARATION_PROMPT_VERSION:
+            if version in {VISUAL_PREPARATION_PROMPT_VERSION, "scene-visual-preparation-v4"}:
                 for chunk in result["chunks"]:
                     supplied = chunk.get("entities", [])
                     entities = [Entity.model_validate(entity) for entity in supplied]
@@ -947,13 +964,19 @@ class ProviderManager:
                     _validate_character_entities(entities, supplied, character_context, subtitle_context, story_context)
                     if "entities" in chunk:
                         chunk["entities"] = [entity.model_dump() for entity in entities]
+                    if version == VISUAL_PREPARATION_PROMPT_VERSION and "entities" in chunk:
+                        from .identity_scene import bind_identity_evidence
+                        chunk["entities"] = bind_identity_evidence(chunk.get("entities", []), character_context)
+                        if "identity_regions" in (character_context or {}):
+                            chunk["needs_identity_review"] = any(entity.get("association_status") in {"candidate", "unknown"}
+                                                                 for entity in chunk["entities"])
             return result
 
         with tempfile.TemporaryDirectory(prefix="scenerecall-scenes-") as directory:
             sheets, mapping = contact_sheets(frames, context_frames, Path(directory))
             content = [{"type": "text", "text": "Context data: " + context},
                        {"type": "text", "text": "Original frame map: " + bounded_json(mapping)}]
-            if version == VISUAL_PREPARATION_PROMPT_VERSION:
+            if version in {VISUAL_PREPARATION_PROMPT_VERSION, "scene-visual-preparation-v4"}:
                 allowed = {profile["id"] for profile in (character_context or {}).get("profiles", [])}
                 references = (character_context or {}).get("reference_frames", [])
                 if len(references) > MAX_CHARACTER_REFERENCES:
@@ -964,6 +987,8 @@ class ProviderManager:
                     content.append({"type": "text", "text": "Dossier reference only, never current evidence: "
                                     + reference["character_id"]})
                     content.extend(self._images([{**reference, "id": "reference:" + reference["character_id"], "at_ms": 0}]))
+            if version == VISUAL_PREPARATION_PROMPT_VERSION:
+                content.extend(self._identity_images(character_context))
             content.extend(self._images(sheets))
             return await self._chat(id, "preparation", prompt, content,
                                     validate,
@@ -1028,7 +1053,11 @@ class ProviderManager:
                 if observation.subject_id not in entity_ids or (observation.object_id and observation.object_id not in entity_ids):
                     raise ValueError("unknown spatial participant")
             from .models import normalize_observation_evidence
-            return normalize_observation_evidence(item.model_dump(), [frame["id"] for frame in frames])
+            result = normalize_observation_evidence(item.model_dump(), [frame["id"] for frame in frames])
+            if version == CONTEXTUAL_VISION_PROMPT_VERSION:
+                from .identity_scene import bind_identity_evidence
+                result["entities"] = bind_identity_evidence(result["entities"], character_context)
+            return result
 
         prompt = (
             f"Analyze only visible evidence in chronological frames for [{start_ms},{end_ms}) ms. "
@@ -1070,12 +1099,19 @@ class ProviderManager:
             "Evidence IDs must be supplied frame IDs; event times must fit the window. Schema: "
             + json.dumps(VisionObservation.model_json_schema(), ensure_ascii=False)
         )
-        if version == CONTEXTUAL_VISION_PROMPT_VERSION and (subtitle_context is not None or story_context is not None):
+        if version in {CONTEXTUAL_VISION_PROMPT_VERSION, "scene-contextual-vision-v6"} and (subtitle_context is not None or story_context is not None):
             prompt += (
                 " Ignore staff/cast credits, production logos, copyright, fansub and karaoke overlays in "
                 "summaries, entities, actions and relationships. Do not OCR or enumerate production names; "
                 "episode staff metadata comes from the archive. Keep visible narrative characters/actions "
                 "even beneath credits. A pure credit card/scroll needs only a generic summary, no story entities."
+            )
+        if version == CONTEXTUAL_VISION_PROMPT_VERSION and (subtitle_context is not None or story_context is not None or character_context):
+            prompt += self._identity_instruction()
+            prompt += (
+                " The deep observation summary is stored as a visual fact: describe only what the current "
+                "frames visibly show. Do not put heard words, off-screen speakers or story deductions in "
+                "that summary; their original audio/subtitle records remain separate evidence."
             )
         content = []
         if subtitle_context is not None or story_context is not None:
@@ -1124,6 +1160,36 @@ class ProviderManager:
                                        named_identities=(character_context or {}).get("cast_policy", {}).get("mode") != "bangumi")
                   if self._profile(id, "vision")["provider_type"] == "codex_cli" else None)
         return await self._chat(id, "vision", prompt, content, validate, output_schema=schema)
+
+    @staticmethod
+    def _identity_instruction():
+        return (
+            " Identity regions identify frame-local P1/P2 boxes, not cross-shot tracks. Copy a region's "
+            "id into identity_region_id only for the person in that exact frame/box; use null otherwise. "
+            "When region mappings are supplied, leave character_id/name null in your output: the application "
+            "binds the stored identity decision after validation. Only confirmed mappings are factual names; "
+            "candidate and unknown identities must remain uncertain in summaries and inferences. "
+            "Region crops are views of their original frame; cite only original frame IDs. "
+            "speaker_dialogue is timed audio evidence: it can support who was heard, never presence, "
+            "a visible action, mouth movement or a relationship. Narration, off-screen speech, singing, "
+            "overlap and conflicts must remain separate from visible people. Subtitle translations are "
+            "time associations, not phonetic alignment and not proof of a single speaker. "
+            "An ambiguous dialogue_attribution does not assign the whole subtitle to that speaker. "
+            "Only IDs from subtitle_context.cues are valid cue_ids. ASR-only audio IDs remain in the "
+            "separate audio_evidence records; never turn them into cue_ids or cite visual frames as proof "
+            "of their words. Keep unsupported audio-only interpretation out of inferences. "
+            "With supplied region mappings, match_confidence is null and observed_traits is empty unless "
+            "a newly visible distinguishing detail is needed; do not re-estimate local matcher confidence. "
+            "Describe actions with actor_ids/target_ids and avoid repeating stable character appearance."
+        )
+
+    def _identity_images(self, context):
+        result = []
+        for region in (context or {}).get("region_images", [])[:8]:
+            result.append({"type": "text", "text": "Current region crop (cite its original frame only): " +
+                json.dumps({key: region[key] for key in ("id", "local_id", "frame_id")}, ensure_ascii=False)})
+            result.extend(self._images([{**region, "id": region["frame_id"]}]))
+        return result
 
     async def recognize_subtitles(self, id: str, frames: list[dict]) -> AIResult:
         valid_ids = {f["id"] for f in frames}

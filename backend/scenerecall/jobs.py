@@ -19,6 +19,7 @@ from .workflows import WorkflowQueueMixin
 from .scene_jobs import CODEX_CORE_FRAMES, CORE_FRAMES, SceneJobMixin
 from .execution import ReservationBusy, bounded_map, execution_width, finish_on_cancel
 from .pipeline import EpisodePipelineMixin
+from .identity_jobs import IdentityJobMixin
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -81,7 +82,7 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
     return result
 
 
-class JobQueue(EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
+class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
     def __init__(self, library: Library, providers, search):
         from .characters import CharacterStore
 
@@ -223,9 +224,14 @@ class JobQueue(EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
             # inferred plot or automatically enriched character dossier.
             config["transcript_context"] = "independent-v1"
             config["scene_prompt_versions"] = prompt_versions()
+            config["identity_settings"] = self.identity_settings(request.asset_id)
             config["visual_batch_size"] = (CODEX_CORE_FRAMES
                 if snapshots["preparation"].get("provider_type") == "codex_cli" else CORE_FRAMES)
         if "vision" in request.stages:
+            if strategy == "scene-chunks-v1":
+                from .scene_jobs import prompt_versions
+                config["scene_prompt_versions"] = prompt_versions()
+                config["identity_settings"] = self.identity_settings(request.asset_id)
             context = self.character_context(request.asset_id, scene=strategy == "scene-chunks-v1")
             config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}
             config["sampling_strategy"] = strategy
@@ -296,9 +302,17 @@ class JobQueue(EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
             context = self._bounded_scene_profiles(context)
         ProviderManager.character_context_text(context)
         references = []
-        # All dossiers remain available as text. Bound expensive image context and
-        # prefer recently enriched profiles when the cast has more than eight roles.
-        for profile in sorted(context["profiles"], key=lambda p: p.get("updated_at", ""), reverse=True):
+        from .visual_identity import ReferenceGallery
+        allowed = {profile["id"] for profile in context["profiles"]}
+        for reference in ReferenceGallery(self.library).trusted(asset_id):
+            if reference["character_id"] in allowed and len(references) < MAX_CHARACTER_REFERENCES:
+                references.append({**reference, "id": "reference:" + reference["id"], "at_ms": 0,
+                                   "reference_only": True})
+        # Backward-compatible evidence portraits supplement an independent
+        # gallery. The local matcher itself searches every trusted reference.
+        for profile in sorted(context["profiles"], key=lambda p: p["id"]):
+            if len(references) >= MAX_CHARACTER_REFERENCES:
+                break
             representative = profile.get("representative")
             if not representative:
                 continue

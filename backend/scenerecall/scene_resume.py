@@ -58,7 +58,8 @@ class SceneResumeMixin:
     def _understanding_kind(chunk, config, context_changed):
         if chunk.get("content_kind") == "credits":
             return "initial"
-        if chunk["needs_deep"] or config.get("character_reanalysis"):
+        needs_action = chunk.get("needs_action_deep")
+        if (chunk["needs_deep"] if needs_action is None else needs_action) or config.get("character_reanalysis"):
             return "deep_analysis"
         return "context_refresh" if context_changed else "initial"
 

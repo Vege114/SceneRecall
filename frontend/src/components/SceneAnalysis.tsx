@@ -8,7 +8,7 @@ import TaskModels, { useTaskModels } from './TaskModels';
 
 export function SceneBadges({ scene }: { scene: SceneEvidence }) {
   if (scene.content_kind === 'credits') return <span className="tag scene-level">演职员信息</span>;
-  return <><span className={`tag scene-level ${scene.understanding_level === 'deep' ? 'deep' : ''}`}>{scene.understanding_level === 'deep' ? '深入理解' : '初步理解'}</span>{scene.context_stale && <span className="tag stale-tag" title={scene.stale_reasons?.join('；')}>上下文待更新</span>}</>;
+  return <><span className={`tag scene-level ${scene.understanding_level === 'deep' ? 'deep' : ''}`}>{scene.understanding_level === 'deep' ? '深入理解' : '初步理解'}</span>{scene.needs_identity_review && <span className="tag stale-tag">身份待核对</span>}{scene.needs_action_deep && <span className="tag">动作待深入理解</span>}{scene.context_stale && <span className="tag stale-tag" title={scene.stale_reasons?.join('；')}>上下文待更新</span>}</>;
 }
 
 export function RelatedScenes({ scene, scenes, assetId }: { scene: SceneChunk; scenes: SceneChunk[]; assetId: string }) {

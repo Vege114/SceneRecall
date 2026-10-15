@@ -25,10 +25,10 @@ def test_scene_bounds_large_cast_before_legacy_validation_and_preserves_full_dos
     _, config = worker.queue.validate(AnalysisInput(asset_id=worker.asset["id"], stages=["vision"],
         analysis_strategy="scene-chunks-v1"), {"bindings": {"preparation": "fast", "vision": "deep"}})
     bounded = worker.queue._scene_context(worker.asset["id"], config)
-    assert 0 < len(bounded["profiles"]) <= 16
-    assert bounded["profiles"][0]["id"] == "character_99"
+    assert {profile["id"] for profile in bounded["profiles"]} == {f"character_{i}" for i in range(100)}
+    assert bounded["profiles"][0]["id"] == "character_0"
     assert encoded_size(bounded) <= 18000
-    assert "完整人工档案仍保留" in bounded["profiles"][0]["notes"]
+    assert bounded["dossier_detail_omitted"] is True
     assert context == original
     context["revision"] += 1
     with pytest.raises(CharacterContextChanged):

@@ -225,3 +225,25 @@ it('labels production credits as metadata and omits paid deepening in search res
   expect(screen.queryByRole('button', { name: '深入分析此片段' })).toBeNull();
   expect(screen.getByRole('link', { name: /查看原片/ })).toBeTruthy();
 });
+
+it('links audio search evidence to speaker review and never labels it as visible action', () => {
+  mount(<ResultCard result={{ ...result, id: 'audio-index', record_id: 'audio-one', kind: 'audio', text: '旁白', summary: '听到声音：旁白', association_status: 'candidate', association_source: 'voice_bank', speaker_id: 'episode-one:track1:spk0' }} />);
+  expect(screen.getByText('听到的声音')).toBeTruthy();
+  expect(screen.getByText('候选 · 待确认')).toBeTruthy();
+  expect(screen.getByText(/声音证据不证明角色当前出场或动作/)).toBeTruthy();
+  expect(screen.getByLabelText('试听检索声音证据').getAttribute('src')).toBe('/api/assets/episode-one/audio/records/audio-one/clip');
+  expect(screen.getByRole('link', { name: /查看原片/ }).getAttribute('href')).toBe('#/asset/episode-one?t=1000&audio=audio-one');
+  expect(screen.queryByRole('button', { name: '深入分析此片段' })).toBeNull();
+});
+
+it('separates identity review from deep action work and projects event participant names', async () => {
+  const user = userEvent.setup();
+  mockFetch(() => ({ asset, observations: [], subtitles: [], annotations: [], runs: [], scenes: [{ ...scene, needs_identity_review: true, needs_action_deep: false, entities: [{ id: 'P1', name: '局部人物', character_id: 'c1', character_name: '已确认角色', association_status: 'confirmed', association_source: 'human' }], events: [{ actor_ids: ['P1'], actor_names: ['已确认角色'], target_ids: [], action: '走到窗边' }] }] }));
+  mount(<AssetDetail id={asset.id} />);
+  await screen.findByText('身份待核对');
+  expect(screen.queryByText('动作待深入理解')).toBeNull();
+  expect(screen.getByText('已确认 · 人工确认')).toBeTruthy();
+  await user.click(screen.getByText('动作与空间关系'));
+  expect(screen.getByText(/已确认角色 · 走到窗边/)).toBeTruthy();
+  expect(screen.getByText(scene.summary)).toBeTruthy();
+});

@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.0",
+  "benchmark": "character-centric-av",
+  "status": "not_measured",
+  "measurement_policy": "No missing measurement is represented by zero. Synthetic tests are not model accuracy.",
+  "timing_definition": "total_ms includes model loading, audio extraction/diarization/features, visual identity, provider calls and indexing; excludes source cloning and the reused local keyframe scan. Cold means new process and empty application feature caches (OS/HF file cache uncontrolled). Warm means fresh analysis/index with retained local features and resident models; provider result caches are not copied. Provider service latency is uncontrolled. visual_model_load_ms is visual only; audio loading remains in diarization/embedding totals.",
+  "baseline_definition": "old uses scene-chunks-v1 with frozen pre-identity prompts and no identity stage; it is a legacy-prompt baseline in the current executable, not the old commit binary.",
+  "groups": {
+    "old": {
+      "cold": {
+        "status": "not_measured",
+        "reason": "No local evaluation clip, reviewed labels, and installed identity-model weights were supplied for this run; no paid provider calls or model downloads were authorized or made.",
+        "total_ms": null,
+        "first_searchable_ms": null,
+        "first_visual_searchable_ms": null,
+        "visual_calls": null,
+        "fallback_count": null,
+        "timeout_count": null,
+        "invalid_output_count": null,
+        "role_coverage": null,
+        "role_error_rate": null,
+        "dialogue_speaker_accuracy": null,
+        "diarization_error_rate": null,
+        "audio_total_ms": null,
+        "visual_model_load_ms": null
+      },
+      "warm": {
+        "status": "not_measured",
+        "reason": "No local evaluation clip, reviewed labels, and installed identity-model weights were supplied for this run; no paid provider calls or model downloads were authorized or made.",
+        "total_ms": null,
+        "first_searchable_ms": null,
+        "first_visual_searchable_ms": null,
+        "visual_calls": null,
+        "fallback_count": null,
+        "timeout_count": null,
+        "invalid_output_count": null,
+        "role_coverage": null,
+        "role_error_rate": null,
+        "dialogue_speaker_accuracy": null,
+        "diarization_error_rate": null,
+        "audio_total_ms": null,
+        "visual_model_load_ms": null
+      }
+    },
+    "new_visual": {
+      "cold": {
+        "status": "not_measured",
+        "reason": "No local evaluation clip, reviewed labels, and installed identity-model weights were supplied for this run; no paid provider calls or model downloads were authorized or made.",
+        "total_ms": null,
+        "first_searchable_ms": null,
+        "first_visual_searchable_ms": null,
+        "visual_calls": null,
+        "fallback_count": null,
+        "timeout_count": null,
+        "invalid_output_count": null,
+        "role_coverage": null,
+        "role_error_rate": null,
+        "dialogue_speaker_accuracy": null,
+        "diarization_error_rate": null,
+        "audio_total_ms": null,
+        "visual_model_load_ms": null
+      },
+      "warm": {
+        "status": "not_measured",
+        "reason": "No local evaluation clip, reviewed labels, and installed identity-model weights were supplied for this run; no paid provider calls or model downloads were authorized or made.",
+        "total_ms": null,
+        "first_searchable_ms": null,
+        "first_visual_searchable_ms": null,
+        "visual_calls": null,
+        "fallback_count": null,
+        "timeout_count": null,
+        "invalid_output_count": null,
+        "role_coverage": null,
+        "role_error_rate": null,
+        "dialogue_speaker_accuracy": null,
+        "diarization_error_rate": null,
+        "audio_total_ms": null,
+        "visual_model_load_ms": null
+      }
+    },
+    "new_audiovisual": {
+      "cold": {
+        "status": "not_measured",
+        "reason": "No local evaluation clip, reviewed labels, and installed identity-model weights were supplied for this run; no paid provider calls or model downloads were authorized or made.",
+        "total_ms": null,
+        "first_searchable_ms": null,
+        "first_visual_searchable_ms": null,
+        "visual_calls": null,
+        "fallback_count": null,
+        "timeout_count": null,
+        "invalid_output_count": null,
+        "role_coverage": null,
+        "role_error_rate": null,
+        "dialogue_speaker_accuracy": null,
+        "diarization_error_rate": null,
+        "audio_total_ms": null,
+        "visual_model_load_ms": null
+      },
+      "warm": {
+        "status": "not_measured",
+        "reason": "No local evaluation clip, reviewed labels, and installed identity-model weights were supplied for this run; no paid provider calls or model downloads were authorized or made.",
+        "total_ms": null,
+        "first_searchable_ms": null,
+        "first_visual_searchable_ms": null,
+        "visual_calls": null,
+        "fallback_count": null,
+        "timeout_count": null,
+        "invalid_output_count": null,
+        "role_coverage": null,
+        "role_error_rate": null,
+        "dialogue_speaker_accuracy": null,
+        "diarization_error_rate": null,
+        "audio_total_ms": null,
+        "visual_model_load_ms": null
+      }
+    }
+  },
+  "source": {
+    "asset_id": null,
+    "plan_id": null,
+    "start_ms": null,
+    "end_ms": null
+  },
+  "generated_for": "2026-10-15",
+  "validation": {
+    "synthetic_tests_are_accuracy_evidence": false,
+    "real_animation_accuracy_verified": false,
+    "real_speedup_verified": false
+  }
+}

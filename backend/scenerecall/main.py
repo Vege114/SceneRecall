@@ -242,6 +242,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     register_workflow_routes(app, library, queue, settings, public_job)
     register_organization_routes(app, library, queue, search)
     register_bangumi_routes(app, library, search)
+    from .visual_identity_api import register_visual_identity_routes
+    from .audio_identity_api import register_audio_routes
+    register_visual_identity_routes(app, library, search)
+    app.state.audio_identity = register_audio_routes(app, library, characters,
+        refresh=lambda asset_id: search.sync_asset(library.records(asset_id), asset_id=asset_id))
 
     @app.get("/api/assets")
     def assets():
