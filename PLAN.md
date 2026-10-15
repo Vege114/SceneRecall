@@ -12,7 +12,7 @@
 
 同时修复同一时钟刻度内批量创建任务的排序：以数据库持久插入顺序打破时间戳并列，保证多集剧情按入队顺序衔接，重启后顺序仍一致。
 
-Windows 原生文件窗口使用独立参数和 UTF-8 JSON，隐藏额外 PowerShell 控制台。CLI 识别本安装的 Windows launcher／Python redirector／真实监听进程，并通过仅当前用户与 SYSTEM 可访问的命名事件请求 Uvicorn 正常退出，走原任务保存流程；保留 dry-run、目标核验及不强杀的边界。macOS 原有 AppKit 文件窗口、POSIX 进程发现和 SIGTERM 退出流程保留。
+Windows 原生文件窗口使用独立参数和 UTF-8 JSON，隐藏额外 PowerShell 控制台。CLI 识别本安装的 Windows launcher／Python redirector／真实监听进程，并通过仅当前用户与 SYSTEM 可访问的命名事件请求 Uvicorn 正常退出，走原任务保存流程；保留 dry-run、目标核验及不强杀的边界。macOS 原有 AppKit 文件窗口、用户／安装／目录／端口核验和 SIGTERM 退出流程保留；解释器比对同时覆盖 Framework Python 重执行后的真实系统二进制。
 
 Codex npm `.cmd` 在 Windows 解析成 Node 与 CLI 脚本的独立参数，不经 shell；补齐用户目录环境。Windows 子进程先加入 Job Object，再启动 CLI，超时／取消时清理完整进程树和管道；macOS 继续使用原进程组逻辑。本地视觉 worker 改用跨平台线程读取完整 JSON 行并限制等待时间，补充断管、EOF、超时和重启检查。
 

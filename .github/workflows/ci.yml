@@ -28,9 +28,11 @@ jobs:
       - name: Install FFmpeg on macOS
         if: runner.os == 'macOS'
         run: brew install ffmpeg
+      - run: ffmpeg -version
+      - run: ffprobe -version
       - run: uv sync --frozen --python 3.12 --extra dev
       - run: npm ci --ignore-scripts
-      - run: uv run --frozen pytest -q
+      - run: uv run --frozen pytest -q -rs
       - run: uv run --frozen ruff check backend tests
       - run: npm ci
         working-directory: frontend

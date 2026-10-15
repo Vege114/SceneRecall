@@ -4,6 +4,7 @@ from functools import partial
 import http.client
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -34,7 +35,7 @@ def target(tmp_path, monkeypatch):
     process.pid = 12345
     process.uids = Mock(return_value=SimpleNamespace(effective=os.geteuid()))
     process.cwd.return_value = str(tmp_path)
-    process.exe.return_value = sys.executable
+    process.exe.return_value = psutil.Process().exe()
     process.environ.return_value = {"HOME": str(tmp_path / "home")}
     process.cmdline.return_value = [sys.executable, str(Path(sysconfig.get_path("scripts")) / "scenerecall"),
                                    "--data-dir", str(data_dir), "--port", str(TEST_PORT)]
@@ -102,6 +103,21 @@ def test_relative_launcher_and_equals_arguments_are_identified(target):
     process.cmdline.return_value[1] = os.path.relpath(process.cmdline.return_value[1], process.cwd.return_value)
     process.cmdline.return_value[2:] = ["start", "--data-dir=library", f"--port={TEST_PORT}"]
     assert service.find_service(data_dir, TEST_PORT) is process
+    process.terminate.assert_not_called()
+
+
+def test_macos_framework_launcher_matches_the_current_os_interpreter(target, tmp_path, monkeypatch):
+    process, data_dir = target
+    framework = tmp_path / "Python.framework" / "Versions" / "3.12"
+    public_python = framework / "bin" / "python3.12"
+    real_python = framework / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    monkeypatch.setattr(sys, "executable", str(public_python))
+    monkeypatch.setattr(service.psutil, "Process", lambda: SimpleNamespace(exe=lambda: str(real_python)))
+    process.exe.return_value = str(real_python)
+    assert service.find_service(data_dir, TEST_PORT) is process
+    # A different OS executable remains unrelated even with a matching script.
+    process.exe.return_value = str(framework / "another-python")
+    assert service.find_service(data_dir, TEST_PORT) is None
     process.terminate.assert_not_called()
 
 
@@ -293,6 +309,7 @@ def windows_target(target, monkeypatch):
     monkeypatch.setattr(service, "WINDOWS", True)
     current = SimpleNamespace(username=lambda: "MACHINE\\tester", exe=lambda: sys.executable)
     monkeypatch.setattr(service.psutil, "Process", lambda: current)
+    process.exe.return_value = sys.executable
     process.username.return_value = "machine\\TESTER"
     process.cmdline.return_value[1] += ".exe"
     process.environ.return_value = {"USERPROFILE": process.environ.return_value["HOME"]}
@@ -464,6 +481,35 @@ def _http_status(port, path):
         connection.close()
 
 
+def _server_diagnostics(process, port, log_path):
+    """Inspect only the isolated test child; never print its environment."""
+    details = [f"test PID={process.pid}, port={port}, sys.executable={sys.executable}"]
+    try:
+        details.append(f"current OS executable={psutil.Process().exe()}")
+        owner = psutil.Process(process.pid)
+        for child in (owner, *owner.children(recursive=True)):
+            try:
+                details.append(str(child.as_dict(attrs=["pid", "exe", "cmdline", "cwd"])))
+            except psutil.Error as exc:
+                details.append(f"test child identity unavailable: {exc}")
+    except psutil.Error as exc:
+        details.append(f"test process inspection unavailable: {exc}")
+    try:
+        output = log_path.read_text(encoding="utf-8", errors="replace")[-8000:]
+        details.append("isolated test log:\n" + output)
+    except OSError as exc:
+        details.append(f"test log unavailable: {exc}")
+    return re.sub(r"([?&]token=)[^&\s]+", r"\1<redacted>", "\n".join(details))
+
+
+def test_synthetic_server_failure_diagnostics_redact_session_tokens(tmp_path):
+    log = tmp_path / "server.log"
+    log.write_text("startup http://127.0.0.1:19321/?token=synthetic-secret-token\nHTTP 503", encoding="utf-8")
+    diagnostic = _server_diagnostics(SimpleNamespace(pid=os.getpid()), TEST_PORT, log)
+    assert "synthetic-secret-token" not in diagnostic
+    assert "token=<redacted>" in diagnostic and "HTTP 503" in diagnostic
+
+
 @contextmanager
 def _running_server(command, cwd, port, health_path, log_path):
     # A waiter reaps the child even while a separate stop CLI waits for its exit.
@@ -474,17 +520,22 @@ def _running_server(command, cwd, port, health_path, log_path):
         waiter.start()
         try:
             deadline = time.monotonic() + 30
+            last_result = "no HTTP response"
             while time.monotonic() < deadline:
                 if process.poll() is not None:
-                    pytest.fail(f"isolated test server exited with {process.returncode}; log: {log_path}")
+                    pytest.fail(f"isolated test server exited with {process.returncode}\n"
+                                + _server_diagnostics(process, port, log_path))
                 try:
-                    if _http_status(port, health_path) == 200:
+                    status = _http_status(port, health_path)
+                    last_result = f"HTTP {status} for {health_path}"
+                    if status == 200:
                         break
-                except (OSError, http.client.HTTPException):
-                    pass
+                except (OSError, http.client.HTTPException) as exc:
+                    last_result = f"{type(exc).__name__}: {exc}"
                 time.sleep(0.05)
             else:
-                pytest.fail(f"isolated test server did not become healthy; log: {log_path}")
+                pytest.fail(f"isolated test server did not become healthy: {last_result}\n"
+                            + _server_diagnostics(process, port, log_path))
             yield process
         finally:
             if process.poll() is None:
@@ -528,7 +579,8 @@ def test_real_cli_stop_preserves_library_and_refuses_wrong_directory(tmp_path, s
         assert wrong.returncode == 1 and "无法确认" in wrong.stderr
         assert process.poll() is None and _http_status(port, "/api/health") == 200
         dry_run = run_stop([str(launcher), "stop", "--data-dir", str(data_dir), "--port", str(port), "--dry-run"])
-        assert dry_run.returncode == 0 and "未发送信号" in dry_run.stdout
+        assert dry_run.returncode == 0 and "未发送信号" in dry_run.stdout, (
+            dry_run.stderr + "\n" + _server_diagnostics(process, port, tmp_path / "server.log"))
         assert process.poll() is None and _http_status(port, "/api/health") == 200
         stop = run_stop([str(launcher), "stop", "--data-dir", str(data_dir), "--port", str(port), "--timeout=5"])
         assert stop.returncode == 0, stop.stderr
@@ -542,8 +594,9 @@ def test_real_cli_stop_preserves_library_and_refuses_wrong_directory(tmp_path, s
 
 def test_real_unrelated_http_server_is_not_stopped(tmp_path):
     port = _unused_port()
+    (tmp_path / "health.txt").write_text("synthetic test server", encoding="utf-8")
     command = [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", str(tmp_path)]
-    with _running_server(command, tmp_path, port, "/", tmp_path / "http.log") as process:
+    with _running_server(command, tmp_path, port, "/health.txt", tmp_path / "http.log") as process:
         with pytest.raises(service.ServiceError, match="无法确认.*未发送停止信号"):
             service.stop_service(tmp_path / "not-a-library", port)
-        assert process.poll() is None and _http_status(port, "/") == 200
+        assert process.poll() is None and _http_status(port, "/health.txt") == 200

@@ -4,7 +4,7 @@
 
 本轮从同步后的 `ebdc758` 开始，保留 macOS 现有功能，增加 Windows 平台分支。验证环境为 Windows 11（build 26200）、Python 3.12.6、Node.js 22.11.0、FFmpeg / ffprobe 9.0.2；Python 与 npm 均按仓库锁文件安装。
 
-已验证 Windows 真实 CLI 启停：默认与显式 start、uv launcher / venv redirector 发现、不同资料目录拒停、dry-run、重复停止、无关 HTTP 服务保护、正常 lifespan 退出，以及用户文件和设置保留。命名事件的原生 DACL 只允许当前用户 SID 与 SYSTEM，服务结束后对象释放。另在中文临时资料目录实际启动已构建应用：首页及两个静态资源均返回 200，未登录初始化返回 401，建立会话后 bootstrap 返回 200，空资料库读取成功，停止命令与服务均以 0 退出。
+已验证 Windows 真实 CLI 启停：默认与显式 start、uv launcher / venv redirector 发现、不同资料目录拒停、dry-run、重复停止、无关 HTTP 服务保护、正常 lifespan 退出，以及用户文件和设置保留。macOS CI 使用 Framework Python，进一步按当前进程的真实系统二进制核验解释器，保留其余身份检查；无关 HTTP 服务测试改用明确的合成健康文件，失败时附本测试进程的脱敏诊断。命名事件的原生 DACL 只允许当前用户 SID 与 SYSTEM，服务结束后对象释放。另在中文临时资料目录实际启动已构建应用：首页及两个静态资源均返回 200，未登录初始化返回 401，建立会话后 bootstrap 返回 200，空资料库读取成功，停止命令与服务均以 0 退出。
 
 同时间戳任务加入 SQLite 持久插入顺序作为排序次序，保留普通时间戳排序；确定性回归冻结时钟，检查多集剧情次序、更新与重启后顺序不变。
 

@@ -11,7 +11,6 @@ import math
 import os
 from pathlib import Path
 import socket
-import sys
 import sysconfig
 import time
 
@@ -86,11 +85,10 @@ def _matches(process: psutil.Process, data_dir: Path, port: int) -> bool:
     launcher = Path(sysconfig.get_path("scripts")) / script
     if (cwd / argv[1]).resolve() != launcher.resolve():
         return False
-    # Windows venv python.exe is a redirector. Its actual Python child uses the
-    # base executable, while both processes carry the same console-script argv.
-    # Compare to our own OS executable to select the server rather than that
-    # waiting redirector; launcher identity still pins the virtual environment.
-    interpreter = psutil.Process().exe() if WINDOWS else sys.executable
+    # Compare OS executable identities on every platform. Windows venv redirectors
+    # and macOS framework Python.app launchers can differ from sys.executable;
+    # the exact console-script path still pins this virtual environment.
+    interpreter = psutil.Process().exe()
     if Path(process.exe()).resolve() != Path(interpreter).resolve():
         return False
     # The server may have been started with a different HOME under the same UID.
