@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 PREPARATION_PROMPT_VERSION = "scene-preparation-v1"
 SUBTITLE_PREPARATION_PROMPT_VERSION = "scene-subtitle-preparation-v2"
-VISUAL_PREPARATION_PROMPT_VERSION = "scene-visual-preparation-v4"
-CONTEXTUAL_VISION_PROMPT_VERSION = "scene-contextual-vision-v6"
+VISUAL_PREPARATION_PROMPT_VERSION = "scene-visual-preparation-v5"
+CONTEXTUAL_VISION_PROMPT_VERSION = "scene-contextual-vision-v7"
 RECONCILIATION_PROMPT_VERSION = "scene-reconciliation-v3"
 MAX_CORE_FRAMES = 56
 MAX_CONTEXT_FRAMES = 8
@@ -77,6 +77,7 @@ class SceneInference(SceneValue):
 class PreparedChunk(SceneValue):
     content_kind: Literal["narrative", "credits"] = "narrative"
     entities: list[dict] = Field(default_factory=list, max_length=128)
+    events: list[dict] = Field(default_factory=list, max_length=128)
     frame_ids: list[str] = Field(min_length=1, max_length=MAX_CORE_FRAMES)
     summary: str = Field(min_length=1, max_length=2000)
     scene_key: str = Field(default="", max_length=120)
@@ -86,6 +87,8 @@ class PreparedChunk(SceneValue):
     representative_frame_ids: list[str] = Field(min_length=1, max_length=8)
     deep_frame_ids: list[str] = Field(default_factory=list, max_length=MAX_CORE_FRAMES)
     needs_deep: bool
+    needs_identity_review: bool = False
+    needs_action_deep: bool | None = None
     reason: str = Field(max_length=2000)
     continues_previous: bool
 
@@ -286,6 +289,14 @@ def validate_visual_preparation(raw, frames: list[dict], cue_ids: set[str], *, h
             if not isinstance(evidence, list) or not evidence or any(not isinstance(value, str) for value in evidence):
                 raise ValueError("片段角色实体必须引用当前画面")
             _references(evidence, own)
+        from .providers import Event
+        for raw_event in chunk.events:
+            event = Event.model_validate(raw_event)
+            _references(event.evidence_frame_ids, own)
+            if not set(event.actor_ids + event.target_ids).issubset(set(identities)):
+                raise ValueError("unknown participant")
+            if not chunk_start <= event.start_ms <= event.end_ms <= chunk_end or event.start_ms >= chunk_end:
+                raise ValueError("event outside window")
         for fact in chunk.visual_facts:
             _references(fact.frame_ids, own)
         for fact in chunk.dialogue_facts:
@@ -295,15 +306,18 @@ def validate_visual_preparation(raw, frames: list[dict], cue_ids: set[str], *, h
             _references(inference.cue_ids, own_cues & cue_ids)
             if not inference.frame_ids and not inference.cue_ids:
                 raise ValueError("推断必须引用至少一项输入证据")
-        if chunk.needs_deep and not chunk.reason.strip():
+        if (chunk.needs_deep if chunk.needs_action_deep is None else chunk.needs_action_deep) and not chunk.reason.strip():
             raise ValueError("深入理解标记必须说明原因")
     # Older cached/fixture responses may omit optional navigation metadata.
     values = result.model_dump(exclude_unset=True)
     for chunk in values["chunks"]:
+        if chunk.get("needs_action_deep") is not None:
+            chunk["needs_deep"] = chunk["needs_action_deep"]
         if chunk.get("content_kind") == "credits":
             # Keep all original frames and subtitle references. Credits are
             # episode metadata, not story facts, characters, or deep work.
             chunk.update(summary="片头／片尾演职员信息", visual_facts=[], dialogue_facts=[],
-                         inferences=[], entities=[], needs_deep=False, reason="", scene_key="",
+                         inferences=[], entities=[], events=[], needs_deep=False,
+                         needs_action_deep=False, needs_identity_review=False, reason="", scene_key="",
                          continues_previous=False)
     return values

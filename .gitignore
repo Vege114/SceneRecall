@@ -6,6 +6,7 @@
 *.mkv
 *.mov
 .venv/
+.venv-visual/
 __pycache__/
 *.pyc
 .pytest_cache/

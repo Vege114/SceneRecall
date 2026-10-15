@@ -89,7 +89,7 @@ async def test_request_local_versions_preserve_legacy_instructions_without_concu
     await asyncio.gather(legacy(), providers.prepare_visual("scene", frames, [], None, None))
     prompts = [payload["messages"][0]["content"] for payload in requests]
     old = next(prompt for prompt in prompts if "scene-visual-preparation-v3" in prompt)
-    new = next(prompt for prompt in prompts if "scene-visual-preparation-v4" in prompt)
+    new = next(prompt for prompt in prompts if "scene-visual-preparation-v5" in prompt)
     assert "content_kind=credits" not in old
     assert "content_kind=credits" in new
     assert prompt_versions({}) == LEGACY_PROMPT_VERSIONS

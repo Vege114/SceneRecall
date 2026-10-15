@@ -159,6 +159,9 @@ class CharacterStore:
                 or not isinstance(registry.get("profiles"), dict)
                 or not isinstance(registry.get("redirects"), dict)):
             raise ValueError("角色档案格式或所属作品无效")
+        if (type(registry.get("semantic_revision", registry["revision"])) is not int
+                or not 0 <= registry.get("semantic_revision", registry["revision"]) <= registry["revision"]):
+            raise ValueError("角色语义修订版本无效")
         policy = registry.get("cast_policy")
         if policy is not None:
             if (not isinstance(policy, dict) or policy.get("mode") != "bangumi"
@@ -421,6 +424,7 @@ class CharacterStore:
             # last-viewed work policy here would mutate revisions on every view.
             result.pop("cast_policy", None)
         if result != registry:
+            result["semantic_revision"] = registry.get("semantic_revision", registry["revision"]) + 1
             result["revision"] += 1
         CharacterStore._validate_structure(result, scope)
         return result
@@ -475,7 +479,10 @@ class CharacterStore:
                 observations = [row for row in self.library.observations(asset["id"])
                                 if not any(start <= row["start_ms"] and row["end_ms"] <= end
                                            for start, end in deep_coverage)]
-                for record in sorted(observations + scenes, key=lambda row: (row["start_ms"], row["end_ms"], row["id"])):
+                from .visual_identity import decorate_identity_records
+                active_records = decorate_identity_records(self.library, asset["id"], sorted(
+                    observations + scenes, key=lambda row: (row["start_ms"], row["end_ms"], row["id"])))
+                for record in active_records:
                     for entity in record.get("entities", []):
                         resolved = self.library.organization.resolve_reference(
                             asset["id"], record, entity.get("character_id"), registry, catalog=organization)
@@ -518,7 +525,8 @@ class CharacterStore:
                         for key in ("name_cn", "name_ja", "name_en", "name_variants")},
                      "reference_policy": BANGUMI_REFERENCE_POLICY}
                     if external_sources(profile) else {})}
-                for profile in catalog["profiles"] if profile["appearance_count"] > 0 or external_sources(profile)
+                for profile in catalog["profiles"] if (profile["appearance_count"] > 0 or external_sources(profile)
+                                                       or profile.get("user_edited"))
             ]}
             anime_profile = self.library.get_asset(asset_id).get("anime_profile") or {}
             if anime_profile.get("mode") == "bangumi":
@@ -571,7 +579,9 @@ class CharacterStore:
             registry = self._read(scope)
             self._check_revision(registry, expected_revision)
             policy = self.cast_policy(registry, asset.get("anime_profile"))
-            result = Observation.model_validate(copy.deepcopy(record)).model_dump()
+            from .visual_identity import decorate_identity_records
+            result = Observation.model_validate(decorate_identity_records(
+                self.library, asset_id, [copy.deepcopy(record)], strict=True)[0]).model_dump()
             if result["asset_id"] != asset_id or result["end_ms"] > asset["duration_ms"]:
                 raise ValueError("角色证据不属于当前视频时间轴")
             for frame_id in result["evidence_frame_ids"]:
@@ -581,6 +591,13 @@ class CharacterStore:
                 if not set(entity.get("evidence_frame_ids", [])).issubset(result["evidence_frame_ids"]):
                     raise ValueError("角色证据引用不存在的画面")
                 self._representative(asset_id, entity, result)
+                identity_status = entity.get("identity_status", entity.get("association_status"))
+                if identity_status in {"candidate", "unknown"}:
+                    # Retrieval suggestions must not become facts merely because
+                    # a provider copied the suggested dossier ID into its output.
+                    if identity_status == "candidate" and entity.get("character_id"):
+                        entity.setdefault("candidate_character_id", entity["character_id"])
+                    entity["character_id"] = None
                 explicit = entity.get("character_id")
                 if explicit is not None:
                     self._resolve(registry, explicit, strict=True)
@@ -590,6 +607,9 @@ class CharacterStore:
                             or not 0.65 <= confidence <= 1):
                         raise ValueError("角色匹配可信度不足，请保留为待确认人物")
             for entity in result["entities"]:
+                if entity.get("identity_status", entity.get("association_status")) in {"candidate", "unknown"}:
+                    entity["character_id"] = None
+                    continue
                 is_character = entity.get("is_character", entity.get("kind", "person") in {
                     "person", "character", "anthropomorphic_character",
                 })
@@ -664,6 +684,34 @@ class CharacterStore:
             atomic_json(self._path(scope), registry)
             return result
 
+    def create(self, asset_id: str, payload: dict) -> dict:
+        """Create a human-supplied identity before its first video appearance."""
+        from .library import uid
+        with self.library.lock:
+            asset = self.library.get_asset(asset_id)
+            scope = scope_id(asset)
+            registry = self._read(scope)
+            if not self.cast_policy(registry, asset.get("anime_profile"))["allow_new_profiles"]:
+                raise ValueError("已绑定角色名单的作品请使用现有角色档案；未知人物保留为局部实体")
+            name = named_identity(payload.get("name"))
+            aliases = payload.get("aliases", [])
+            description = payload.get("description", "")
+            if (name is None or not isinstance(aliases, list) or len(aliases) > 100
+                    or any(not isinstance(value, str) or len(value) > 2000 for value in aliases)
+                    or not isinstance(description, str) or len(description) > 20000):
+                raise ValueError("请填写真实角色名称和有效的档案字段")
+            timestamp = now()
+            identity = uid("character")
+            profile = {"id": identity, "name": name, "aliases": unique(aliases), "description": description.strip(),
+                       "notes": "", "appearance": [], "representative": None, "user_edited": True,
+                       "edited_fields": ["aliases", "description", "name"], "created_at": timestamp,
+                       "updated_at": timestamp}
+            registry["profiles"][identity] = profile
+            registry["semantic_revision"] = registry.get("semantic_revision", registry["revision"]) + 1
+            registry["revision"] += 1
+            atomic_json(self._path(scope), registry)
+            return next(row for row in self.catalog(asset_id)["profiles"] if row["id"] == identity)
+
     def update(self, asset_id: str, character_id: str, payload: dict) -> dict:
         with self.library.lock:
             scope = scope_id(self.library.get_asset(asset_id))
@@ -694,6 +742,10 @@ class CharacterStore:
             profile["edited_fields"] = sorted(set(profile["edited_fields"]) | payload.keys())
             profile["user_edited"] = True
             profile["updated_at"] = now()
+            # Display names/aliases are resolved at read/index time; changing
+            # them is not a new observation or a reason to re-run plot models.
+            registry["semantic_revision"] = registry.get("semantic_revision", registry["revision"]) + (
+                0 if set(payload).issubset({"name", "aliases"}) else 1)
             registry["revision"] += 1
             atomic_json(self._path(scope), registry)
             return next(profile for profile in self.catalog(asset_id)["profiles"] if profile["id"] == resolved)
@@ -712,6 +764,7 @@ class CharacterStore:
             self._remember_external_identity(registry, registry["profiles"][resolved])
             del registry["profiles"][resolved]
             registry["redirects"][resolved] = None
+            registry["semantic_revision"] = registry.get("semantic_revision", registry["revision"]) + 1
             registry["revision"] += 1
             atomic_json(self._path(scope), registry)
             return {"deleted_id": resolved, "scope_id": scope, "revision": registry["revision"]}
@@ -782,6 +835,7 @@ class CharacterStore:
             kept["updated_at"] = now()
             del registry["profiles"][source]
             registry["redirects"][source] = target
+            registry["semantic_revision"] = registry.get("semantic_revision", registry["revision"]) + 1
             registry["revision"] += 1
             atomic_json(self._path(scope), registry)
             return next(profile for profile in self.catalog(asset_id)["profiles"] if profile["id"] == target)
@@ -793,7 +847,8 @@ class CharacterStore:
             scope = scope_id(asset)
             registry = self._read(scope)
             policy = self.cast_policy(registry, asset.get("anime_profile"))
-            result = copy.deepcopy(records)
+            from .visual_identity import decorate_identity_records
+            result = decorate_identity_records(self.library, asset_id, copy.deepcopy(records))
             for record in result:
                 for entity in record.get("entities", []):
                     original = entity.get("character_id")
@@ -807,7 +862,8 @@ class CharacterStore:
                                       aliases=list(profile["aliases"]), character_user_edited=profile["user_edited"])
                     elif original:
                         entity.update(character_id=None, character_name=None, name=None, aliases=[])
-            return result
+            from .identity_scene import project_actions
+            return [project_actions(record) for record in result]
 
     def validate_all(self) -> None:
         """Verify registry and evidence references before restoring any backup file."""

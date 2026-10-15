@@ -63,9 +63,18 @@ def split_visual_args(args, index):
         if "segments" in data:
             data["segments"] = [{**segment, "cue_ids": [value for value in segment["cue_ids"] if value in ids]}
                                 for segment in data["segments"] if set(segment["cue_ids"]) & ids]
+        if "speaker_dialogue" in data:
+            data["speaker_dialogue"] = [row for row in data["speaker_dialogue"]
+                                        if row["start_ms"] < b and row["end_ms"] > a]
         data.pop("omitted_cues", None)
         data["notice"] = "细分批次沿用原批次的字幕采样；仅引用与当前子范围相交的字幕。"
-        result.append(copy.deepcopy([core, reference, data, *args[3:]]))
+        child = copy.deepcopy([core, reference, data, *args[3:]])
+        if len(child) > 4 and child[4]:
+            allowed = {frame["id"] for frame in core}
+            for key in ("identity_regions", "region_images"):
+                if key in child[4]:
+                    child[4][key] = [row for row in child[4][key] if row["frame_id"] in allowed]
+        result.append(child)
     return result
 
 
@@ -78,8 +87,7 @@ def join_visual_results(results, args):
         unresolved.extend(result.get("unresolved", []))
         for number, raw in enumerate(result["chunks"]):
             chunk = copy.deepcopy(raw)
-            for entity in chunk.get("entities", []):
-                entity["id"] = f"c{child_index}_{entity['id']}"
+            namespace_entities(chunk, f"c{child_index}_")
             if (number == 0 and chunks and chunk.get("continues_previous")
                     and chunk.get("content_kind") != "credits" and chunks[-1].get("content_kind") != "credits"):
                 previous = chunks[-1]
@@ -91,9 +99,10 @@ def join_visual_results(results, args):
                 chunk["summary"] = previous["summary"] + "；" + chunk["summary"]
                 chunk["reason"] = (previous.get("reason", "") + "；" + chunk.get("reason", "")).strip("；")
                 chunk["scene_key"] = chunk.get("scene_key") or previous.get("scene_key", "")
-                for field in ("visual_facts", "dialogue_facts", "inferences", "entities"):
+                for field in ("visual_facts", "dialogue_facts", "inferences", "entities", "events"):
                     chunk[field] = previous.get(field, []) + chunk.get(field, [])
                 chunk["needs_deep"] = previous["needs_deep"] or chunk["needs_deep"]
+                merge_review_flags(chunk, previous)
                 chunk["continues_previous"] = previous.get("continues_previous", False)
                 representatives = list(dict.fromkeys(previous["representative_frame_ids"] + chunk["representative_frame_ids"]))
                 chunk["representative_frame_ids"] = (representatives if len(representatives) <= 8
@@ -116,6 +125,23 @@ def join_visual_results(results, args):
         unresolved = unresolved[:63] + ["\n".join(unresolved[63:])]
     return validate_visual_preparation({"chunks": chunks, "unresolved": unresolved},
         frames, cue_ids, has_context=bool(context_frames), cues=cues, **bounds)
+
+
+def namespace_entities(record, prefix):
+    """Scope local entities and every event reference together, never by appearance."""
+    mapping = {entity["id"]: prefix + entity["id"] for entity in record.get("entities", [])}
+    for entity in record.get("entities", []):
+        entity["id"] = mapping[entity["id"]]
+    for event in record.get("events", []):
+        for key in ("actor_ids", "target_ids"):
+            event[key] = [mapping[identity] for identity in event.get(key, [])]
+
+
+def merge_review_flags(chunk, previous):
+    if "needs_action_deep" in chunk or "needs_action_deep" in previous:
+        chunk["needs_action_deep"] = chunk["needs_deep"]
+    if "needs_identity_review" in chunk or "needs_identity_review" in previous:
+        chunk["needs_identity_review"] = bool(chunk.get("needs_identity_review") or previous.get("needs_identity_review"))
 
 
 def deep_batch_size(profile):
@@ -154,6 +180,11 @@ LEGACY_PROMPT_VERSIONS = {
     "deep_analysis": "scene-contextual-vision-v5", "context_refresh": "scene-reconciliation-v2",
 }
 
+PRE_IDENTITY_PROMPT_VERSIONS = {
+    "transcript": "scene-subtitle-preparation-v2", "preparation": "scene-visual-preparation-v4",
+    "deep_analysis": "scene-contextual-vision-v6", "context_refresh": "scene-reconciliation-v3",
+}
+
 
 def prompt_versions(config=None):
     from .scene_preparation import (CONTEXTUAL_VISION_PROMPT_VERSION, RECONCILIATION_PROMPT_VERSION,
@@ -164,7 +195,7 @@ def prompt_versions(config=None):
         return current
     frozen = (config.get("scene_prompt_versions") or (config.get("scene_dependencies") or {}).get("prompt_versions")
               or LEGACY_PROMPT_VERSIONS)
-    if frozen not in (current, LEGACY_PROMPT_VERSIONS):
+    if frozen not in (current, LEGACY_PROMPT_VERSIONS, PRE_IDENTITY_PROMPT_VERSIONS):
         raise ValueError("任务使用了不支持的场景提示词版本；已保存结果仍然保留")
     return copy.deepcopy(frozen)
 
@@ -306,7 +337,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         self.search.sync_asset(self.library.records(asset_id), asset_id=asset_id)
         self._scene_metric(job_id, "index", elapsed=time.monotonic() - started)
 
-    def _scene_metric(self, job_id, stage, *, elapsed=0, requests=0, cache=0, usage=None, wall_elapsed=None):
+    def _scene_metric(self, job_id, stage, *, elapsed=0, requests=0, cache=0, usage=None, wall_elapsed=None,
+                      failure_code=None, fallback=0, degraded_reason=None):
         metrics = copy.deepcopy(self.get(job_id).get("stage_metrics", {}))
         item = metrics.setdefault(stage, {"request_count": 0, "elapsed_ms": 0, "cache_hits": 0, "usage": {}})
         item["elapsed_ms"] += round(elapsed * 1000)
@@ -314,6 +346,13 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             item["wall_elapsed_ms"] = round(wall_elapsed * 1000)
         item["request_count"] += requests
         item["cache_hits"] += cache
+        if failure_code in {"timeout", "invalid_output"}:
+            key = failure_code + "_count"
+            item[key] = item.get(key, 0) + 1
+        if fallback:
+            item["fallback_count"] = item.get("fallback_count", 0) + fallback
+        if degraded_reason:
+            item["degraded_reason"] = degraded_reason
         for key, value in (usage or {}).items():
             if isinstance(value, (int, float)):
                 item["usage"][key] = item["usage"].get(key, 0) + value
@@ -378,8 +417,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         inputs = run / "scene-inputs" / f"{digest([stage, versions[stage], unit])}.json"
         frozen = read_json(inputs)
         if frozen is None:
-            if stage == "preparation" and versions[stage] == prompt_versions()[stage]:
-                images += len((args[4] or {}).get("reference_frames", [])) if len(args) > 4 else 0
+            if stage == "preparation" and versions[stage] in {prompt_versions()[stage], "scene-visual-preparation-v4"}:
+                images += sum(len((args[4] or {}).get(key, [])) for key in ("reference_frames", "region_images")) if len(args) > 4 else 0
             frozen = {"args": args, "images": images}
             atomic_json(inputs, frozen)
         args, images = frozen["args"], frozen["images"]
@@ -404,6 +443,33 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             self._account_scene_receipt(job_id, receipt)
             self._scene_metric(job_id, stage, cache=1)
             return observation_data(receipt["data"])
+        # Preserve paid successes above. An unsuccessful frozen input must not
+        # overrule a later human correction on the next actual model request.
+        refreshed = self.refresh_scene_request_identity(job_id, stage, args)
+        if canonical(refreshed) != canonical(args):
+            previous_key = key
+            atomic_json(run / "scene-input-history" / f"{key}.json", frozen)
+            if stage == "preparation":
+                images += sum(len((refreshed[4] or {}).get(field, [])) - len((args[4] or {}).get(field, []))
+                              for field in ("reference_frames", "region_images"))
+            args = refreshed
+            frozen = {"args": args, "images": images}
+            atomic_json(inputs, frozen)
+            key = digest([STRATEGY, stage, versions[stage], unit, dependencies,
+                          model_identity(profile), canonical(args)])
+            output = run / "scene-receipts" / f"{key}.json"
+            refreshed_receipt = read_json(output)
+            if refreshed_receipt is None and not job["config"].get("force"):
+                matches = sorted(root.glob(f"analyses/*/scene-receipts/{key}.json"))
+                if matches:
+                    refreshed_receipt = read_json(matches[-1])
+            if refreshed_receipt is not None:
+                self._account_scene_receipt(job_id, refreshed_receipt)
+                self._scene_metric(job_id, stage, cache=1)
+                return observation_data(refreshed_receipt["data"])
+            old_split = read_json(run / "scene-splits" / f"{previous_key}.json") if stage == "preparation" else None
+            if old_split is not None:
+                atomic_json(run / "scene-splits" / f"{key}.json", old_split)
         if independent:
             self.check_transcript_dependencies(job["asset_id"], job["config"])
         else:
@@ -428,7 +494,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             except Exception as exc:
                 self.account(job_id, exc, call_id)
                 self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
-                                   requests=getattr(exc, "request_count", 0), usage=getattr(exc, "usage", {}))
+                                   requests=getattr(exc, "request_count", 0), usage=getattr(exc, "usage", {}),
+                                   failure_code=getattr(exc, "code", None))
                 if (stage == "preparation" and getattr(exc, "request_count", 0) > 0
                         and getattr(exc, "code", None) in {"timeout", "invalid_output"}):
                     index = visual_split_index(args[0])
@@ -436,6 +503,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         # Freeze the fallback decision before any child admission.
                         # Resuming this run never resubmits the exhausted parent.
                         atomic_json(split_path, {"index": index, "code": exc.code})
+                        self._scene_metric(job_id, stage, fallback=1)
                 raise
             receipt = {"receipt_id": key, "call_id": call_id, "job_id": job_id, "stage": stage, "data": result.data,
                        "usage": result.usage, "request_count": result.request_count, "cost": result.cost,
@@ -554,7 +622,10 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         # Compact before the legacy provider's whole-cast limit is checked. The
         # complete human dossier remains stored locally; omissions are explicit.
         context = copy.deepcopy(context)
-        context["profiles"] = sorted(context["profiles"], key=lambda p: p.get("updated_at", ""), reverse=True)[:16]
+        # Never prefilter retrieval by recency. All eligible identities survive;
+        # only optional prose is shortened. Local image retrieval selects Top-K
+        # *after* matching against the complete trusted gallery.
+        context["profiles"] = sorted(context["profiles"], key=lambda p: p["id"])
         for profile in context["profiles"]:
             for field in ("description", "notes"):
                 if len(profile.get(field, "")) > 1200:
@@ -566,10 +637,12 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 if values != shortened:
                     profile["notes"] = profile.get("notes", "") + f"（{field} 仅展示部分，完整人工档案仍保留）"
                 profile[field] = shortened
-        while encoded_size(canonical(context)) > 18000 and len(context["profiles"]) > 1:
-            context["profiles"].pop()
         if encoded_size(canonical(context)) > 18000:
-            raise ValueError("单个人物档案摘要超过上下文上限，请缩短人物名称或档案内容")
+            context["profiles"] = [{key: profile[key] for key in ("id", "name", "aliases") if key in profile}
+                                   for profile in context["profiles"]]
+            context["dossier_detail_omitted"] = True
+        if encoded_size(canonical(context)) > 18000:
+            raise ValueError("完整角色名单超过上下文上限，请启用本地视觉匹配选择相关档案；角色未被静默截断")
         return context
 
     def _scene_context(self, asset_id, config):
@@ -767,6 +840,9 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         "deep_batch_size": deep_batch_size(config["profile_snapshots"]["vision"])}
         if visual_batch_size(config) != CORE_FRAMES:
             dependencies["visual_batch_size"] = visual_batch_size(config)
+        if "identity_settings" in config:
+            dependencies["identity_settings"] = digest(config["identity_settings"])
+            dependencies["character_semantic_revision"] = store.dependencies(asset_id)["character_semantic_revision"]
         if config.get("scene_dependencies") and config["scene_dependencies"] != dependencies:
             raise ValueError("字幕或前序记忆已改变，请创建新任务；已保存的结果仍然保留")
         config["scene_dependencies"] = dependencies
@@ -785,6 +861,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 atomic_json(state_path, state)
             self._check_deepen_content(original)
             frames = self._scene_frames(asset_id, original["frame_ids"])
+            await self.prepare_scene_identity(job_id, frames, cues)
             self._scene_progress(job_id, "deep_analysis",
                 total=math.ceil(len(frames) / deep_batch_size(config["profile_snapshots"]["vision"])))
             chunk = {**original, "dependencies": dependencies, "run_id": run_id,
@@ -816,6 +893,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 self.update(job_id, config=config)
             paths = self.library.frame_paths(asset_id, [frame["id"] for frame in plan["frames"]])
             frames = [{**frame, "path": str(paths[frame["id"]])} for frame in plan["frames"]]
+            await self.prepare_scene_identity(job_id, frames, cues)
             prep_profile = config["profile_snapshots"]["preparation"]
             batches = list(cue_batches(cues))
             batch_size = visual_batch_size(config)
@@ -856,8 +934,9 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
                         self.update(job_id, message=f"并行视觉分块与简要索引：第 {index + 1}/{total} 组")
                         result = await self._scene_call(job_id, "preparation", str(index), prep_profile,
-                            self.providers.prepare_visual, [core, context_frames, subtitle_context(cues, segments, a, b),
-                                copy.deepcopy(frozen_memory), copy.deepcopy(frozen_characters)],
+                            self.providers.prepare_visual, [core, context_frames,
+                                self.scene_audio_context(job_id, subtitle_context(cues, segments, a, b), a, b),
+                                copy.deepcopy(frozen_memory), self.scene_identity_context(job_id, frozen_characters, core)],
                             images=math.ceil((len(core) + len(context_frames)) / 16))
                         prepared[index] = result
                         atomic_json(result_path, result_state)
@@ -880,7 +959,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
                     b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
                     local_cues = [c for c in cues if c["end_ms"] > a and c["start_ms"] < b]
-                    sub_context = subtitle_context(cues, segments, a, b)
+                    sub_context = self.scene_audio_context(job_id, subtitle_context(cues, segments, a, b), a, b)
                     if prepared is not None:
                         self.update(job_id, message=f"整理已完成的视觉分块：{index + 1}/{total}")
                         result = prepared[index]
@@ -890,14 +969,14 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         version = prompt_versions(config)["preparation"]
                         frozen = read_json(directory / "scene-inputs" / f"{digest(['preparation', version, str(index)])}.json")
                         args = (frozen["args"] if frozen is not None else
-                                [core, context_frames, sub_context, memory_for(chunks), self._scene_context(asset_id, config)])
+                                [core, context_frames, sub_context, memory_for(chunks),
+                                 self.scene_identity_context(job_id, self._scene_context(asset_id, config), core)])
                         result = await self._scene_call(job_id, "preparation", str(index), prep_profile,
                             self.providers.prepare_visual, args,
                             images=math.ceil((len(core) + len(context_frames)) / 16))
                     for number, raw in enumerate(result["chunks"]):
                         raw = copy.deepcopy(raw)
-                        for entity in raw.get("entities", []):
-                            entity["id"] = f"v{index}_{number}_{entity['id']}"
+                        namespace_entities(raw, f"v{index}_{number}_")
                         chosen = [frame_lookup[fid] for fid in raw["frame_ids"]]
                         start = a if number == 0 else chosen[0]["at_ms"]
                         next_raw = result["chunks"][number + 1] if number + 1 < len(result["chunks"]) else None
@@ -909,6 +988,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                                  "evidence_frame_ids": list(raw["frame_ids"]),
                                  "subtitle_ids": [c["id"] for c in local_cues if c["end_ms"] > start and c["start_ms"] < stop],
                                  "understanding_level": "initial", "dependencies": dependencies,
+                                 "audio_evidence": self.scene_audio_evidence(job_id, start, stop),
                                  "provenance": {"strategy": STRATEGY, "keyframe_plan_id": plan["id"],
                                                 "profile_id": prep_profile["id"], "model": prep_profile.get("model", "")},
                                  "uncertainties": [] if raw.get("content_kind") == "credits" else result.get("unresolved", []),
@@ -930,9 +1010,11 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                             chunk["summary"] = (previous["summary"] + "；" + chunk["summary"])[-6000:]
                             for key in ("frame_ids", "evidence_frame_ids", "subtitle_ids", "shot_ids"):
                                 chunk[key] = list(dict.fromkeys(previous.get(key, []) + chunk.get(key, [])))
-                            for key in ("visual_facts", "dialogue_facts", "inferences", "entities"):
+                            for key in ("visual_facts", "dialogue_facts", "inferences", "entities", "events"):
                                 chunk[key] = previous.get(key, []) + chunk.get(key, [])
                             chunk["needs_deep"] = previous["needs_deep"] or chunk["needs_deep"]
+                            merge_review_flags(chunk, previous)
+                            chunk["audio_evidence"] = self.scene_audio_evidence(job_id, chunk["start_ms"], stop)
                             chunk["deep_frame_ids"] = required_frames
                             chunk["scene_key"] = chunk["scene_key"] or previous.get("scene_key", "")
                             chunk["memory_before"] = previous["memory_before"]
@@ -1068,7 +1150,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 context = self._scene_context(asset_id, config)
                 registry = self.characters._read(context["scope_id"])
                 recent = list(dict.fromkeys(entity["character_id"] for part in reversed(parts)
-                    for entity in reversed(part.get("entities", [])) if entity.get("character_id")))[:16]
+                    for entity in reversed(part.get("entities", [])) if entity.get("character_id")))
                 existing = {entry["id"]: entry for entry in context["profiles"]}
                 fields = ("id", "name", "aliases", "description", "notes", "appearance", "user_edited",
                           "edited_fields", "representative", "updated_at", "created_at")
@@ -1092,7 +1174,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                             entry[field] = entry[field][-8:]
                     transient[identity] = entry
                 recent = [identity for identity in recent if identity in transient]
-                identities = list(dict.fromkeys([*recent, *existing]))[:16]
+                identities = list(dict.fromkeys([*recent, *existing]))
                 context["profiles"] = [transient.get(identity, existing.get(identity)) for identity in identities]
                 references = {}
                 for identity in recent:
@@ -1103,8 +1185,6 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                             "at_ms": 0, "box": representative.get("box")}
                 for reference in context["reference_frames"]:
                     references.setdefault(reference["character_id"], reference)
-                while encoded_size(canonical(context)) > 18000 and len(context["profiles"]) > 1:
-                    context["profiles"].pop()
                 allowed = {entry["id"] for entry in context["profiles"]}
                 context["reference_frames"] = [reference for identity, reference in references.items() if identity in allowed][:8]
                 context = self._bounded_scene_profiles(context)
@@ -1131,8 +1211,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 parts.append(part)
                 self._scene_progress(job_id, "deep_analysis", completed=progress_base + index + 1)
                 continue
-            local_subtitles = subtitle_context(cues, [], start, end)
-            context = context_with_parts()
+            local_subtitles = self.scene_audio_context(job_id, subtitle_context(cues, [], start, end), start, end)
+            context = self.scene_identity_context(job_id, context_with_parts(), current)
             self.update(job_id, message=f"深入理解 {start / 1000:.1f}–{end / 1000:.1f} 秒")
             part = await self._scene_call(job_id, "deep_analysis", [chunk["id"], index], profile,
                 self.providers.analyze, [current, start, end, context, local_subtitles, memory],
@@ -1162,7 +1242,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             parts.append(part)
             self._scene_progress(job_id, "deep_analysis", completed=progress_base + index + 1)
         result = {**chunk, "run_id": job["run_id"], "summary": "；".join(p["summary"] for p in parts),
-                  "understanding_level": "deep", "needs_deep": False, "reason": "",
+                  "understanding_level": "deep", "needs_deep": False, "needs_action_deep": False, "reason": "",
                   "memory_before": memory, "window_id": chunk["id"], "shot_id": "scene"}
         for key in ("entities", "events", "spatial_observations", "uncertainties", "visual_facts"):
             result[key] = [value for part in parts for value in part.get(key, [])]

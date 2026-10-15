@@ -211,6 +211,9 @@ export interface Entity {
   position?: string;
   character_id?: string;
   character_name?: string;
+  candidate_character_id?: string | null;
+  association_status?: 'confirmed' | 'candidate' | 'unknown';
+  association_source?: string;
 }
 export interface CharacterAppearance {
   asset_id: string;
@@ -254,7 +257,7 @@ export interface Observation {
   end_ms: number;
   summary: string;
   entities: Entity[];
-  events: { action: string; actor_ids?: string[]; target_ids?: string[]; start_ms?: number; end_ms?: number }[];
+  events: { action: string; actor_ids?: string[]; target_ids?: string[]; actor_names?: string[]; target_names?: string[]; start_ms?: number; end_ms?: number }[];
   spatial_observations?: { subject_id: string; relation: string; object_id?: string | null }[];
   uncertainties: string[];
   evidence_frame_ids: string[];
@@ -284,6 +287,9 @@ export interface SceneEvidence {
   context_stale?: boolean;
   stale_reasons?: string[];
   needs_deep?: boolean;
+  needs_identity_review?: boolean;
+  needs_action_deep?: boolean;
+  resolved_actions?: string[];
   visual_facts?: SceneFact[];
   dialogue_facts?: SceneFact[];
   inferences?: SceneFact[];
@@ -352,7 +358,7 @@ export interface Job {
   budget?: { max_requests?: number; max_cost?: number | null };
   uncertain_request_count?: number;
   cost_incomplete?: boolean;
-  stage_metrics?: Record<string, { request_count?: number; elapsed_ms?: number; wall_elapsed_ms?: number; cache_hits?: number; usage?: Record<string, number>; completed?: number; total?: number }>;
+  stage_metrics?: Record<string, { request_count?: number; elapsed_ms?: number; wall_elapsed_ms?: number; cache_hits?: number; fallback_count?: number; timeout_count?: number; invalid_output_count?: number; degraded_reason?: string; usage?: Record<string, number>; completed?: number; total?: number }>;
   stage_progress?: Record<string, { completed: number; total?: number | null; status: 'pending' | 'running' | 'completed' }>;
   created_at: string;
 }
@@ -391,7 +397,7 @@ export interface SearchResult extends SceneEvidence {
   season?: number | null;
   episode?: number | null;
   version?: string;
-  kind: 'visual' | 'subtitle' | 'scene';
+  kind: 'visual' | 'subtitle' | 'scene' | 'audio';
   start_ms: number;
   end_ms: number;
   text: string;
@@ -409,6 +415,11 @@ export interface SearchResult extends SceneEvidence {
   note?: string;
   favorite?: boolean;
   is_historical?: boolean;
+  speaker_id?: string;
+  character_id?: string | null;
+  candidate_character_id?: string | null;
+  association_status?: 'confirmed' | 'candidate' | 'unknown';
+  association_source?: string;
 }
 export interface SearchResponse {
   results: SearchResult[];
@@ -430,7 +441,7 @@ export const KIND_LABELS: Record<AssetKind, string> = { movie: '电影', animati
 export function keyframeReason(reason?: string): string { return ({ stable_pose: '稳定姿态', representative_pose: '代表姿态', content_change: '画面内容变化', shot_representative: '镜头代表帧' } as Record<string, string>)[reason || ''] || '内容代表帧'; }
 
 export function stageLabel(stage?: string): string {
-  return ({ transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
+  return ({ visual_identity: '人物检测与匹配', identity: '身份复核', audio: '音频识别', audio_extraction: '音频提取', diarization: '说话人分段', voice_matching: '声音匹配', audio_sync: '音画复核', transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
 }
 
 export function estimatedRequests(estimate: Estimate): string {

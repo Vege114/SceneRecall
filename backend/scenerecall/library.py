@@ -688,6 +688,8 @@ class Library:
     def records(self, asset_id: str | None = None) -> list[dict]:
         from .characters import CharacterStore
         from .scenes import SceneStore
+        from .identity_scene import project_actions, project_audio_evidence
+        from .audio_identity import AudioIdentityService
         characters = CharacterStore(self)
         result = []
         for asset in [self.get_asset(asset_id)] if asset_id else self.list_assets():
@@ -698,9 +700,15 @@ class Library:
             # duplicated as search hits where a new scene plan replaced them.
             observations = [row for row in observations if not any(
                 scene["start_ms"] < row["end_ms"] and scene["end_ms"] > row["start_ms"] for scene in scenes)]
-            for record in observations + scenes + self.subtitles(asset["id"]):
+            audio = AudioIdentityService(self, characters).records(asset["id"])
+            for scene in scenes:
+                if scene.get("audio_evidence"):
+                    scene["audio_evidence"] = project_audio_evidence(scene["audio_evidence"], audio)
+            for record in observations + scenes + self.subtitles(asset["id"]) + audio:
+                record = project_actions(record)
                 is_visual = "summary" in record
                 is_scene = "chunk_id" in record
+                is_audio = record.get("kind") == "audio"
                 related = [a for a in annotations if a["record_id"] == record["id"]]
                 text = record.get("summary", record.get("text", ""))
                 favorite, note, user_confirmed = False, "", False
@@ -727,6 +735,11 @@ class Library:
                     description += " " + " ".join(fact["text"] for field in ("visual_facts", "dialogue_facts", "inferences")
                                                   for fact in record.get(field, []))
                 # An unreadable cue remains visible for repair but is not searchable content.
+                if is_audio:
+                    if record.get("association_status") == "confirmed" and record.get("character_name"):
+                        names.extend([record["character_name"], *record.get("character_aliases", [])])
+                    text = text or "语音片段（无文字）"
+                    description = " ".join([text, *names])
                 if not text.strip():
                     continue
                 if is_visual:
@@ -736,6 +749,7 @@ class Library:
                             names.extend([entity.get("character_name", ""), *(entity.get("aliases") or [])])
                     for event in record.get("events", []):
                         description += " " + str(event.get("action", ""))
+                    description += " " + " ".join(record.get("resolved_actions", []))
                     description += " " + " ".join(names)
                 frames = record.get("evidence_frame_ids", [])
                 result.append({"id": record["id"], "record_id": record["id"], "asset_id": asset["id"],
@@ -743,7 +757,7 @@ class Library:
                                                                  "folder_id", "folder_ids", "tags")},
                                "work_id": asset["work_id"], "title": asset["title"], "series": asset.get("series", ""),
                                "season": asset.get("season"), "episode": asset.get("episode"), "version": asset["version"],
-                               "kind": "scene" if is_scene else "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
+                               "kind": "audio" if is_audio else "scene" if is_scene else "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
                                "end_ms": record["end_ms"], "text": description.strip(), "summary": text,
                                "subtitle_text": text if not is_visual else None, "language": record.get("language"),
                                "thumbnail": frames[0] if frames else None, "evidence_frame_ids": frames,
@@ -752,11 +766,17 @@ class Library:
                                   if key in record},
                                "source": record.get("source", "scene" if is_scene else "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
                                "entities": entities, "events": record.get("events", []),
+                               "resolved_actions": record.get("resolved_actions", []),
+                               **({key: record.get(key) for key in ("speaker_id", "character_id", "character_name",
+                                   "candidate_character_id", "association_status", "association_source", "candidates",
+                                   "audio_stream_index", "audio_ref", "audio_url", "model_versions", "overlap",
+                                   "subtitle_ids", "frame_ids", "dub_version", "visual_evidence")} if is_audio else {}),
                                "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
                                "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", []),
                                **({key: record.get(key) for key in ("content_kind", "chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
                                    "visual_facts", "dialogue_facts", "inferences", "representative_frame_ids",
-                                   "understanding_level", "needs_deep", "reason", "provenance", "dependencies",
+                                   "understanding_level", "needs_deep", "needs_identity_review", "needs_action_deep",
+                                   "audio_evidence", "reason", "provenance", "dependencies",
                                    "context_stale", "stale_reasons")} if is_scene else {})})
         return result
 
@@ -896,6 +916,10 @@ class Library:
                 SceneStore(restored).validate_all(asset_id)
             from .characters import CharacterStore
             CharacterStore(restored).validate_all()
+            from .audio_identity import validate_audio_artifacts
+            from .visual_identity import validate_visual_artifacts
+            validate_audio_artifacts(restored)
+            validate_visual_artifacts(restored)
             paths = [p for p in staging.rglob("*") if p.is_file() and p.name != "library.json"
                      and p != restored.organization.path]
             from .media import fingerprint
