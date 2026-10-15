@@ -133,7 +133,7 @@ async def test_failed_deep_replays_saved_parts_or_targets_exactly_once(scene_wor
     assert completed["stage_progress"]["deep_analysis"] == progress(2, 2)
     assert completed["request_count"] == 4 and counts(worker) == {"preparation": 1, "deep_analysis": 3}
     for folder in ("scene-inputs", "scene-receipts", "scenes"):
-        assert all('"stage_progress"' not in path.read_text() for path in (directory / folder).glob("*.json"))
+        assert all('"stage_progress"' not in path.read_text(encoding="utf-8") for path in (directory / folder).glob("*.json"))
 
 
 @pytest.mark.asyncio

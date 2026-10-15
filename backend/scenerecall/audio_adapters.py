@@ -29,7 +29,7 @@ def model_identity(path: str, family: str) -> str:
     for entry in entries:
         if entry.is_file():
             stat = entry.stat()
-            digest.update(f"{entry.relative_to(root) if root.is_dir() else entry.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+            digest.update(f"{entry.relative_to(root).as_posix() if root.is_dir() else entry.name}:{stat.st_size}:{stat.st_mtime_ns}".encode())
     return f"{family}:{digest.hexdigest()[:24]}"
 
 
@@ -89,7 +89,7 @@ def validate_ecapa_config(root: Path) -> None:
         return {key.value: value for key, value in node.value}
 
     try:
-        config = mapping(yaml.compose((root / "hyperparams.yaml").read_text()))
+        config = mapping(yaml.compose((root / "hyperparams.yaml").read_text(encoding="utf-8")))
     except yaml.YAMLError as exc:
         raise AudioUnavailable("ECAPA 本机 hyperparams.yaml 格式无效") from exc
     paths = mapping(mapping(config.get("pretrainer")).get("paths"))
@@ -130,7 +130,7 @@ class PyannoteDiarizer:
                 if not config_path.is_file():
                     raise AudioUnavailable("community-1 本机目录缺少 config.yaml")
                 try:
-                    config = yaml.safe_load(config_path.read_text())
+                    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
                 except yaml.YAMLError as exc:
                     raise AudioUnavailable("community-1 本机 config.yaml 格式无效") from exc
                 validate_pyannote_config(root, config)

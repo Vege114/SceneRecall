@@ -7,7 +7,6 @@ The precise source PTS is retained separately from rounded UI milliseconds.
 from __future__ import annotations
 
 import hashlib
-import os
 import queue
 import re
 import shutil
@@ -23,6 +22,7 @@ import cv2
 import numpy as np
 
 from .media import MediaError, _bounds, _source, _temp_output, _tool, probe
+from .file_io import atomic_replace
 
 ALGORITHM = "content-keyframes-v1"
 # Persist these with each plan so its selection thresholds remain inspectable
@@ -464,7 +464,7 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
                         from PIL import Image
                         with Image.open(image) as picture:
                             picture.save(temporary)
-                    os.replace(temporary, output)
+                    atomic_replace(temporary, output)
                 finally:
                     temporary.unlink(missing_ok=True)
                 result.append({**frame, "id": output.stem, "path": str(output), "requested_at_ms": frame["at_ms"]})

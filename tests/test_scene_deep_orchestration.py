@@ -82,7 +82,7 @@ async def test_continued_batches_union_important_frames_without_dropping_any(sce
     selected = select_frames(worker, monkeypatch,
         lambda frames: list(frames) if select_all else [frames[0], frames[1], frames[-1]])
     job = await execute(worker, enqueue(worker))
-    assert job["status"] == "completed", job
+    assert job["status"] == "completed", {"error": job.get("error"), "stage": job.get("stage"), "job": job}
     scenes = worker.store.list(worker.asset["id"])
     assert len(scenes) == 1 and len(scenes[0]["frame_ids"]) == 60
     assert sent_deep_frames(worker) == selected == scenes[0]["deep_frame_ids"]

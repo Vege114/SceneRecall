@@ -119,7 +119,11 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
     def list(self) -> list[dict]:
         import json
         with self.connect() as db:
-            return sorted([json.loads(r[0]) for r in db.execute("SELECT data FROM jobs")], key=lambda j: j["created_at"], reverse=True)
+            # Several jobs can share one system clock tick on Windows. Stable
+            # timestamp sorting must then keep newest insertion first, so the
+            # pipeline's reversed view still admits jobs in durable FIFO order.
+            rows = db.execute("SELECT data FROM jobs ORDER BY rowid DESC")
+            return sorted([json.loads(r[0]) for r in rows], key=lambda j: j["created_at"], reverse=True)
 
     def get(self, job_id: str) -> dict:
         import json
@@ -497,13 +501,21 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
         job = self.checkpoint(job_id)
         call_id = uid("call")
         receipt_key = receipt_key or call_id
-        receipt_path = receipt_path or (self.library.root / "runtime" / "call-receipts" / job_id / f"{receipt_key}.json")
+        if receipt_path is None:
+            directory = self.library.root / "runtime" / "call-receipts" / job_id
+            receipt_path = directory / f"{digest(receipt_key)}.json"
+            # Earlier macOS tasks used keys such as 'embedding:<digest>' as
+            # filenames. Reuse their paid result; new receipts use portable names.
+            if os.name != "nt" and not receipt_path.is_file():
+                legacy = directory / f"{receipt_key}.json"
+                if legacy.is_file():
+                    receipt_path = legacy
         cached = read_json(receipt_path)
         if cached is not None:
             self._account_scene_receipt(job_id, cached)
             return copy.deepcopy(cached["data"])
         await self.reserve_call(job_id, profile, call_id=call_id,
-            receipt_path=str(receipt_path.relative_to(self.library.root)), frames=frames,
+            receipt_path=receipt_path.relative_to(self.library.root).as_posix(), frames=frames,
             text_count=text_count, context_tokens=context_tokens)
         async def perform():
             started = time.monotonic()

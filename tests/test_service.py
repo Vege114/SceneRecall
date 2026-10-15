@@ -17,6 +17,7 @@ import psutil
 import pytest
 
 from scenerecall import service
+from scenerecall import windows_service
 
 
 TEST_PORT = 19321
@@ -24,10 +25,14 @@ TEST_PORT = 19321
 
 @pytest.fixture
 def target(tmp_path, monkeypatch):
+    # Keep the existing POSIX safety cases runnable on Windows too; dedicated
+    # cases below exercise the native Windows identity/control path.
+    monkeypatch.setattr(service, "WINDOWS", False)
+    monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
     data_dir = (tmp_path / "library").resolve()
     process = Mock(spec=psutil.Process)
     process.pid = 12345
-    process.uids.return_value = SimpleNamespace(effective=os.geteuid())
+    process.uids = Mock(return_value=SimpleNamespace(effective=os.geteuid()))
     process.cwd.return_value = str(tmp_path)
     process.exe.return_value = sys.executable
     process.environ.return_value = {"HOME": str(tmp_path / "home")}
@@ -52,6 +57,17 @@ def target(tmp_path, monkeypatch):
 def test_launch_arguments_resolve_in_server_context(tmp_path, args, relative_dir, port):
     assert service._launch_options(args, tmp_path, tmp_path / "home") == (
         (tmp_path / relative_dir).resolve(), port)
+
+
+def test_posix_backslash_spelling_retains_its_existing_path_meaning(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "WINDOWS", False)
+    assert service._path("~\\library", tmp_path, tmp_path / "home") == (tmp_path / "~\\library").resolve()
+
+
+def test_posix_port_check_does_not_need_windows_socket_constants(monkeypatch):
+    monkeypatch.setattr(service, "WINDOWS", False)
+    monkeypatch.delattr(socket, "SO_EXCLUSIVEADDRUSE", raising=False)
+    assert not service._port_busy(0)
 
 
 @pytest.mark.parametrize("args", [
@@ -256,6 +272,181 @@ def test_start_rejects_stop_options_before_creating_library(tmp_path, monkeypatc
     create_app.assert_not_called()
 
 
+def test_posix_start_keeps_original_uvicorn_entry_point(tmp_path, monkeypatch):
+    from scenerecall import main
+    import uvicorn
+
+    app = SimpleNamespace(state=SimpleNamespace(session_token="synthetic-test-token"))
+    monkeypatch.setattr(main, "create_app", Mock(return_value=app))
+    monkeypatch.setattr(main, "os", SimpleNamespace(name="posix"))
+    monkeypatch.setattr(sys, "argv", ["scenerecall", "start", "--data-dir", str(tmp_path), "--port", str(TEST_PORT)])
+    serve = Mock()
+    monkeypatch.setattr(uvicorn, "run", serve)
+    monkeypatch.setattr(windows_service, "shutdown_control", Mock(side_effect=AssertionError("POSIX used Windows control")))
+    main.run()
+    serve.assert_called_once_with(app, host="127.0.0.1", port=TEST_PORT, access_log=False)
+
+
+@pytest.fixture
+def windows_target(target, monkeypatch):
+    process, data_dir = target
+    monkeypatch.setattr(service, "WINDOWS", True)
+    current = SimpleNamespace(username=lambda: "MACHINE\\tester", exe=lambda: sys.executable)
+    monkeypatch.setattr(service.psutil, "Process", lambda: current)
+    process.username.return_value = "machine\\TESTER"
+    process.cmdline.return_value[1] += ".exe"
+    process.environ.return_value = {"USERPROFILE": process.environ.return_value["HOME"]}
+    return process, data_dir
+
+
+@pytest.mark.parametrize("mismatch", ["user", "launcher", "redirector", "data", "port", "wrapper"])
+def test_windows_unrelated_or_redirector_process_is_rejected(windows_target, tmp_path, mismatch):
+    process, data_dir = windows_target
+    if mismatch == "user":
+        process.username.return_value = "MACHINE\\another-user"
+    elif mismatch == "launcher":
+        process.cmdline.return_value[1] = str(tmp_path / "another-install" / "scenerecall.exe")
+    elif mismatch == "redirector":
+        process.exe.return_value = str(tmp_path / "venv-redirector.exe")
+    elif mismatch == "data":
+        process.cmdline.return_value[3] = str(tmp_path / "another-library")
+    elif mismatch == "port":
+        process.cmdline.return_value[5] = str(TEST_PORT + 1)
+    else:
+        process.cmdline.return_value = [sys.executable, "-c", "import scenerecall.main"]
+    assert service.find_service(data_dir, TEST_PORT) is None
+    process.terminate.assert_not_called()
+
+
+def test_windows_profile_and_case_insensitive_owner_match(windows_target):
+    process, _ = windows_target
+    process.cmdline.return_value[2:] = ["start"]
+    profile = Path(process.environ.return_value["USERPROFILE"])
+    assert service._matches(process, profile / "SceneRecallLibrary", 8765)
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_windows_stop_uses_cooperative_event_never_terminate(windows_target, monkeypatch, dry_run):
+    process, data_dir = windows_target
+    request = Mock()
+    monkeypatch.setattr(windows_service, "request_shutdown", request)
+    result = service.stop_service(data_dir, TEST_PORT, dry_run=dry_run)
+    assert ("检查通过" if dry_run else "已停止") in result
+    request.assert_called_once_with(process, data_dir, TEST_PORT, dry_run=dry_run)
+    process.terminate.assert_not_called()
+    process.kill.assert_not_called()
+    assert process.wait.called is not dry_run
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_windows_missing_control_channel_refuses_even_dry_run(windows_target, monkeypatch, dry_run):
+    process, data_dir = windows_target
+    monkeypatch.setattr(windows_service, "request_shutdown", Mock(side_effect=FileNotFoundError()))
+    with pytest.raises(service.ServiceError, match="没有可用的安全停止通道.*Ctrl\\+C"):
+        service.stop_service(data_dir, TEST_PORT, dry_run=dry_run)
+    process.terminate.assert_not_called()
+    process.wait.assert_not_called()
+
+
+def test_windows_control_access_denied_never_terminates(windows_target, monkeypatch):
+    process, data_dir = windows_target
+    monkeypatch.setattr(windows_service, "request_shutdown", Mock(side_effect=PermissionError()))
+    with pytest.raises(service.ServiceError, match="权限不足.*同一系统用户"):
+        service.stop_service(data_dir, TEST_PORT)
+    process.terminate.assert_not_called()
+    process.wait.assert_not_called()
+
+
+def test_windows_stop_timeout_never_terminates(windows_target, monkeypatch):
+    process, data_dir = windows_target
+    monkeypatch.setattr(windows_service, "request_shutdown", Mock())
+    monkeypatch.setattr(service, "_wait_for_exit", Mock(side_effect=psutil.TimeoutExpired(0.001)))
+    with pytest.raises(service.ServiceError, match="未强制终止"):
+        service.stop_service(data_dir, TEST_PORT, timeout=0.001)
+    process.terminate.assert_not_called()
+    process.kill.assert_not_called()
+
+
+def test_windows_control_name_binds_process_creation_installation_and_target(tmp_path, monkeypatch):
+    process = SimpleNamespace(pid=123, create_time=lambda: 1000.25)
+    original = windows_service._event_name(process, tmp_path, TEST_PORT)
+    assert original.startswith("Global\\SceneRecall.Stop.")
+    assert windows_service._event_name(process, tmp_path / "other", TEST_PORT) != original
+    assert windows_service._event_name(process, tmp_path, TEST_PORT + 1) != original
+    assert windows_service._event_name(SimpleNamespace(pid=124, create_time=process.create_time), tmp_path, TEST_PORT) != original
+    assert windows_service._event_name(SimpleNamespace(pid=123, create_time=lambda: 1001.25), tmp_path, TEST_PORT) != original
+    monkeypatch.setattr(windows_service.sysconfig, "get_path", lambda key: str(tmp_path / "other-install"))
+    assert windows_service._event_name(process, tmp_path, TEST_PORT) != original
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_windows_event_client_checks_handle_and_closes_it(tmp_path, monkeypatch, dry_run):
+    events = Mock()
+    monkeypatch.setattr(windows_service, "_Events", lambda: events)
+    monkeypatch.setattr(windows_service, "_event_name", lambda *args: "verified-event")
+    windows_service.request_shutdown(Mock(), tmp_path, TEST_PORT, dry_run=dry_run)
+    events.open.assert_called_once_with("verified-event")
+    events.close.assert_called_once_with(events.open.return_value)
+    assert events.signal.called is not dry_run
+
+
+def test_windows_event_server_requests_normal_shutdown_and_closes_handle(tmp_path, monkeypatch):
+    events = Mock()
+    events.wait.return_value = True
+    monkeypatch.setattr(windows_service, "_Events", lambda: events)
+    monkeypatch.setattr(windows_service, "_event_name", lambda *args: "verified-event")
+    server = SimpleNamespace(should_exit=False)
+    with windows_service.shutdown_control(server, tmp_path, TEST_PORT):
+        deadline = time.monotonic() + 2
+        while not server.should_exit and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.should_exit
+    events.create.assert_called_once_with("verified-event")
+    events.close.assert_called_once_with(events.create.return_value)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows object ACL")
+def test_native_windows_event_acl_and_lifetime(tmp_path):
+    import ctypes
+    from ctypes import wintypes
+    import re
+
+    events = windows_service._Events()
+    name = windows_service._event_name(psutil.Process(), tmp_path, TEST_PORT)
+    handle = events.create(name)
+    try:
+        with pytest.raises(FileExistsError):
+            events.create(name)
+        events.security.GetSecurityInfo.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.DWORD,
+                                                    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                                    ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        events.security.GetSecurityInfo.restype = wintypes.DWORD
+        descriptor = ctypes.c_void_p()
+        assert events.security.GetSecurityInfo(handle, 6, 4, None, None, None, None, ctypes.byref(descriptor)) == 0
+        try:
+            convert = events.security.ConvertSecurityDescriptorToStringSecurityDescriptorW
+            convert.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                ctypes.POINTER(wintypes.LPWSTR), ctypes.c_void_p]
+            convert.restype = wintypes.BOOL
+            text = wintypes.LPWSTR()
+            assert convert(descriptor, 1, 4, ctypes.byref(text), None)
+            try:
+                assert text.value.startswith("D:P")
+                assert set(re.findall(r";;;([^)]*)\)", text.value)) == {"SY", events._user_sid()}
+            finally:
+                events.kernel.LocalFree(text)
+        finally:
+            events.kernel.LocalFree(descriptor)
+        opened = events.open(name)
+        events.signal(opened)
+        events.close(opened)
+        assert events.wait(handle)
+    finally:
+        events.close(handle)
+    with pytest.raises(FileNotFoundError):
+        events.open(name)
+
+
 def _unused_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -277,7 +468,8 @@ def _http_status(port, path):
 def _running_server(command, cwd, port, health_path, log_path):
     # A waiter reaps the child even while a separate stop CLI waits for its exit.
     with log_path.open("w+") as log:
-        process = subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
+        environment = {**os.environ, "PYTHONUTF8": "1"}
+        process = subprocess.Popen(command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, env=environment)
         waiter = threading.Thread(target=process.wait, daemon=True)
         waiter.start()
         try:
@@ -296,6 +488,19 @@ def _running_server(command, cwd, port, health_path, log_path):
             yield process
         finally:
             if process.poll() is None:
+                # Windows console/venv launchers wait for a Python child. If a
+                # test fails, clean up all of this test-owned launcher's children
+                # as well, so a failed assertion cannot leave a listener behind.
+                if os.name == "nt":
+                    try:
+                        children = psutil.Process(process.pid).children(recursive=True)
+                    except psutil.NoSuchProcess:
+                        children = []
+                    for child in reversed(children):
+                        try:
+                            child.terminate()
+                        except psutil.NoSuchProcess:
+                            pass
                 process.terminate()
             waiter.join(timeout=10)
             if waiter.is_alive():
@@ -303,10 +508,9 @@ def _running_server(command, cwd, port, health_path, log_path):
                 waiter.join(timeout=5)
 
 
-@pytest.mark.skipif(os.name != "posix", reason="stop supports macOS and Linux")
 @pytest.mark.parametrize("start_command", [[], ["start"]], ids=["legacy-start", "explicit-start"])
 def test_real_cli_stop_preserves_library_and_refuses_wrong_directory(tmp_path, start_command):
-    launcher = Path(sysconfig.get_path("scripts")) / "scenerecall"
+    launcher = Path(sysconfig.get_path("scripts")) / ("scenerecall.exe" if os.name == "nt" else "scenerecall")
     assert launcher.is_file(), "install the project console script before running tests"
     port = _unused_port()
     data_dir = tmp_path / "isolated-library"
@@ -318,7 +522,8 @@ def test_real_cli_stop_preserves_library_and_refuses_wrong_directory(tmp_path, s
     with _running_server(command, tmp_path, port, "/api/health", tmp_path / "server.log") as process:
         settings = data_dir / "private" / "settings.json"
         settings.write_text('{"defaults": {"window_ms": 1234}}', encoding="utf-8")
-        run_stop = partial(subprocess.run, cwd=tmp_path, capture_output=True, text=True, timeout=15)
+        run_stop = partial(subprocess.run, cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", timeout=15,
+                           env={**os.environ, "PYTHONUTF8": "1"})
         wrong = run_stop([str(launcher), "stop", "--data-dir", str(tmp_path / "wrong"), "--port", str(port)])
         assert wrong.returncode == 1 and "无法确认" in wrong.stderr
         assert process.poll() is None and _http_status(port, "/api/health") == 200
@@ -335,7 +540,6 @@ def test_real_cli_stop_preserves_library_and_refuses_wrong_directory(tmp_path, s
         assert repeat.returncode == 0 and "未运行" in repeat.stdout
 
 
-@pytest.mark.skipif(os.name != "posix", reason="stop supports macOS and Linux")
 def test_real_unrelated_http_server_is_not_stopped(tmp_path):
     port = _unused_port()
     command = [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", str(tmp_path)]

@@ -6,12 +6,12 @@ publish character copies and membership together and roll forward after a crash.
 from __future__ import annotations
 
 import copy
-import os
 import re
 import shutil
 from pathlib import Path
 
 from .library import SCHEMA, atomic_json, confined_path, digest, read_json, safe_id, same_contents, uid
+from .file_io import atomic_replace
 
 
 class OrganizationConflict(ValueError):
@@ -115,7 +115,7 @@ class OrganizationStore:
                         raise ValueError(f"恢复冲突，保留事务等待修复: {relative}")
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(source, target)
+                    atomic_replace(source, target)
             elif not target.is_file():
                 raise ValueError(f"资料恢复事务缺少文件: {relative}")
         # Catalog last: it never advertises a character copy before it exists.
@@ -142,8 +142,8 @@ class OrganizationStore:
         """Prepare recovery before publishing even the first restored asset file."""
         self.validate(catalog, check_assets=False)
         transaction = {"schema_version": SCHEMA, "id": uid("restore_tx"),
-                       "staging": str(staging.relative_to(self.library.root)),
-                       "files": [str(path.relative_to(staging)) for path in paths],
+                       "staging": staging.relative_to(self.library.root).as_posix(),
+                       "files": [path.relative_to(staging).as_posix() for path in paths],
                        "writes": {"organization/catalog.json": catalog,
                                   "private/media-locations.json": locations}}
         atomic_json(self.journal, transaction)

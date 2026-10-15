@@ -73,6 +73,26 @@ def worker(tmp_path, monkeypatch):
     return queue, asset, extractions
 
 
+@pytest.mark.parametrize("timestamps,newest_first", [
+    (["2026-10-15T12:00:00+00:00"] * 3, [2, 1, 0]),
+    (["2026-10-15T12:00:02+00:00", "2026-10-15T12:00:01+00:00", "2026-10-15T12:00:03+00:00"], [2, 0, 1]),
+], ids=["same-clock-tick", "distinct-timestamps-remain-primary"])
+def test_job_order_uses_durable_insertion_order_for_timestamp_ties(worker, monkeypatch, timestamps, newest_first):
+    queue, _asset, _extractions = worker
+    jobs = []
+    for timestamp in timestamps:
+        with monkeypatch.context() as clock:
+            clock.setattr("scenerecall.jobs.now", lambda: timestamp)
+            jobs.append(queue.add("index", {}))
+    expected = [jobs[index]["id"] for index in newest_first]
+    queue.update(jobs[0]["id"], message="Updates must not change creation order")
+    restarted = JobQueue(queue.library, queue.providers, queue.search)
+    for active in (queue, restarted):
+        assert [job["id"] for job in active.list()] == expected
+        # Both the pipeline and batch control consume this oldest-first order.
+        assert [job["id"] for job in reversed(active.list())] == list(reversed(expected))
+
+
 def test_unknown_cost_remains_unknown_and_pauses_cost_budget(worker):
     queue, _asset, _extractions = worker
     job = queue.add("index", {"max_cost": 100, "max_requests": 100})

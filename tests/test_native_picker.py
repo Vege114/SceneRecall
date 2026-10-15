@@ -1,7 +1,8 @@
-"""Native chooser tests; only the explicit macOS smoke opts into real windows."""
+"""Native chooser tests; real selection windows remain opt-in."""
 import base64
 import json
 import os
+import shutil
 import subprocess
 import time
 import zipfile
@@ -16,7 +17,8 @@ from scenerecall.native_picker import FilePickerBusy, FilePickerInput, FilePicke
 
 
 def test_mac_multiselection_preserves_unicode_quotes_and_newlines(tmp_path, monkeypatch):
-    paths = [tmp_path / '字幕 "第一集".ASS', tmp_path / "字幕\n第二集.vtt"]
+    names = ['字幕 "第一集".ASS', "字幕\n第二集.vtt"] if os.name != "nt" else ["字幕 '第一集'.ASS", "字幕 第二集.vtt"]
+    paths = [tmp_path / name for name in names]
     for path in paths:
         path.write_text("synthetic subtitle", encoding="utf-8")
     commands = []
@@ -224,7 +226,7 @@ def test_system_picker_failure_and_linux_missing_desktop(monkeypatch):
 
 
 def test_windows_system_dialog_uses_fixed_script_and_separate_json(tmp_path, monkeypatch):
-    backup = tmp_path / '备份 "$()".zip'
+    backup = tmp_path / "备份 '$()' & %name%.zip"
     backup.write_bytes(b"selection does not inspect archive")
     monkeypatch.setattr(native_picker.sys, "platform", "win32")
     monkeypatch.setattr(native_picker.shutil, "which", lambda command: "powershell.exe")
@@ -238,6 +240,24 @@ def test_windows_system_dialog_uses_fixed_script_and_separate_json(tmp_path, mon
 
     monkeypatch.setattr(native_picker, "_run", run)
     assert pick_local_files(FilePickerInput(kind="backup"))["paths"] == [str(backup)]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Forms requires Windows")
+def test_windows_dialog_script_loads_forms_and_returns_utf8_json_without_opening_window(tmp_path):
+    command = shutil.which("powershell") or shutil.which("pwsh")
+    if not command:
+        pytest.skip("PowerShell unavailable")
+    # Execute the real script, including JSON input, Forms setup and disposal.
+    # Only the interactive ShowDialog call is replaced with a cancelled result.
+    script = native_picker._WINDOWS_SCRIPT.replace("$dialog.ShowDialog()", "[System.Windows.Forms.DialogResult]::Cancel")
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    result = subprocess.run([command, "-NoProfile", "-STA", "-EncodedCommand", encoded],
+                            input=json.dumps({"title": "选择字幕 '中文' & $()", "multiple": True,
+                                              "directory": str(tmp_path), "extensions": ["ass", "srt", "vtt"]},
+                                             ensure_ascii=False),
+                            capture_output=True, text=True, encoding="utf-8", timeout=20,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+    assert native_picker._json_result(result) == {"paths": [], "cancelled": True}
 
 
 def test_linux_system_dialog_multiselection_and_cancel(tmp_path, monkeypatch):

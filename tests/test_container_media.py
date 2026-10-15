@@ -69,9 +69,9 @@ def test_mkv_two_tracks_global_indices_styles_and_positive_negative_origin(tmp_p
     assert all(t["supported"] for t in tracks)
     output = media.extract_subtitle_track(movie, 2, tmp_path / "selected.srt", metadata)
     assert output.suffix == ".ass"
-    assert "Title: Synthetic style preservation" in output.read_text()
-    assert "Style: Synthetic,Arial,30" in output.read_text()
-    assert r"{\i1}合成中文{\i0}\Nテスト" in output.read_text()
+    assert "Title: Synthetic style preservation" in output.read_text(encoding="utf-8")
+    assert "Style: Synthetic,Arial,30" in output.read_text(encoding="utf-8")
+    assert r"{\i1}合成中文{\i0}\Nテスト" in output.read_text(encoding="utf-8")
     cues = parse_container_subtitles(output, metadata["duration_ms"])
     assert [(c["start_ms"], c["end_ms"], c["text"]) for c in cues] == [
         (750, 1250, "合成中文"), (750, 1250, "テスト"), (1500, 1900, "Ending")]
@@ -145,7 +145,7 @@ def test_bad_media_timeout_and_size_limit_do_not_publish_partial_output(tmp_path
         patch.setattr(subprocess, "run", timeout)
         with pytest.raises(media.MediaError, match="超时"):
             media.extract_subtitle_track(movie, 0, output)
-    assert output.read_text() == "previous version"
+    assert output.read_text(encoding="utf-8") == "previous version"
 
     def oversized(args, **kwargs):
         from pathlib import Path
@@ -155,7 +155,7 @@ def test_bad_media_timeout_and_size_limit_do_not_publish_partial_output(tmp_path
     monkeypatch.setattr(media, "_MAX_SUBTITLE_BYTES", 128)
     with pytest.raises(media.MediaError, match="50 MB"):
         media.extract_subtitle_track(movie, 0, output)
-    assert output.read_text() == "previous version"
+    assert output.read_text(encoding="utf-8") == "previous version"
     assert not list(tmp_path.glob(".media-*"))
 
 

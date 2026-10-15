@@ -8,6 +8,7 @@ from array import array
 from pathlib import Path
 
 from . import media
+from .file_io import atomic_replace
 
 PREPROCESS_VERSION = "pcm16-mono-16000-presentation-v1"
 SAMPLE_RATE = 16000
@@ -69,7 +70,7 @@ def extract_audio(source: Path, output: Path, stream_index: int, start_ms: int, 
         with wave.open(str(temporary)) as wav:
             if wav.getnframes() != (end_ms - start_ms) * SAMPLE_RATE // 1000:
                 raise media.MediaError("提取音频长度与原片时间轴不一致")
-        temporary.replace(output)
+        atomic_replace(temporary, output)
     finally:
         if process.poll() is None:
             process.terminate()
@@ -100,7 +101,7 @@ def crop_pcm(source: Path, output: Path, start_ms: int, end_ms: int) -> None:
         wav.setsampwidth(2)
         wav.setframerate(SAMPLE_RATE)
         wav.writeframes(data)
-    temporary.replace(output)
+    atomic_replace(temporary, output)
 
 
 def pcm_samples(path: Path) -> array:

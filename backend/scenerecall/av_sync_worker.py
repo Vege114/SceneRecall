@@ -16,7 +16,7 @@ def main(directory: Path) -> dict:
 
     from .audio_media import pcm_samples
 
-    request = json.loads((directory / "request.json").read_text())
+    request = json.loads((directory / "request.json").read_text(encoding="utf-8"))
     package = Path(request["repository"]) / "character_recognition/audio_recognition"
     sys.path.insert(0, str(package))
     from model.lwtnet import LWTNet_temporal_adapter

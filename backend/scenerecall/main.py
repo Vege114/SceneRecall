@@ -598,7 +598,17 @@ def run():
     print(f"\nSceneRecall · {args.data_dir.expanduser().resolve()}")
     print(f"打开本机会话：http://127.0.0.1:{args.port}/?token={app.state.session_token}\n", flush=True)
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False)
+    if os.name == "nt":
+        from .windows_service import shutdown_control
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=args.port, access_log=False))
+        try:
+            with shutdown_control(server, args.data_dir, args.port):
+                server.run()
+        except OSError as exc:
+            print(f"无法创建 Windows 安全停止通道：{exc}", file=sys.stderr)
+            raise SystemExit(1) from None
+    else:
+        uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False)
 
 
 if __name__ == "__main__":

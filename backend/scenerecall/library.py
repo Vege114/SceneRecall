@@ -14,8 +14,10 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from .models import AssetInput, Observation
+from .file_io import atomic_replace
 
 SCHEMA = "1.0"
+_WINDOWS_PATHS = os.name == "nt"
 
 
 class DeletedAssetError(ValueError):
@@ -36,9 +38,15 @@ def digest(value) -> str:
 
 
 def safe_id(value: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,180}", value) or value in {".", ".."}:
+    if (not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,180}", value)
+            or value in {".", ".."}
+            or _WINDOWS_PATHS and (":" in value or value.endswith(".") or _windows_reserved(value))):
         raise ValueError("无效的记录 ID")
     return value
+
+
+def _windows_reserved(value: str) -> bool:
+    return bool(re.match(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", value, re.I))
 
 
 def atomic_json(path: Path, data) -> None:
@@ -49,7 +57,7 @@ def atomic_json(path: Path, data) -> None:
             json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        atomic_replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -72,7 +80,7 @@ def atomic_jsonl(path: Path, records: list[dict]) -> None:
                 f.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        atomic_replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -93,6 +101,9 @@ def confined_path(base: Path, relative: str) -> Path:
     candidate = PurePosixPath(relative)
     if candidate.is_absolute() or ".." in candidate.parts:
         raise ValueError("资料包含越界文件引用")
+    if _WINDOWS_PATHS and any(part.endswith((" ", ".")) or _windows_reserved(part)
+                              or re.search(r'[<>:"|?*\x00-\x1f]', part) for part in candidate.parts):
+        raise ValueError("资料包含不支持的文件引用")
     path = (base / relative).resolve()
     if not path.is_relative_to(base.resolve()):
         raise ValueError("资料包含越界文件引用")
@@ -322,7 +333,7 @@ class Library:
                 locations = read_json(self.root / "private" / "media-locations.json", {})
                 locations[asset_id] = snapshot
                 atomic_json(self.root / "private" / "media-locations.json", locations)
-                os.replace(directory, self.asset_dir(asset_id))
+                atomic_replace(directory, self.asset_dir(asset_id))
         return self.get_asset(asset_id)
 
     @staticmethod
@@ -356,7 +367,7 @@ class Library:
         if any(not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"] for cue in cues):
             raise ValueError("提取字幕超出资产原有时间轴，请检查视频版本")
         atomic_jsonl(directory / relative, cues)
-        pointer = {"path": str(relative), "original_path": str(original), "run_id": run_id,
+        pointer = {"path": relative.as_posix(), "original_path": original.as_posix(), "run_id": run_id,
                    "stream_index": track["index"], "track": track, "offset_ms": offset_ms,
                    "warnings": extracted.get("warnings", []),
                    "extraction_version": 1}
@@ -477,7 +488,7 @@ class Library:
                 old = read_json(confined_path(self.asset_dir(asset_id), path))
                 if record["start_ms"] <= old["start_ms"] and old["end_ms"] <= record["end_ms"]:
                     del active["observations"][old_id]
-            active["observations"][record["id"]] = str(relative)
+            active["observations"][record["id"]] = relative.as_posix()
             entries = {rid: read_json(confined_path(self.asset_dir(asset_id), ref))
                        for rid, ref in active["observations"].items()}
             covered = sorted((r["start_ms"], r["end_ms"]) for r in entries.values() if r["run_id"] == record["run_id"])
@@ -523,7 +534,7 @@ class Library:
                                  "source": "ocr"} for c in cues]
             relative = Path("analyses") / safe_id(run_id) / "subtitles.jsonl"
             atomic_jsonl(self.asset_dir(asset_id) / relative, final)
-            active["subtitle_runs"] = {run_id: {"path": str(relative)}}
+            active["subtitle_runs"] = {run_id: {"path": relative.as_posix()}}
             atomic_json(self.asset_dir(asset_id) / "active-analysis.json", active)
 
     def register_frame(self, asset_id: str, frame: dict) -> dict:
@@ -533,7 +544,7 @@ class Library:
         with self.lock:
             registry_path = directory / "frames" / "registry.json"
             registry = read_json(registry_path, {})
-            registry[safe_id(frame["id"])] = {"path": str(relative), "at_ms": frame["at_ms"]}
+            registry[safe_id(frame["id"])] = {"path": relative.as_posix(), "at_ms": frame["at_ms"]}
             atomic_json(registry_path, registry)
         return frame
 
@@ -840,8 +851,9 @@ class Library:
             for top in ("library.json", "works", "assets", "collections", "organization"):
                 item = self.root / top
                 for path in [item] if item.is_file() else item.rglob("*"):
-                    if path.is_file() and not path.is_symlink() and path.suffix != ".tmp" and "/proxy/" not in str(path):
-                        archive.write(path, path.relative_to(self.root))
+                    if (path.is_file() and not path.is_symlink() and path.suffix != ".tmp"
+                            and "proxy" not in path.relative_to(self.root).parts):
+                        archive.write(path, path.relative_to(self.root).as_posix())
             if include_media:
                 for asset in self.list_assets(include_deleted=True):
                     if asset["deleted"] and not asset["source_available"]:
@@ -861,13 +873,20 @@ class Library:
                 if len(members) > 300000 or sum(i.file_size for i in members) > 200 * 1024**3:
                     raise ValueError("备份文件超出恢复上限")
                 for info in members:
-                    relative = PurePosixPath(info.filename)
-                    if relative.is_absolute() or ".." in relative.parts or "\\" in info.filename or not relative.parts:
+                    # ZipInfo normalizes Windows separators and truncates NULs.
+                    # Check the original archive spelling before trusting it.
+                    raw_name = info.orig_filename
+                    relative = PurePosixPath(raw_name)
+                    if (raw_name != info.filename or relative.is_absolute() or ".." in relative.parts
+                            or "\\" in raw_name or not relative.parts):
                         raise ValueError("备份含非法路径")
                     if relative.parts[0] not in {"library.json", "works", "assets", "collections", "media", "organization"}:
                         raise ValueError("备份包含非资料文件")
                     if (info.external_attr >> 16) & 0o170000 == 0o120000:
                         raise ValueError("备份不允许符号链接")
+                    # Validate before extraction: Windows normalizes some names
+                    # and interprets ':' as an alternate stream separator.
+                    confined_path(staging, info.filename)
                     archive.extract(info, staging)
             read_json(staging / "library.json") or (_ for _ in ()).throw(ValueError("缺少资料库清单"))
             for file in staging.rglob("*.json"):
@@ -930,7 +949,7 @@ class Library:
             with self.lock:
                 merged_organization = self.organization.merge_catalog(restored.organization._read())
                 for path in paths:
-                    target = confined_path(self.root, str(path.relative_to(staging)))
+                    target = confined_path(self.root, path.relative_to(staging).as_posix())
                     if target.exists() and (not target.is_file() or not same_contents(target, path)):
                         raise ValueError(f"恢复冲突，未覆盖现有文件: {path.relative_to(staging)}")
                 locations = read_json(self.root / "private" / "media-locations.json", {})
@@ -945,5 +964,5 @@ class Library:
             return {"restored_files": len(paths), "message": "资料已恢复；元数据备份中的原视频可能需要重新定位"}
         finally:
             pending = read_json(self.organization.journal, {})
-            if pending.get("staging") != str(staging.relative_to(self.root)):
+            if pending.get("staging") != staging.relative_to(self.root).as_posix():
                 shutil.rmtree(staging, ignore_errors=True)

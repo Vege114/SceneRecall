@@ -1,6 +1,7 @@
 """Synthetic-only concurrency, ordering, budgets and durable call lifetimes."""
 import asyncio
 import copy
+import os
 
 import pytest
 
@@ -124,7 +125,9 @@ async def test_controls_drain_started_calls_and_resume_without_repaying(scene_wo
 
     monkeypatch.setattr(worker.provider, "prepare_visual", blocked)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
-    await asyncio.wait_for(both_started.wait(), 2)
+    # Reaching the calls includes generating and durably registering 170 local
+    # frame files. Keep the model barrier strict without timing NTFS setup.
+    await asyncio.wait_for(both_started.wait(), 15 if os.name == "nt" else 2)
     assert len(worker.queue.get(job["id"])["inflight_calls"]) == 2
     worker.queue.control(job["id"], action)
     release.set()
@@ -438,7 +441,9 @@ async def test_factory_four_and_saved_widths_schedule_the_selected_number(scene_
 async def test_controlled_latency_parallel_benchmark_reports_wall_time(scene_worker):
     serial, parallel = scene_worker(170), scene_worker(170)
     for fixture in (serial, parallel):
-        fixture.provider.delays["preparation"] = .08
+        # Keep the benchmark dominated by its controlled provider latency,
+        # including on Windows where durable fixture writes are more expensive.
+        fixture.provider.delays["preparation"] = .5 if os.name == "nt" else .08
     baseline = await execute(serial, enqueue(serial))
     accelerated = await execute(parallel, enqueue(parallel, execution=options()))
     assert baseline["status"] == accelerated["status"] == "completed"

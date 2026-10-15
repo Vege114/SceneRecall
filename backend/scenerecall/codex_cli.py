@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import signal
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_BYTES = 4 * 1024 * 1024
 MAX_SCHEMA_BYTES = 256 * 1024
 STATUS_TIMEOUT_S = 10
+_WINDOWS = os.name == "nt"
 REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 _MODEL_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,299}"
 _REQUIRED_FLAGS = ("--ignore-user-config", "--ignore-rules", "--ephemeral", "--json", "--image")
@@ -79,11 +81,27 @@ def _executable() -> str | None:
     return shutil.which("codex")
 
 
+def _command(executable: str) -> list[str]:
+    """Expand npm's Windows shim without invoking cmd.exe or a shell."""
+    path = Path(executable)
+    if not _WINDOWS or path.suffix.lower() not in {".cmd", ".bat"}:
+        return [executable]
+    # npm installs codex.cmd beside node_modules; forwarding arguments through
+    # cmd.exe would reinterpret &, %, quotes and parentheses in user paths.
+    entry = path.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    local_node = path.parent / "node.exe"
+    node = str(local_node) if local_node.is_file() else shutil.which("node.exe")
+    if not entry.is_file() or not node:
+        raise CodexCLIError("无法启动 Codex CLI，请检查 Node.js 和 Codex npm 安装，或指定原生 codex.exe")
+    return [node, str(entry)]
+
+
 def _environment() -> dict[str, str]:
     # Do not inherit API credentials, endpoint overrides, or the hosting Codex
     # session's tools, sockets, thread identity and approval configuration.
     allowed = {
         "PATH", "HOME", "CODEX_HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP",
+        "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
         "SYSTEMROOT", "WINDIR", "PATHEXT", "COMSPEC", "APPDATA", "LOCALAPPDATA",
         "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
         "LANG", "LC_ALL", "LC_CTYPE",
@@ -101,6 +119,7 @@ async def _stop(process: asyncio.subprocess.Process) -> None:
                 process.kill()
         except ProcessLookupError:
             pass
+    # On Windows the supervisor's job kills its entire tree when it exits.
     # Drain the remaining pipe buffers after killing the process group. Waiting
     # without draining can deadlock when a capped reader paused its transport.
     await process.communicate()
@@ -141,8 +160,17 @@ async def _run(args: list[str], *, directory: Path, timeout_s: float, stdin: byt
 
     try:
         async with asyncio.timeout(timeout_s):
+            command = [*_command(args[0]), *args[1:]]
+            if _WINDOWS:
+                # The supervisor joins a kill-on-close Job Object before it
+                # launches anything, including npm's native Codex descendant.
+                supervisor = Path(__file__).with_name("_windows_process.py")
+                # Windows venv/python.exe is itself a redirector process. Kill
+                # the actual interpreter that owns the Job Object's handle.
+                interpreter = getattr(sys, "_base_executable", sys.executable)
+                command = [interpreter, "-I", str(supervisor), *command]
             process = await asyncio.create_subprocess_exec(
-                *args, cwd=directory, env=_environment(), stdin=asyncio.subprocess.PIPE,
+                *command, cwd=directory, env=_environment(), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 start_new_session=os.name == "posix",
             )

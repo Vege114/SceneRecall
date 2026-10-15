@@ -2,16 +2,101 @@
 from __future__ import annotations
 
 import json
+import os
+import errno
 import stat
 import zipfile
 from pathlib import Path
 
 import pytest
 from PIL import Image
-from scenerecall.library import Library, atomic_json, atomic_jsonl
+from scenerecall import file_io
+from scenerecall.library import Library, atomic_json, atomic_jsonl, confined_path, read_json, safe_id
+from scenerecall.providers import _atomic_json as provider_atomic_json
 
 
 ASSET_ID = "asset_synthetic"
+
+
+def sharing_error(code):
+    error = PermissionError(errno.EACCES, "synthetic Windows sharing conflict")
+    error.winerror = code
+    return error
+
+
+@pytest.mark.parametrize("writer,value", [(atomic_json, {"new": True}), (atomic_jsonl, [{"new": True}]),
+                                          (provider_atomic_json, {"new": True})])
+def test_atomic_publication_retries_transient_windows_locks(tmp_path, monkeypatch, writer, value):
+    target = tmp_path / "state.json"
+    original = b'{"old": true}\n'
+    target.write_bytes(original)
+    replace = os.replace
+    calls, delays = [], []
+    failures = iter([5, 32, 33, None])
+
+    def locked_then_publish(source, destination):
+        calls.append((source, destination))
+        assert target.read_bytes() == original
+        code = next(failures)
+        if code is not None:
+            raise sharing_error(code)
+        return replace(source, destination)
+
+    monkeypatch.setattr(file_io, "_WINDOWS", True)
+    monkeypatch.setattr(file_io, "sleep", delays.append)
+    monkeypatch.setattr(file_io.os, "replace", locked_then_publish)
+    writer(target, value)
+    assert len(calls) == 4 and delays == list(file_io._REPLACE_DELAYS[:3])
+    assert json.loads(target.read_text(encoding="utf-8")) == {"new": True}
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("writer,value", [(atomic_json, {"new": True}), (atomic_jsonl, [{"new": True}]),
+                                          (provider_atomic_json, {"new": True})])
+def test_atomic_publication_exhausted_windows_lock_preserves_old_file(tmp_path, monkeypatch, writer, value):
+    target = tmp_path / "state.json"
+    original = b'{"old": true}\n'
+    target.write_bytes(original)
+    calls, delays = [], []
+    failure = sharing_error(5)
+
+    def locked(source, destination):
+        calls.append((source, destination))
+        assert target.read_bytes() == original
+        raise failure
+
+    monkeypatch.setattr(file_io, "_WINDOWS", True)
+    monkeypatch.setattr(file_io, "sleep", delays.append)
+    monkeypatch.setattr(file_io.os, "replace", locked)
+    with pytest.raises(PermissionError) as caught:
+        writer(target, value)
+    assert caught.value is failure
+    assert len(calls) == len(file_io._REPLACE_DELAYS) + 1
+    assert delays == list(file_io._REPLACE_DELAYS)
+    assert target.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("windows,code", [(False, 5), (False, 32), (True, 2), (True, 3), (True, None)])
+def test_atomic_publication_other_errors_are_not_retried(tmp_path, monkeypatch, windows, code):
+    target = tmp_path / "state.json"
+    target.write_bytes(b"original")
+    calls, delays = [], []
+    failure = sharing_error(code)
+
+    def failed(source, destination):
+        calls.append((source, destination))
+        raise failure
+
+    monkeypatch.setattr(file_io, "_WINDOWS", windows)
+    monkeypatch.setattr(file_io, "sleep", delays.append)
+    monkeypatch.setattr(file_io.os, "replace", failed)
+    with pytest.raises(PermissionError) as caught:
+        atomic_json(target, {"new": True})
+    assert caught.value is failure
+    assert len(calls) == 1 and delays == []
+    assert target.read_bytes() == b"original"
+    assert list(tmp_path.iterdir()) == [target]
 
 
 def seed_asset(library: Library, asset_id=ASSET_ID) -> dict:
@@ -69,7 +154,11 @@ def write_zip(path: Path, files: dict[str, object]) -> Path:
                 encoded = "".join(json.dumps(line) + "\n" for line in value)
             else:
                 encoded = json.dumps(value)
-            archive.writestr(name, encoded)
+            # ZipInfo normalizes the host's separator on Windows. Preserve the
+            # supplied archive name so malicious backslash fixtures stay raw.
+            member = zipfile.ZipInfo(name)
+            member.filename = name
+            archive.writestr(member, encoded)
     return path
 
 
@@ -90,7 +179,55 @@ def test_metadata_backup_roundtrip_keeps_corrections_and_excludes_secrets(librar
     assert not restored.get_asset(ASSET_ID)["source_available"]
 
 
-@pytest.mark.parametrize("bad_name", ["../escaped.json", "/absolute.json", "assets/../../escaped.json", "assets\\escaped.json"])
+@pytest.mark.parametrize("subtitle_source", ["ocr", "container"])
+def test_portable_references_and_backup_roundtrip(library, tmp_path, subtitle_source):
+    """Exercise native Windows paths through writes, reads and restore journals."""
+    directory = library.asset_dir(ASSET_ID)
+    frame = directory / "frames" / "frame_portable.png"
+    frame.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (2, 2)).save(frame)
+    library.register_frame(ASSET_ID, {"id": "frame_portable", "path": str(frame), "at_ms": 1000})
+    record = observation()
+    record["evidence_frame_ids"] = ["frame_portable"]
+    library.save_observation(ASSET_ID, record)
+    cues = [{"id": "cue_portable", "start_ms": 500, "end_ms": 1500, "text": "合成字幕", "language": "zh"}]
+    if subtitle_source == "ocr":
+        library.save_subtitles(ASSET_ID, "run_portable", cues, 0, 6000)
+    else:
+        asset = library.get_asset(ASSET_ID)
+        pointer = library._write_container(asset, {
+            "track": {"index": 1, "codec": "subrip"}, "suffix": ".srt", "cues": cues,
+            "original": b"1\n00:00:00,500 --> 00:00:01,500\nSynthetic\n"}, 0)
+        active = library.active(ASSET_ID)
+        active["container_subtitles"] = pointer
+        atomic_json(directory / "active-analysis.json", active)
+    proxy = directory / "proxy" / "browser.mp4"
+    proxy.parent.mkdir()
+    proxy.write_bytes(b"rebuildable proxy")
+    active = library.active(ASSET_ID)
+    references = [*active["observations"].values(),
+                  *(value["path"] for value in active["subtitle_runs"].values()),
+                  read_json(directory / "frames" / "registry.json")["frame_portable"]["path"]]
+    if subtitle_source == "container":
+        references += [active["container_subtitles"]["path"], active["container_subtitles"]["original_path"]]
+    assert all("/" in reference and "\\" not in reference for reference in references)
+    assert library.frame_path(ASSET_ID, "frame_portable") == frame.resolve()
+    assert library.subtitles(ASSET_ID)[0]["text"] == "合成字幕"
+    backup = library.backup()
+    archive_path = library.root / "runtime" / "backups" / f"{backup['id']}.zip"
+    with zipfile.ZipFile(archive_path) as archive:
+        assert all("\\" not in name and "/proxy/" not in name for name in archive.namelist())
+    restored = Library(tmp_path / "restored portable library")
+    restored.restore(archive_path)
+    assert restored.subtitles(ASSET_ID) == library.subtitles(ASSET_ID)
+    assert restored.observations(ASSET_ID) == library.observations(ASSET_ID)
+    assert restored.frame_path(ASSET_ID, "frame_portable").read_bytes() == frame.read_bytes()
+    assert not restored.organization.journal.exists()
+
+
+@pytest.mark.parametrize("bad_name", ["../escaped.json", "/absolute.json", "assets/../../escaped.json", "assets\\escaped.json",
+    *(pytest.param(name, marks=pytest.mark.skipif(os.name != "nt", reason="Windows filename normalization"))
+      for name in ("assets/file.json:stream", "assets/NUL.json", "assets/ending. /manifest.json"))])
 def test_zip_member_traversal_rejected_without_writes(library, tmp_path, bad_name):
     path = write_zip(tmp_path / "traversal.zip", {bad_name: {"marker": "bad"}})
     before = sorted(str(p.relative_to(library.root)) for p in library.root.rglob("*") if p.is_file())
@@ -98,6 +235,50 @@ def test_zip_member_traversal_rejected_without_writes(library, tmp_path, bad_nam
         library.restore(path)
     after = sorted(str(p.relative_to(library.root)) for p in library.root.rglob("*") if p.is_file())
     assert before == after
+
+
+@pytest.mark.parametrize("identity", ["..", ".", "name:stream", "trailing.", "CON", "nul.json", "LPT1", "COM9.data"])
+@pytest.mark.skipif(os.name != "nt", reason="Windows filename restrictions preserve existing POSIX libraries")
+def test_identifiers_reject_windows_aliases_and_streams(identity):
+    with pytest.raises(ValueError, match="记录 ID"):
+        safe_id(identity)
+
+
+@pytest.mark.parametrize("relative", ["frames/image.png:stream", "frames/NUL.png", "frames/ending./image.png",
+                                       "frames/ending /image.png", "frames/a?b.png", "frames/a\x00b.png"])
+@pytest.mark.skipif(os.name != "nt", reason="Windows filename restrictions preserve existing POSIX libraries")
+def test_relative_references_reject_windows_aliases_before_access(tmp_path, relative):
+    with pytest.raises(ValueError, match="文件引用"):
+        confined_path(tmp_path, relative)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX libraries retain their existing legal filenames")
+def test_legacy_posix_identifiers_and_paths_remain_compatible(tmp_path):
+    assert safe_id("asset:legacy") == "asset:legacy"
+    path = confined_path(tmp_path, "legacy:cache/result.json")
+    atomic_json(path, {"preserved": True})
+    assert read_json(path) == {"preserved": True}
+
+
+@pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("identity", ["entity:legacy", "CON", "trailing."])
+def test_platform_filename_rules_preserve_legacy_macos_ids(monkeypatch, windows, identity):
+    monkeypatch.setattr("scenerecall.library._WINDOWS_PATHS", windows)
+    if windows:
+        with pytest.raises(ValueError, match="记录 ID"):
+            safe_id(identity)
+    else:
+        assert safe_id(identity) == identity
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_platform_filename_rules_preserve_legacy_macos_references(tmp_path, monkeypatch, windows):
+    monkeypatch.setattr("scenerecall.library._WINDOWS_PATHS", windows)
+    if windows:
+        with pytest.raises(ValueError, match="文件引用"):
+            confined_path(tmp_path, "legacy:cache/result.json")
+    else:
+        assert confined_path(tmp_path, "legacy:cache/result.json") == (tmp_path / "legacy:cache/result.json").resolve()
 
 
 def test_zip_symlink_rejected(library, tmp_path):

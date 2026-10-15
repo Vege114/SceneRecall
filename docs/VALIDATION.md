@@ -1,5 +1,37 @@
 # SceneRecall 验证记录
 
+## Windows 兼容与 macOS 回归保护（2026-10-15）
+
+本轮从同步后的 `ebdc758` 开始，保留 macOS 现有功能，增加 Windows 平台分支。验证环境为 Windows 11（build 26200）、Python 3.12.6、Node.js 22.11.0、FFmpeg / ffprobe 9.0.2；Python 与 npm 均按仓库锁文件安装。
+
+已验证 Windows 真实 CLI 启停：默认与显式 start、uv launcher / venv redirector 发现、不同资料目录拒停、dry-run、重复停止、无关 HTTP 服务保护、正常 lifespan 退出，以及用户文件和设置保留。命名事件的原生 DACL 只允许当前用户 SID 与 SYSTEM，服务结束后对象释放。另在中文临时资料目录实际启动已构建应用：首页及两个静态资源均返回 200，未登录初始化返回 401，建立会话后 bootstrap 返回 200，空资料库读取成功，停止命令与服务均以 0 退出。
+
+同时间戳任务加入 SQLite 持久插入顺序作为排序次序，保留普通时间戳排序；确定性回归冻结时钟，检查多集剧情次序、更新与重启后顺序不变。
+
+媒体测试在本机生成合成视频／音轨，覆盖容器字幕原始时间轴、中文 UTF-8、关键帧、OCR、音频裁剪、备份和恢复。持久相对路径逐项核对为 `/`；Windows ZIP 名称使用原始条目校验，拒绝路径归一、设备名及 ADS 等非法映射。Windows 的保留名限制和 310 ms 原子替换重试独立测试，同时模拟 POSIX 分支确认旧合法 ID／路径规则、一次替换语义不变。macOS 历史含冒号付费回执另有 POSIX 专属复用回归。
+
+Codex 测试均为真实本机子进程替身，未调用模型。Windows Node 集成核对中文、空格、shell 字符、引号和 UTF-8 stdin 原样传递，npm shim 从未作为 shell 脚本执行；Job Object 验证超时、取消以及原 launcher 退出后的后代清理。本地视觉 worker 测试覆盖常驻复用、半行超时、EOF、重启和断管清理。Windows Forms 测试实际加载固定 PowerShell 脚本并返回取消 JSON，替换交互调用以免自动打开用户选择窗口；不冒称已人工完成实窗多选。
+
+Windows 后端全量 **1,213 通过／9 跳过／1 项失败**（599.52 秒）；唯一失败定位到同时间戳任务排序，修复后对受影响队列／多集／工作流／执行 API 核心用例复测，去重 **68 项全部通过**，含新增的两个确定性排序用例。全量前其余平台、恢复、文件占用修复均已冻结并纳入该次运行。跳过项为非 Windows 平台的原生能力／历史文件名测试和显式选择加入的实窗测试。统一最终提交的 Windows／macOS 全量状态以[双平台 CI](https://github.com/Vege114/SceneRecall/actions/workflows/ci.yml)为准；不把修复前的单次失败隐藏成单进程全绿。
+
+前端 19 个文件、**210 项通过**，TypeScript / Vite 生产构建、Ruff、补丁空白检查和离线锁文件检查通过。Windows 前端使用 Vitest threads pool，避免本机 forks worker 的进程权限差异。并发测试保留全部原断言，Windows 仅放宽生成持久帧后的握手期限、增加受控模型延迟，使断言不取决于 NTFS 开销；macOS 原期限和延迟保持不变。
+
+复现（需允许测试创建本机端口与子进程，且 FFmpeg / ffprobe 已加入当前终端 PATH）：
+
+```powershell
+uv sync --frozen --python 3.12 --extra dev
+npm.cmd ci --ignore-scripts
+uv run --frozen pytest -q
+uv run --frozen ruff check backend tests scripts
+uv lock --check --offline
+cd frontend
+npm.cmd ci
+npm.cmd test -- --pool=threads --maxWorkers=2
+npm.cmd run build
+```
+
+新增[双平台 CI](https://github.com/Vege114/SceneRecall/actions/workflows/ci.yml)（`.github/workflows/ci.yml`）在 Windows 与 macOS 安装相同锁定依赖，运行后端／前端回归和构建。macOS 原生 AppKit 实窗 smoke 仍需显式开启；本机没有运行 macOS，也未在 Windows 下载重型模型权重、测试真实动画模型效果或改动用户影片。原工作区未提交的 LRASD 工作未纳入本轮提交。
+
 ## 角色中心的视听理解（2026-10-15）
 
 修改前基线固定为 `3728bb241c7f913000699b50e15596a360edfe9f`。基线前端 **198 通过／18 文件／6.13 秒**。基线后端在受限沙箱中 **1,077 通过、3 跳过、3 个回环端口测试被权限阻止／109.85 秒**；失败原因是 `socket.bind` 的 `PermissionError`，没有当作识别或业务失败。下面最终全量允许隔离回环服务测试运行。测试套件耗时不是动画处理性能指标。

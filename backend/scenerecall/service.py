@@ -18,6 +18,9 @@ import time
 import psutil
 
 
+WINDOWS = os.name == "nt"
+
+
 class ServiceError(Exception):
     """An unsafe or unsuccessful stop, suitable for display in the terminal."""
 
@@ -42,7 +45,7 @@ def parser() -> argparse.ArgumentParser:
 
 def _path(value: str, cwd: Path, home: Path) -> Path:
     # Resolve paths in the server's context, not in the stop command's cwd/HOME.
-    if value == "~" or value.startswith("~/"):
+    if value == "~" or value.startswith("~/") or (WINDOWS and value.startswith("~\\")):
         value = str(home) + value[1:]
     return (cwd / value).resolve()
 
@@ -68,21 +71,31 @@ def _launch_options(argv: list[str], cwd: Path, home: Path) -> tuple[Path, int] 
 
 
 def _matches(process: psutil.Process, data_dir: Path, port: int) -> bool:
-    if process.uids().effective != os.geteuid():
+    if WINDOWS:
+        if process.username().casefold() != psutil.Process().username().casefold():
+            return False
+    elif process.uids().effective != os.geteuid():
         return False
     argv = process.cmdline()
     # The normal console script has exactly one Python executable before it.
     # Refuse python -c, uvicorn, wrappers, and similarly named scripts elsewhere.
-    if len(argv) < 2 or Path(argv[1]).name != "scenerecall":
+    script = "scenerecall.exe" if WINDOWS else "scenerecall"
+    if len(argv) < 2 or Path(argv[1]).name.casefold() != script:
         return False
     cwd = Path(process.cwd())
-    launcher = Path(sysconfig.get_path("scripts")) / "scenerecall"
+    launcher = Path(sysconfig.get_path("scripts")) / script
     if (cwd / argv[1]).resolve() != launcher.resolve():
         return False
-    if Path(process.exe()).resolve() != Path(sys.executable).resolve():
+    # Windows venv python.exe is a redirector. Its actual Python child uses the
+    # base executable, while both processes carry the same console-script argv.
+    # Compare to our own OS executable to select the server rather than that
+    # waiting redirector; launcher identity still pins the virtual environment.
+    interpreter = psutil.Process().exe() if WINDOWS else sys.executable
+    if Path(process.exe()).resolve() != Path(interpreter).resolve():
         return False
     # The server may have been started with a different HOME under the same UID.
-    home = Path(process.environ().get("HOME") or Path.home())
+    environment = process.environ()
+    home = Path((environment.get("USERPROFILE") if WINDOWS else environment.get("HOME")) or Path.home())
     return _launch_options(argv[2:], cwd, home) == (data_dir, port)
 
 
@@ -96,11 +109,11 @@ def _port_busy(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         # Closed HTTP connections can leave TIME_WAIT sockets after shutdown.
         # They must not make an already stopped server look like a live owner.
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE if WINDOWS else socket.SO_REUSEADDR, 1)
         try:
             probe.bind(("127.0.0.1", port))
         except OSError as exc:
-            if exc.errno == errno.EADDRINUSE:
+            if exc.errno == errno.EADDRINUSE or (WINDOWS and exc.errno == errno.EACCES):
                 return True
             raise
     return False
@@ -144,7 +157,7 @@ def _wait_for_exit(process: psutil.Process, timeout: float) -> None:
         if remaining <= 0:
             raise psutil.TimeoutExpired(timeout, pid=process.pid)
         try:
-            process.wait(timeout=min(0.1, remaining))
+            process.wait(timeout=min(0.1, remaining, timeout))
             return
         except psutil.TimeoutExpired:
             # A non-child zombie has already exited, even if its parent has not
@@ -154,8 +167,6 @@ def _wait_for_exit(process: psutil.Process, timeout: float) -> None:
 
 
 def stop_service(data_dir: Path, port: int, timeout: float = 30.0, dry_run: bool = False) -> str:
-    if os.name != "posix":
-        raise ServiceError("stop 目前仅支持 macOS / Linux；请在启动服务的终端按 Ctrl+C 正常退出。")
     if not math.isfinite(timeout) or timeout <= 0:
         raise ServiceError("等待秒数必须是有限的正数。")
     try:
@@ -167,9 +178,16 @@ def stop_service(data_dir: Path, port: int, timeout: float = 30.0, dry_run: bool
         # time again, preventing a stale PID from targeting its replacement.
         if not process.is_running() or not _matches(process, data_dir, port) or not _listens(process, port):
             raise ServiceError("目标进程身份或监听状态已变化；未发送停止信号，请重试。")
+        if WINDOWS:
+            from .windows_service import request_shutdown
+            try:
+                request_shutdown(process, data_dir, port, dry_run=dry_run)
+            except FileNotFoundError as exc:
+                raise ServiceError("目标服务没有可用的安全停止通道；请在启动服务的终端按 Ctrl+C 正常退出，并更新后重新启动。") from exc
         if dry_run:
             return f"检查通过：可安全停止 SceneRecall（PID {process.pid}，端口 {port}，资料目录 {data_dir}）；未发送信号。"
-        process.terminate()  # SIGTERM on POSIX; never escalate to SIGKILL.
+        if not WINDOWS:
+            process.terminate()  # SIGTERM on POSIX; never escalate to SIGKILL.
         try:
             _wait_for_exit(process, timeout)
         except psutil.TimeoutExpired as exc:

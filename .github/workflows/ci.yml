@@ -1,0 +1,40 @@
+name: Cross-platform checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: astral-sh/setup-uv@v6
+      - name: Install FFmpeg on Windows
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --yes --no-progress
+      - name: Install FFmpeg on macOS
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - run: uv sync --frozen --python 3.12 --extra dev
+      - run: npm ci --ignore-scripts
+      - run: uv run --frozen pytest -q
+      - run: uv run --frozen ruff check backend tests
+      - run: npm ci
+        working-directory: frontend
+      - run: npm test -- --pool=threads --maxWorkers=2
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend

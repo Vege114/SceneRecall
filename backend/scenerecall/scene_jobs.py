@@ -479,10 +479,10 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         if split is not None:
             return await self._split_scene_call(job_id, stage, unit, profile, method, args,
                                                 split["index"], key, output)
-        self.update(job_id, stage=stage, pending_scene_receipt=str(output.relative_to(root)))
+        self.update(job_id, stage=stage, pending_scene_receipt=output.relative_to(root).as_posix())
         call_id = uid("call")
         await self.reserve_call(job_id, profile, call_id=call_id, stage=stage, frames=images,
-                                receipt_path=str(output.relative_to(self.library.root)),
+                                receipt_path=output.relative_to(self.library.root).as_posix(),
                                 context_tokens=encoded_size(canonical(args)))
         async def perform():
             started = time.monotonic()

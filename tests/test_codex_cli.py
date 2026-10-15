@@ -2,25 +2,103 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
 import pytest
+import psutil
 
 from scenerecall import codex_cli
 from scenerecall.codex_cli import CodexCLIError
+
+
+def test_environment_preserves_windows_login_and_certificate_locations(monkeypatch):
+    locations = {"USERPROFILE": r"C:\Users\影像 用户", "HOMEDRIVE": "C:", "HOMEPATH": r"\Users\影像 用户",
+                 "APPDATA": r"C:\Users\影像 用户\AppData\Roaming", "CODEX_HOME": r"D:\Codex 目录"}
+    for name, value in locations.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("OPENAI_API_KEY", "do-not-inherit")
+    monkeypatch.setenv("CODEX_THREAD_ID", "do-not-inherit")
+    environment = codex_cli._environment()
+    assert all(environment.get(name) == value for name, value in locations.items())
+    assert "OPENAI_API_KEY" not in environment and "CODEX_THREAD_ID" not in environment
+
+
+@pytest.mark.parametrize("suffix", [".cmd", ".CMD", ".bat"])
+def test_windows_npm_shim_resolves_to_node_without_a_shell(tmp_path, monkeypatch, suffix):
+    monkeypatch.setattr(codex_cli, "_WINDOWS", True)
+    shim = tmp_path / f"codex{suffix}"
+    shim.write_text("this batch script must never run")
+    entry = tmp_path / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("// npm entry point")
+    node = tmp_path / "node.exe"
+    node.touch()
+    monkeypatch.setattr(codex_cli.shutil, "which", lambda _: pytest.fail("prefer npm's adjacent Node"))
+    assert codex_cli._command(str(shim)) == [str(node), str(entry)]
+
+
+def test_windows_npm_shim_uses_node_from_path_or_rejects_missing_install(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_cli, "_WINDOWS", True)
+    shim = tmp_path / "codex.cmd"
+    shim.touch()
+    entry = tmp_path / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    entry.parent.mkdir(parents=True)
+    entry.touch()
+    monkeypatch.setattr(codex_cli.shutil, "which", lambda name: r"C:\Program Files\nodejs\node.exe")
+    assert codex_cli._command(str(shim)) == [r"C:\Program Files\nodejs\node.exe", str(entry)]
+    monkeypatch.setattr(codex_cli.shutil, "which", lambda name: None)
+    with pytest.raises(CodexCLIError, match="Node.js"):
+        codex_cli._command(str(shim))
+    entry.unlink()
+    with pytest.raises(CodexCLIError, match="npm"):
+        codex_cli._command(str(shim))
+
+
+def test_native_cli_path_is_not_reinterpreted_as_a_shell_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_cli, "_WINDOWS", True)
+    executable = str(tmp_path / "native codex.exe")
+    assert codex_cli._command(executable) == [executable]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows npm shim and Job Object integration")
+@pytest.mark.asyncio
+async def test_windows_npm_launch_preserves_unicode_shell_characters_and_arguments(tmp_path, monkeypatch):
+    node = shutil.which("node.exe")
+    if not node:
+        pytest.skip("Node.js is not installed")
+    directory = tmp_path / "影像 & (100%) npm"
+    directory.mkdir()
+    shim = directory / "codex.cmd"
+    sentinel = tmp_path / "batch-was-executed"
+    shim.write_text(f'@echo off\necho unsafe > "{sentinel}"\n', encoding="utf-8")
+    entry = directory / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    entry.parent.mkdir(parents=True)
+    entry.write_text('process.stdin.setEncoding("utf8"); let input="";'
+                     'process.stdin.on("data", chunk => input += chunk);'
+                     'process.stdin.on("end", () => console.log(JSON.stringify({args:process.argv.slice(2), input})));',
+                     encoding="utf-8")
+    arguments = ["原始 & echo injected", '(100%) "quoted"', 'model_instructions_file="D:\\\\影像 路径\\\\a.txt"']
+    code, output, errors = await codex_cli._run([str(shim), *arguments], directory=directory,
+                                               timeout_s=5, stdin="Unicode 用户数据 & %PATH%".encode("utf-8"))
+    assert code == 0 and errors == b""
+    assert json.loads(output) == {"args": arguments, "input": "Unicode 用户数据 & %PATH%"}
+    assert not sentinel.exists()
 
 
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
     """A real child process with deterministic output, never a model request."""
     configuration = tmp_path / "fake-config.json"
-    log = tmp_path / "calls.jsonl"
+    log = tmp_path / "calls"
+    log.mkdir()
     configuration.write_text("{}")
-    script = tmp_path / "codex"
-    script.write_text(f"#!{sys.executable}\n" + '''
+    script = tmp_path / "codex.py"
+    script.write_text('''
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -39,26 +117,35 @@ elif args[:2] == ["login", "status"]:
     print(config.get("login", "Logged in using ChatGPT"), file=sys.stderr)
     sys.exit(config.get("login_code", 0))
 else:
-    prompt = sys.stdin.read()
+    prompt = sys.stdin.buffer.read().decode("utf-8")
     images = [Path(args[i + 1]) for i, value in enumerate(args) if value == "--image"]
     instructions = next(value.split("=", 1)[1] for value in args if value.startswith("model_instructions_file="))
     record = {"args": args, "prompt": prompt, "cwd": os.getcwd(), "pid": os.getpid(), "env": dict(os.environ),
+              "created": __import__("psutil").Process().create_time(),
               "image_data": [base64_encode(image.read_bytes()) for image in images],
               "image_modes": [image.stat().st_mode & 0o777 for image in images],
-              "instructions": Path(json.loads(instructions)).read_text()}
+              "instructions": Path(json.loads(instructions)).read_text(encoding="utf-8")}
     if "--output-schema" in args:
         schema_path = Path(args[args.index("--output-schema") + 1])
         record["output_schema"] = json.loads(schema_path.read_text())
         record["schema_mode"] = schema_path.stat().st_mode & 0o777
-    with log.open("a") as handle:
-        handle.write(json.dumps(record) + "\\n")
     scenario = config.get("scenario", "success")
+    if scenario in {"orphan", "descendant"}:
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                 stdin=subprocess.DEVNULL)
+        record["child_pid"] = child.pid
+        record["child_created"] = __import__("psutil").Process(child.pid).create_time()
+    # Windows append writes from separate processes can overwrite each other.
+    # One atomically published record per child also keeps polling readers safe.
+    pending = log / f"{os.getpid()}.tmp"
+    pending.write_text(json.dumps(record), encoding="utf-8")
+    pending.replace(log / f"{os.getpid()}.json")
     if scenario == "timeout":
         time.sleep(60)
     if scenario == "orphan":
-        if os.fork() == 0:
-            time.sleep(60)
         sys.exit(0)
+    if scenario == "descendant":
+        time.sleep(60)
     if scenario == "flood":
         print("x" * (5 * 1024 * 1024), flush=True)
         time.sleep(60)
@@ -86,8 +173,17 @@ else:
 '''.replace("CONFIGURATION", repr(str(configuration))).replace("LOG", repr(str(log)))
         .replace("FEATURES", repr("\n".join(f"{name} stable true" for name in (
             *codex_cli._DISABLED_FEATURES, "skip_host_skill_discovery")))).replace(
-                "base64_encode(image.read_bytes())", "__import__('base64').b64encode(image.read_bytes()).decode()"))
+                "base64_encode(image.read_bytes())", "__import__('base64').b64encode(image.read_bytes()).decode()"),
+                      encoding="utf-8")
     script.chmod(0o700)
+    original_command = codex_cli._command
+
+    def command(executable):
+        if Path(executable).resolve() == script.resolve():
+            return [sys.executable, "-X", "utf8", str(script)]
+        return original_command(executable)
+
+    monkeypatch.setattr(codex_cli, "_command", command)
     monkeypatch.setenv("SCENERECALL_CODEX_PATH", str(script))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
 
@@ -95,7 +191,7 @@ else:
         configuration.write_text(json.dumps(values))
 
     def calls():
-        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+        return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(log.glob("*.json"))]
 
     return configure, calls
 
@@ -173,7 +269,9 @@ async def test_output_schema_is_passed_as_private_temporary_file_and_removed(cli
               "required": ["frame_id"], "additionalProperties": False}
     result = await codex_cli.complete("Return JSON", "fixture", "", 5, output_schema=schema)
     [call] = calls()
-    assert call["output_schema"] == schema and call["schema_mode"] == 0o600
+    assert call["output_schema"] == schema
+    if os.name == "posix":
+        assert call["schema_mode"] == 0o600
     path = Path(call["args"][call["args"].index("--output-schema") + 1])
     assert path.parent.resolve() == Path(call["cwd"]).resolve() and not path.exists()
     assert result.request_count == 1 and result.usage["total_tokens"] == 109
@@ -210,7 +308,8 @@ async def test_images_preserve_frame_order_and_are_private_and_removed(cli):
     await codex_cli.complete("Analyze frames.", content, "gpt-5.4", 5)
     [call] = calls()
     assert call["image_data"] == [base64.b64encode(data).decode() for data in [b"first-image", b"second-image"]]
-    assert call["image_modes"] == [0o600, 0o600]
+    if os.name == "posix":
+        assert call["image_modes"] == [0o600, 0o600]
     assert call["prompt"].index('"f0"') < call["prompt"].index("Attached image 1") < call["prompt"].index('"f1"')
     assert call["prompt"].index('"f1"') < call["prompt"].index("Attached image 2")
     assert call["args"].count("--image") == 2
@@ -253,13 +352,12 @@ async def test_timeout_kills_reaps_and_cleans_up(cli):
     configure, calls = cli
     configure(scenario="timeout")
     with pytest.raises(CodexCLIError, match="超时") as error:
-        await codex_cli.complete("instruction", "text", "gpt-5.4", 1)
+        # Windows launches four inspection processes before model admission.
+        await codex_cli.complete("instruction", "text", "gpt-5.4", 3 if os.name == "nt" else 1)
     assert error.value.request_count == 1
     [call] = calls()
     assert not Path(call["cwd"]).exists()
-    if os.name == "posix":
-        with pytest.raises(ProcessLookupError):
-            os.kill(call["pid"], 0)
+    _assert_process_stopped(call["pid"], call["created"])
 
 
 @pytest.mark.asyncio
@@ -275,9 +373,7 @@ async def test_cancellation_kills_reaps_and_cleans_up(cli):
         await task
     [call] = calls()
     assert not Path(call["cwd"]).exists()
-    if os.name == "posix":
-        with pytest.raises(ProcessLookupError):
-            os.kill(call["pid"], 0)
+    _assert_process_stopped(call["pid"], call["created"])
 
 
 @pytest.mark.asyncio
@@ -329,15 +425,42 @@ async def test_recovered_transport_error_and_default_model(cli):
     assert "-m" not in calls()[0]["args"]
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups")
 @pytest.mark.asyncio
 async def test_timeout_kills_descendants_after_leader_exits(cli):
     configure, calls = cli
     configure(scenario="orphan")
     with pytest.raises(CodexCLIError, match="超时") as error:
-        await asyncio.wait_for(codex_cli.complete("instruction", "text", "", 1), timeout=4)
+        await asyncio.wait_for(codex_cli.complete("instruction", "text", "", 3 if os.name == "nt" else 1), timeout=6)
     assert error.value.request_count == 1
-    assert not Path(calls()[0]["cwd"]).exists()
+    [call] = calls()
+    assert not Path(call["cwd"]).exists()
+    _assert_process_stopped(call["child_pid"], call["child_created"])
+
+
+def _assert_process_stopped(pid, created):
+    try:
+        child = psutil.Process(pid)
+        # Zombies have stopped and closed their inherited pipes. Include create
+        # time so a recycled PID never makes the assertion inspect another app.
+        assert child.create_time() != created or child.status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_cancellation_kills_native_descendants_and_closes_pipes(cli):
+    configure, calls = cli
+    configure(scenario="descendant")
+    task = asyncio.create_task(codex_cli.complete("instruction", "text", "", 10))
+    async with asyncio.timeout(5):
+        while not calls():
+            await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=4)
+    [call] = calls()
+    assert not Path(call["cwd"]).exists()
+    _assert_process_stopped(call["child_pid"], call["child_created"])
 
 
 @pytest.mark.asyncio

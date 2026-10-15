@@ -1,4 +1,9 @@
 .DS_Store
+Thumbs.db
+Desktop.ini
+.worktrees/
+.npm-cache/
+.tools/
 .idea/
 .statamcp/
 测试用视频/

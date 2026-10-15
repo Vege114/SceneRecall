@@ -247,7 +247,7 @@ def test_restore_transaction_recovers_before_migrating_new_project_assets(librar
     restored = Library(tmp_path / "destination")
     seed(restored, "asset_existing", "已经存在的作品")
     original_bytes = (restored.asset_dir("asset_existing") / "manifest.json").read_bytes()
-    original_write, original_replace = module.atomic_json, module.os.replace
+    original_write, original_replace = module.atomic_json, module.atomic_replace
 
     def interrupted_write(path, value):
         if failure_point == "prepare" and path == restored.organization.journal and "files" in value:
@@ -263,7 +263,7 @@ def test_restore_transaction_recovers_before_migrating_new_project_assets(librar
 
     with monkeypatch.context() as patch:
         patch.setattr(module, "atomic_json", interrupted_write)
-        patch.setattr(module.os, "replace", interrupted_replace)
+        patch.setattr(module, "atomic_replace", interrupted_replace)
         with pytest.raises(OSError):
             restored.restore(archive)
     assert (restored.asset_dir("asset_existing") / "manifest.json").read_bytes() == original_bytes

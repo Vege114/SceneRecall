@@ -127,6 +127,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::EnableVisualStyles()
 $options = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 try {
@@ -146,7 +147,9 @@ try {
 
 def _run(command: list[str], *, input: str | None = None):
     try:
-        return subprocess.run(command, input=input, capture_output=True, text=True, encoding="utf-8", check=False)
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+        return subprocess.run(command, input=input, capture_output=True, text=True, encoding="utf-8", check=False,
+                              **options)
     except OSError as exc:
         raise FilePickerUnavailable("无法打开系统文件选择窗口，请检查本机桌面环境后重试") from exc
 

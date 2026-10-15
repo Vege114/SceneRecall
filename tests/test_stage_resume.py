@@ -1,10 +1,13 @@
 """Committed legacy stages and index builds resume after later-stage failures."""
+import os
+
 import pytest
 
 from scenerecall.jobs import JobQueue
 from scenerecall.models import AnalysisInput
 from scenerecall.providers import ProviderError
 from scenerecall.search import SearchEngine
+from scenerecall.library import digest, read_json
 from test_jobs_review import worker as worker
 from test_search import record, vector_provider
 
@@ -131,9 +134,28 @@ async def test_embedding_receipt_recovers_response_and_accounting_before_cache_c
         fault.setattr(queue, "_account_scene_receipt", lambda *args: (_ for _ in ()).throw(ProcessExit()))
         with pytest.raises(ProcessExit):
             await queue.execute(job["id"])
+    receipts = list((queue.library.root / "runtime" / "call-receipts" / job["id"]).glob("*.json"))
+    assert len(receipts) == 1 and ":" not in receipts[0].name
+    assert read_json(receipts[0])["receipt_id"].startswith("embedding:")
     restarted = JobQueue(queue.library, queue.providers, queue.search)
     assert restarted.get(job["id"])["request_count"] == 1
     await restarted.execute(job["id"])
     assert restarted.get(job["id"])["status"] == "completed"
     assert restarted.get(job["id"])["request_count"] == 1
     assert queue.providers.calls == ["embedding"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Legacy macOS receipt names contain a colon")
+@pytest.mark.asyncio
+async def test_legacy_macos_receipt_is_reused_without_a_second_paid_call(worker):
+    queue, _, _ = worker
+    job = queue.add("index", {"max_requests": 100})
+    profile = queue.providers.get("test")
+    key = "embedding:" + digest(["legacy macOS cache"])
+    first = await queue.call(job["id"], profile, queue.providers.embed, ["legacy macOS cache"], receipt_key=key)
+    directory = queue.library.root / "runtime" / "call-receipts" / job["id"]
+    next(directory.glob("*.json")).rename(directory / f"{key}.json")
+    second = await queue.call(job["id"], profile, queue.providers.embed, ["legacy macOS cache"], receipt_key=key)
+    assert second == first
+    assert queue.providers.calls == ["embedding"]
+    assert queue.get(job["id"])["request_count"] == 1

@@ -13,7 +13,7 @@ import io
 import json
 import math
 import os
-import selectors
+import queue
 import shutil
 import subprocess
 import sys
@@ -24,6 +24,7 @@ from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps, ImageStat
 
 from .characters import CharacterStore, checked_box, scope_id
+from .file_io import atomic_replace
 from .library import atomic_json, confined_path, digest, now, read_json, safe_id, uid
 
 
@@ -79,7 +80,7 @@ def _write_bytes(path: Path, content: bytes):
     temporary = path.with_name(f".{path.name}.{uid('write')}.tmp")
     try:
         temporary.write_bytes(content)
-        os.replace(temporary, path)
+        atomic_replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -242,6 +243,7 @@ class ImgutilsBackend:
         self.model = model
         self.timeout_s = timeout_s
         self._process = None
+        self._reader = None
         self._lock = threading.RLock()
         self._metadata = None
         atexit.register(self.close)
@@ -249,24 +251,36 @@ class ImgutilsBackend:
     def close(self):
         with self._lock:
             if self._process is not None:
-                self._process.terminate()
+                process, self._process = self._process, None
+                if process.poll() is None:
+                    process.terminate()
                 try:
-                    self._process.wait(timeout=2)
+                    process.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=2)
-                self._process = None
+                    process.kill()
+                    process.wait(timeout=2)
+                if self._reader is not None:
+                    self._reader.join(timeout=2)
+                    self._reader = None
+                for stream in (process.stdin, process.stdout):
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        # A failed stdin flush can fail again during close;
+                        # preserve the original timeout/worker-unavailable error.
+                        pass
 
     def _request(self, action, **arguments):
         from .local_resources import LOCAL_MODEL_GATE
         with self._lock, LOCAL_MODEL_GATE:
             if self._process is None or self._process.poll() is not None:
+                self.close()
                 executable = os.environ.get("SCENERECALL_VISUAL_PYTHON", sys.executable)
                 resolved = shutil.which(executable)
                 if not resolved or not Path(resolved).is_file():
                     raise IdentityUnavailable("SCENERECALL_VISUAL_PYTHON 不是可执行的本地 Python 路径")
                 environment = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
-                                   HF_HUB_DISABLE_TELEMETRY="1", OMP_NUM_THREADS="2")
+                                   HF_HUB_DISABLE_TELEMETRY="1", OMP_NUM_THREADS="2", PYTHONIOENCODING="utf-8")
                 # The dedicated ML environment need not install SceneRecall's
                 # entire application dependency set; only this private worker
                 # and optional visual dependencies are imported in that process.
@@ -275,16 +289,33 @@ class ImgutilsBackend:
                 self._process = subprocess.Popen(
                     [resolved, "-u", "-m", "scenerecall.visual_identity_worker", self.model],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    text=True, env=environment)
+                    text=True, encoding="utf-8", env=environment)
             try:
                 self._process.stdin.write(json.dumps({"action": action, **arguments}) + "\n")
                 self._process.stdin.flush()
-                with selectors.DefaultSelector() as selector:
-                    selector.register(self._process.stdout, selectors.EVENT_READ)
-                    if not selector.select(self.timeout_s):
-                        self.close()
-                        raise IdentityUnavailable("imgutils 本地识别超时；已停止该 worker")
-                output = self._process.stdout.readline()
+                # Windows selectors support sockets, not subprocess pipes. Read
+                # the entire JSON line in a thread so partial output is bounded
+                # by the same timeout on every supported platform.
+                response = queue.Queue(maxsize=1)
+                stream = self._process.stdout
+
+                def read_line():
+                    try:
+                        response.put(stream.readline())
+                    except (OSError, ValueError) as exc:
+                        response.put(exc)
+
+                self._reader = threading.Thread(target=read_line, name="scenerecall-visual-output", daemon=True)
+                self._reader.start()
+                try:
+                    output = response.get(timeout=self.timeout_s)
+                except queue.Empty:
+                    self.close()
+                    raise IdentityUnavailable("imgutils 本地识别超时；已停止该 worker") from None
+                self._reader.join()
+                self._reader = None
+                if isinstance(output, Exception):
+                    raise output
                 result = json.loads(output)
             except (BrokenPipeError, OSError, ValueError) as exc:
                 self.close()

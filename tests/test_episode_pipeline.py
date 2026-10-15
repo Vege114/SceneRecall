@@ -125,7 +125,12 @@ async def test_task_internal_and_standalone_scans_share_local_slots(scene_worker
 @pytest.mark.asyncio
 async def test_parallel_episode_dialogue_barrier_preserves_chronological_plot(scene_worker, monkeypatch):
     worker = scene_worker(2)
-    assets, jobs = episode_batch(worker)
+    # Windows can create several jobs in the same clock tick. Exercise that
+    # case on every platform, including chronological publication after restart.
+    with monkeypatch.context() as clock:
+        clock.setattr("scenerecall.jobs.now", lambda: "2026-10-15T12:00:00+00:00")
+        assets, jobs = episode_batch(worker)
+    worker.queue = JobQueue(worker.library, worker.provider, worker.queue.search)
     entered, later_done, release_first = asyncio.Event(), asyncio.Event(), asyncio.Event()
     original_text, original_visual = worker.provider.prepare_subtitles, worker.provider.prepare_visual
     active, peak = 0, 0

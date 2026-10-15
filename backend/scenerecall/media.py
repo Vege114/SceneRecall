@@ -21,6 +21,8 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from .file_io import atomic_replace
+
 
 class MediaError(ValueError):
     """Invalid local media or a failed media-tool operation."""
@@ -246,7 +248,7 @@ def extract_subtitle_track(source: Path, stream_index: int, output: Path,
         _normalize_subtitle_timestamps(temporary)
         if temporary.stat().st_size >= _MAX_SUBTITLE_BYTES:
             raise MediaError("提取的字幕超过 50 MB。")
-        os.replace(temporary, output)
+        atomic_replace(temporary, output)
         return output
     finally:
         temporary.unlink(missing_ok=True)
@@ -463,7 +465,7 @@ def extract_frame(path: Path, at_ms: int, out_path: Path, crop: Any = None) -> d
             if not matches:
                 raise MediaError("无法读取画面的媒体时间戳。")
             actual_ms = at_ms + round(float(matches[0][2]) * 1000)
-        os.replace(temporary, out_path)
+        atomic_replace(temporary, out_path)
         return {"id": out_path.stem, "path": str(out_path), "at_ms": max(0, actual_ms),
                 "requested_at_ms": at_ms}
     finally:
@@ -540,7 +542,7 @@ def extract_frames(path: Path, times_ms: list[int], out_paths: list[Path], crop:
                     from PIL import Image
                     with Image.open(files[index]) as image:
                         image.save(temporary)
-                os.replace(temporary, output)
+                atomic_replace(temporary, output)
             finally:
                 temporary.unlink(missing_ok=True)
             records.append({"id": output.stem, "path": str(output), "at_ms": decoded[index],
@@ -567,6 +569,6 @@ def create_proxy(path: Path, out_path: Path) -> None:
         ], timeout=60 * 60 * 12)
         if not temporary.stat().st_size:
             raise MediaError("播放代理生成失败。")
-        os.replace(temporary, out_path)
+        atomic_replace(temporary, out_path)
     finally:
         temporary.unlink(missing_ok=True)

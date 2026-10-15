@@ -116,7 +116,7 @@ def test_restore_audio_graph_rejects_escape_and_preserves_merged_historical_samp
     atomic_jsonl(raw_path, [{**raw[0], "audio_ref": str(tmp_path / "outside.wav")}, *raw[1:]])
     with pytest.raises(ValueError, match="文件引用"):
         validate_audio_artifacts(app.state.library)
-    with pytest.raises(ValueError, match="越界"):
+    with pytest.raises(ValueError, match="文件引用|越界"):
         service.clip_path("asset", raw[0]["id"])
     atomic_jsonl(raw_path, [{**raw[0], "end_ms": 9000}, *raw[1:]])
     with pytest.raises(ValueError, match="时间范围"):

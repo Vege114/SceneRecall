@@ -20,7 +20,7 @@ function matchScore(row: ImportInput, path: string, detection?: SubtitleDetectio
   return titleA && titleB ? 200 : 100;
 }
 
-/** Match by identity, never Finder's selection order. Ties remain user choices. */
+/** Match by identity, never the system dialog's selection order. Ties remain user choices. */
 export function pairSubtitles(rows: ImportInput[], paths: string[], detections: Record<string, SubtitleDetection> = {}): Record<string, string> {
   const choices = new Map<string, { row: ImportInput; score: number }[]>();
   for (const path of [...new Set(paths)]) {

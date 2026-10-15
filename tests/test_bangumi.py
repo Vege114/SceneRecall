@@ -184,9 +184,8 @@ async def test_timeout_kills_real_child_process(tmp_path, monkeypatch):
         await BangumiClient(timeout_s=0.2)._run("subject", "get", "1")
     assert pid_file.exists()
     # A failed process must be reaped rather than left in the server's event loop.
-    import os
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(pid_file.read_text()), 0)
+    import psutil
+    assert not psutil.pid_exists(int(pid_file.read_text()))
 
 
 async def test_request_concurrency_is_bounded(tmp_path, monkeypatch):

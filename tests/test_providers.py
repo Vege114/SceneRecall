@@ -56,7 +56,7 @@ def test_secret_storage_never_serializes_key_and_empty_preserves(tmp_path, monke
     assert "api_key" not in connection
     providers.upsert({"id": "test", "name": "新名字", "api_key": ""})
     assert providers._key(providers.get("test")) == "top-secret-123"
-    assert "top-secret" not in providers.path.read_text()
+    assert "top-secret" not in providers.path.read_text(encoding="utf-8")
     assert "top-secret" not in json.dumps(providers.list())
     restarted = ProviderManager(providers.settings_dir)
     with pytest.raises(ProviderError, match="尚无 API Key"):
@@ -64,7 +64,7 @@ def test_secret_storage_never_serializes_key_and_empty_preserves(tmp_path, monke
     monkeypatch.setenv("SCENERECALL_TEST_KEY", "env-only-secret")
     connection = providers.upsert({"id": "test", "secret_mode": "env", "env_var": "SCENERECALL_TEST_KEY"})
     assert providers._key(connection) == "env-only-secret"
-    assert "env-only-secret" not in providers.path.read_text()
+    assert "env-only-secret" not in providers.path.read_text(encoding="utf-8")
 
 
 def test_keyring_mode_separates_libraries_and_deletes(tmp_path, monkeypatch):

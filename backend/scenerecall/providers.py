@@ -30,6 +30,7 @@ import keyring
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from . import codex_cli
+from .file_io import atomic_replace
 from .scene_preparation import (
     CONTEXTUAL_VISION_PROMPT_VERSION, MAX_PREPARATION_OUTPUT_TOKENS,
     RECONCILIATION_PROMPT_VERSION, SUBTITLE_PREPARATION_PROMPT_VERSION, VISUAL_PREPARATION_PROMPT_VERSION,
@@ -433,7 +434,7 @@ def _atomic_json(path: Path, value: Any) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(filename, 0o600)
-        os.replace(filename, path)
+        atomic_replace(filename, path)
     finally:
         if os.path.exists(filename):
             os.unlink(filename)
