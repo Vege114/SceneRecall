@@ -12,7 +12,7 @@
 
 Codex 测试均为真实本机子进程替身，未调用模型。Windows Node 集成核对中文、空格、shell 字符、引号和 UTF-8 stdin 原样传递，npm shim 从未作为 shell 脚本执行；Job Object 验证超时、取消以及原 launcher 退出后的后代清理。本地视觉 worker 测试覆盖常驻复用、半行超时、EOF、重启和断管清理。Windows Forms 测试实际加载固定 PowerShell 脚本并返回取消 JSON，替换交互调用以免自动打开用户选择窗口；不冒称已人工完成实窗多选。
 
-最终代码 `d0310e4` 的 Windows 后端单次全量 **1,218 通过／9 跳过／0 失败**（526.50 秒），报告位于本机忽略目录 `test-results/windows-verified.log` 和 `test-results/windows-verified.xml`。跳过项为 4 项 macOS JXA、3 项显式选择加入的 macOS 实窗、1 项历史 macOS 冒号回执和 1 项 POSIX 文件名测试。此前全量暴露的同时间戳排序问题已修复，并在本次完整运行中通过；新增的确定性用例覆盖持久顺序和重启。
+最终提交 `46cf3a0` 的 Windows CI 后端单次全量 **1,218 通过／9 跳过／0 失败**（288.02 秒），前端 **19 个文件、210 项通过**（45.60 秒），Ruff、TypeScript 和 Vite 生产构建全部通过。本机后端单次全量同为 **1,218 通过／9 跳过／0 失败**（526.50 秒），报告位于本机忽略目录 `test-results/windows-verified.log` 和 `test-results/windows-verified.xml`；随后 CI 等待及恢复夹具的 **52 项专项复测全部通过**。跳过项为 4 项 macOS JXA、3 项显式选择加入的 macOS 实窗、1 项历史 macOS 冒号回执和 1 项 POSIX 文件名测试。此前全量暴露的同时间戳排序问题已修复，并在本次完整运行中通过；新增的确定性用例覆盖持久顺序和重启。
 
 Windows CI 的首轮环境差异也逐项修正：相对 launcher 测试使用同卷的合成安装路径，允许项目和临时目录分别位于 D:／C:；原生 ACL 将 `LA`／`SY` 等 SDDL 别名还原为数值 SID 后，严格核对仅当前用户与 SYSTEM；合成字幕和基准配置显式以 UTF-8 读取。并发测试保留全部顺序、实际重叠、预算、在途请求及最终状态断言，对 Windows 本地持久写入使用有界等待，并在失败时释放测试门闩、回收后台任务。独立 HTTP 保护测试继续启动真实监听服务，夹具禁止 DNS 反查，避免托管 runner 的主机名解析影响拒停验证。
 
@@ -32,7 +32,7 @@ npm.cmd test -- --pool=threads --maxWorkers=2
 npm.cmd run build
 ```
 
-新增[平台 CI](https://github.com/Vege114/SceneRecall/actions/workflows/ci.yml)（`.github/workflows/ci.yml`）安装相同锁定依赖，运行后端／前端回归和构建。推送和 PR 默认只验证 Windows；手动触发可选择 Windows 或 macOS。pytest 使用 runner 专用临时目录。对应代码的 [Windows CI](https://github.com/Vege114/SceneRecall/actions/runs/38738944856/job/116435345996) 状态与本机结果分别保留。按用户要求，本轮最终验收只统计 Windows，macOS 由用户随后在 Mac 实机验证；原生 AppKit 实窗 smoke 仍需显式开启。本轮未在 Windows 下载重型模型权重、测试真实动画模型效果或改动用户影片。原工作区未提交的 LRASD 工作未纳入本轮提交。
+新增[平台 CI](https://github.com/Vege114/SceneRecall/actions/workflows/ci.yml)（`.github/workflows/ci.yml`）安装相同锁定依赖，运行后端／前端回归和构建。推送和 PR 默认只验证 Windows；手动触发可选择 Windows 或 macOS。pytest 使用 runner 专用临时目录。最终 [Windows CI](https://github.com/Vege114/SceneRecall/actions/runs/38742114521/job/116446197450) 已全部通过。按用户要求，本轮最终验收只统计 Windows，macOS 由用户随后在 Mac 实机验证；原生 AppKit 实窗 smoke 仍需显式开启。本轮未在 Windows 下载重型模型权重、测试真实动画模型效果或改动用户影片。原工作区未提交的 LRASD 工作未纳入本轮提交。
 
 ## 角色中心的视听理解（2026-10-15）
 
