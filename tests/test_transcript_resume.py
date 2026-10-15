@@ -1,6 +1,7 @@
 """Transcript checkpoints restore all completed units before missing dispatch."""
 import asyncio
 import copy
+import os
 
 import pytest
 
@@ -59,6 +60,9 @@ async def test_parallel_transcript_drains_and_only_dispatches_missing_batches(sc
     original = worker.provider.prepare_subtitles
     started, release = asyncio.Event(), asyncio.Event()
     entered = 0
+    # Admission includes durable frame and transcript preparation on Windows;
+    # the gate proves overlap without imposing a disk-throughput requirement.
+    io_timeout = 30 if os.name == "nt" else 2
 
     async def blocked(*args):
         nonlocal entered
@@ -70,10 +74,12 @@ async def test_parallel_transcript_drains_and_only_dispatches_missing_batches(sc
 
     monkeypatch.setattr(worker.provider, "prepare_subtitles", blocked)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
-    await asyncio.wait_for(started.wait(), 2)
-    worker.queue.control(job["id"], action)
-    release.set()
-    await running
+    try:
+        await asyncio.wait_for(started.wait(), io_timeout)
+        worker.queue.control(job["id"], action)
+    finally:
+        release.set()
+        await asyncio.wait_for(running, io_timeout)
     stopped = worker.queue.get(job["id"])
     assert stopped["status"] == {"pause": "paused", "cancel": "cancelled"}[action]
     saved = read_json(checkpoint_path(worker, stopped))

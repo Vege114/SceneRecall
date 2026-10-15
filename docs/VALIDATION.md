@@ -32,7 +32,7 @@ npm.cmd test -- --pool=threads --maxWorkers=2
 npm.cmd run build
 ```
 
-新增[双平台 CI](https://github.com/Vege114/SceneRecall/actions/workflows/ci.yml)（`.github/workflows/ci.yml`）安装相同锁定依赖，运行后端／前端回归和构建；对应代码的 [Windows CI](https://github.com/Vege114/SceneRecall/actions/runs/38738944856/job/116435345996) 状态与本机结果分别保留。按用户要求，本轮最终验收只统计 Windows，macOS 由用户随后在 Mac 实机验证；原生 AppKit 实窗 smoke 仍需显式开启。本轮未在 Windows 下载重型模型权重、测试真实动画模型效果或改动用户影片。原工作区未提交的 LRASD 工作未纳入本轮提交。
+新增[平台 CI](https://github.com/Vege114/SceneRecall/actions/workflows/ci.yml)（`.github/workflows/ci.yml`）安装相同锁定依赖，运行后端／前端回归和构建。推送和 PR 默认只验证 Windows；手动触发可选择 Windows 或 macOS。pytest 使用 runner 专用临时目录。对应代码的 [Windows CI](https://github.com/Vege114/SceneRecall/actions/runs/38738944856/job/116435345996) 状态与本机结果分别保留。按用户要求，本轮最终验收只统计 Windows，macOS 由用户随后在 Mac 实机验证；原生 AppKit 实窗 smoke 仍需显式开启。本轮未在 Windows 下载重型模型权重、测试真实动画模型效果或改动用户影片。原工作区未提交的 LRASD 工作未纳入本轮提交。
 
 ## 角色中心的视听理解（2026-10-15）
 

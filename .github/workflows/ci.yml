@@ -4,18 +4,24 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: Platform to verify
+        type: choice
+        default: windows-latest
+        options:
+          - windows-latest
+          - macos-latest
 
 permissions:
   contents: read
 
 jobs:
   checks:
+    name: checks (${{ inputs.os || 'windows-latest' }})
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ inputs.os || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +39,7 @@ jobs:
       - run: uv sync --frozen --python 3.12 --extra dev
       - run: npm ci --ignore-scripts
       - name: Backend regression tests
-        run: uv run --frozen pytest -vv -rs --durations=20 -o faulthandler_timeout=90
+        run: uv run --frozen pytest -vv -rs --durations=20 -o faulthandler_timeout=90 --basetemp="${{ runner.temp }}/scenerecall-pytest"
       - run: uv run --frozen ruff check backend tests scripts
       - run: npm ci
         working-directory: frontend

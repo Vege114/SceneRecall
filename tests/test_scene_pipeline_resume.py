@@ -6,6 +6,7 @@ only duplicate provider calls: avoiding paid calls alone is not a fast resume.
 """
 import asyncio
 import copy
+import os
 
 import pytest
 
@@ -90,10 +91,15 @@ async def test_resume_refresh_skips_published_deep_and_earlier_refresh(scene_wor
 
     monkeypatch.setattr(worker.provider, "reconcile_scene", block_second_refresh)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
-    await asyncio.wait_for(started.wait(), 5)
-    worker.queue.control(job["id"], action)
-    release.set()
-    await running
+    # Reaching this barrier includes frame extraction, deep analysis and the
+    # first durable refresh. Hosted NTFS setup is not the resume assertion.
+    watchdog = 30 if os.name == "nt" else 5
+    try:
+        await asyncio.wait_for(started.wait(), watchdog)
+        worker.queue.control(job["id"], action)
+    finally:
+        release.set()
+        await asyncio.wait_for(running, watchdog)
     stopped = worker.queue.get(job["id"])
     assert stopped["status"] == {"pause": "paused", "cancel": "cancelled"}[action], stopped
     completed_ids = published_understanding(worker, job)

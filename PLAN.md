@@ -16,7 +16,7 @@ Windows 原生文件窗口使用独立参数和 UTF-8 JSON，隐藏额外 PowerS
 
 Codex npm `.cmd` 在 Windows 解析成 Node 与 CLI 脚本的独立参数，不经 shell；补齐用户目录环境。Windows 子进程先加入 Job Object，再启动 CLI，超时／取消时清理完整进程树和管道；macOS 继续使用原进程组逻辑。本地视觉 worker 改用跨平台线程读取完整 JSON 行并限制等待时间，补充断管、EOF、超时和重启检查。
 
-README 新增 PowerShell 安装、FFmpeg PATH、环境变量与独立模型解释器说明，界面提示改用系统文件窗口。新增 Windows／macOS 双平台 GitHub Actions，执行锁定依赖安装、后端测试、Ruff、前端测试及构建。Windows 最终后端全量 **1,218 通过、9 跳过**（526.50 秒），前端 **210 通过**，类型检查、构建、Ruff 与锁文件检查通过。Windows CI 的 C:／D: 分盘、管理员 SID 别名、UTF-8 和较慢持久化均纳入回归；并发测试保留完整业务断言，增加事件释放和有界清理。详细范围及复现见[验证记录](docs/VALIDATION.md)。按用户要求，本轮最终验收只统计 Windows，macOS 由用户随后在 Mac 实机验证；本轮未调用真实模型或改动用户媒体。
+README 新增 PowerShell 安装、FFmpeg PATH、环境变量与独立模型解释器说明，界面提示改用系统文件窗口。GitHub Actions 默认自动验证 Windows，macOS 保留手动触发入口；两种平台均执行锁定依赖安装、后端测试、Ruff、前端测试及构建。Windows 本机后端全量 **1,218 通过、9 跳过**（526.50 秒），前端 **210 通过**，类型检查、构建、Ruff 与锁文件检查通过。Windows CI 的 C:／D: 分盘、管理员 SID 别名、UTF-8 和较慢持久化均纳入回归；并发及恢复测试保留完整业务断言，增加事件释放和有界清理。详细范围及复现见[验证记录](docs/VALIDATION.md)。按用户要求，本轮最终验收只统计 Windows，macOS 由用户随后在 Mac 实机验证；本轮未调用真实模型或改动用户媒体。
 
 ## 2026-10-15 · 角色中心的视听理解
 

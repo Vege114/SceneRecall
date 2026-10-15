@@ -1,6 +1,7 @@
 """Published preparation resumes from a complete plan, without batch replay."""
 import asyncio
 import copy
+import os
 
 import pytest
 
@@ -17,6 +18,9 @@ async def test_stopping_during_deep_analysis_resumes_after_preparation(scene_wor
     job = enqueue(worker)
     started, release = asyncio.Event(), asyncio.Event()
     analyze = worker.provider.analyze
+    # Reaching deep analysis first publishes frame and preparation receipts.
+    # Keep the model gate deterministic while allowing slower Windows CI I/O.
+    io_timeout = 30 if os.name == "nt" else 5
 
     async def blocked(*args, **kwargs):
         started.set()
@@ -25,10 +29,12 @@ async def test_stopping_during_deep_analysis_resumes_after_preparation(scene_wor
 
     monkeypatch.setattr(worker.provider, "analyze", blocked)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
-    await asyncio.wait_for(started.wait(), 5)
-    worker.queue.control(job["id"], action)
-    release.set()
-    await running
+    try:
+        await asyncio.wait_for(started.wait(), io_timeout)
+        worker.queue.control(job["id"], action)
+    finally:
+        release.set()
+        await asyncio.wait_for(running, io_timeout)
     stopped = worker.queue.get(job["id"])
     assert stopped["status"] == {"pause": "paused", "cancel": "cancelled"}[action]
     scene_call = worker.queue._scene_call

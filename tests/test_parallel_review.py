@@ -1,5 +1,6 @@
 """Independent scheduling regressions using fabricated media and model results."""
 import asyncio
+import os
 from collections import Counter
 
 import pytest
@@ -10,6 +11,13 @@ from scenerecall.organization import OrganizationConflict
 from scenerecall.providers import ProviderError
 from test_scene_jobs import counts, enqueue, execute
 from test_scene_jobs import scene_worker as scene_worker
+
+
+# These gates include durable reservations and receipts. Hosted NTFS latency
+# must not become the concurrency assertion; the event and count checks below
+# still require every expected call to overlap before any gate is released.
+_IO_TIMEOUT = 30 if os.name == "nt" else 2
+_COMPLETION_TIMEOUT = 30 if os.name == "nt" else 5
 
 
 def dense_dialogue(worker, count=301):
@@ -42,15 +50,17 @@ async def test_reverse_completion_keeps_cross_batch_continuations_and_exact_cove
         peaks[stage] = max(peaks[stage], active[stage])
         if active[stage] == 2:
             entered[stage].set()
-        if first:
-            await asyncio.wait_for(entered[stage].wait(), 2)
-            await asyncio.wait_for(later_finished[stage].wait(), 2)
-        value = await original(stage, **inputs)
-        completion_order[stage].append(first)
-        active[stage] -= 1
-        if not first:
-            later_finished[stage].set()
-        return value
+        try:
+            if first:
+                await asyncio.wait_for(entered[stage].wait(), _IO_TIMEOUT)
+                await asyncio.wait_for(later_finished[stage].wait(), _IO_TIMEOUT)
+            value = await original(stage, **inputs)
+            completion_order[stage].append(first)
+            if not first:
+                later_finished[stage].set()
+            return value
+        finally:
+            active[stage] -= 1
 
     monkeypatch.setattr(worker.provider, "_record", record)
     final = await execute(worker, enqueue(worker, execution={
@@ -182,7 +192,7 @@ async def test_controls_keep_asset_busy_until_sibling_receipt_finishes(
 
     async def controlled(identity, cues, story):
         if cues[0]["start_ms"] == 0:
-            await asyncio.wait_for(both_started.wait(), 2)
+            await asyncio.wait_for(both_started.wait(), _IO_TIMEOUT)
             worker.queue.control(job["id"], action)
         else:
             both_started.set()
@@ -193,7 +203,7 @@ async def test_controls_keep_asset_busy_until_sibling_receipt_finishes(
     monkeypatch.setattr(worker.provider, "prepare_subtitles", controlled)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
     try:
-        await asyncio.wait_for(draining_started.wait(), 2)
+        await asyncio.wait_for(draining_started.wait(), _IO_TIMEOUT)
         state = worker.queue.get(job["id"])
         assert not running.done()
         assert state["status"] == draining
@@ -207,8 +217,9 @@ async def test_controls_keep_asset_busy_until_sibling_receipt_finishes(
         with pytest.raises(ValueError, match="当前任务状态"):
             worker.queue.control(job["id"], "resume")
     finally:
+        both_started.set()
         release_sibling.set()
-        await asyncio.wait_for(running, 2)
+        await asyncio.wait_for(running, _IO_TIMEOUT)
     final = worker.queue.get(job["id"])
     assert final["status"] == terminal
     assert final["request_count"] == 2
@@ -227,7 +238,7 @@ async def test_budget_pause_keeps_asset_busy_while_sibling_frames_are_extracted(
 
     async def controlled_frames(asset_id, source, times, crop):
         if times[0] == 0:
-            await asyncio.wait_for(sibling_started.wait(), 2)
+            await asyncio.wait_for(sibling_started.wait(), _IO_TIMEOUT)
         else:
             sibling_started.set()
             await release_sibling.wait()
@@ -244,7 +255,7 @@ async def test_budget_pause_keeps_asset_busy_while_sibling_frames_are_extracted(
     monkeypatch.setattr(worker.queue, "before_call", observed_before)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
     try:
-        await asyncio.wait_for(draining_started.wait(), 2)
+        await asyncio.wait_for(draining_started.wait(), _IO_TIMEOUT)
         state = worker.queue.get(job["id"])
         assert not running.done()
         assert state.get("inflight_calls", {}) == {}
@@ -255,8 +266,9 @@ async def test_budget_pause_keeps_asset_busy_while_sibling_frames_are_extracted(
         with pytest.raises(OrganizationConflict, match="正在运行"):
             deletions.delete(kind="assets", asset_ids=[worker.asset["id"]])
     finally:
+        sibling_started.set()
         release_sibling.set()
-        await asyncio.wait_for(running, 2)
+        await asyncio.wait_for(running, _IO_TIMEOUT)
     final = worker.queue.get(job["id"])
     assert final["status"] == "paused"
     assert final["request_count"] == 0
@@ -291,8 +303,8 @@ async def test_twelve_parallel_calls_keep_all_retry_reservations_inside_request_
         peak = max(peak, active)
         if active == 12:
             all_started.set()
-        await release.wait()
         try:
+            await release.wait()
             return await original_prepare(*args)
         finally:
             active -= 1
@@ -301,14 +313,14 @@ async def test_twelve_parallel_calls_keep_all_retry_reservations_inside_request_
     monkeypatch.setattr(worker.provider, "prepare_subtitles", blocked_prepare)
     running = asyncio.create_task(worker.queue.execute(job["id"]))
     try:
-        await asyncio.wait_for(all_started.wait(), 2)
+        await asyncio.wait_for(all_started.wait(), _IO_TIMEOUT)
         state = worker.queue.get(job["id"])
         assert state["request_count"] == 0
         assert state["inflight_attempts"] == 36
         assert len(state["inflight_calls"]) == 12
     finally:
         release.set()
-        await asyncio.wait_for(running, 5)
+        await asyncio.wait_for(running, _COMPLETION_TIMEOUT)
     final = worker.queue.get(job["id"])
     assert final["status"] == "completed", final
     assert peak == 12
