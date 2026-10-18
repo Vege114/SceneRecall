@@ -33,10 +33,9 @@ def trace_connections(engine, monkeypatch):
 
 
 def row_deletes(statements):
-    # Exclude FTS5's internal "-- DELETE..." trace statements and the existing
-    # context cleanup query. This is the redundant UNINDEXED-id equality scan.
+    # FTS5's id column is UNINDEXED; incremental deletes must constrain rowid.
     return [statement for statement in statements
-            if re.match(r"^\s*DELETE FROM evidence_fts\s+WHERE\s+id\s*=", statement, re.I)]
+            if re.match(r"^\s*DELETE FROM evidence_fts\s+WHERE\s+id\b", statement, re.I)]
 
 
 @pytest.mark.asyncio
@@ -73,7 +72,9 @@ def test_normal_upsert_still_replaces_one_fts_row_and_removes_old_tokens(engine,
 
     engine.upsert([record("same-id", "replacementword")])
 
-    assert len(row_deletes(statements)) == 1
+    assert not row_deletes(statements)
+    assert sum(bool(re.match(r"^DELETE FROM evidence_fts WHERE rowid=", statement))
+               for statement in statements) == 1
     with engine._db() as db:
         assert db.execute("SELECT COUNT(*) FROM evidence_fts WHERE id='same-id'").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM evidence_fts WHERE evidence_fts MATCH 'obsoleteword'").fetchone()[0] == 0

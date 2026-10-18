@@ -69,9 +69,10 @@ def test_mkv_two_tracks_global_indices_styles_and_positive_negative_origin(tmp_p
     assert all(t["supported"] for t in tracks)
     output = media.extract_subtitle_track(movie, 2, tmp_path / "selected.srt", metadata)
     assert output.suffix == ".ass"
-    assert "Title: Synthetic style preservation" in output.read_text()
-    assert "Style: Synthetic,Arial,30" in output.read_text()
-    assert r"{\i1}合成中文{\i0}\Nテスト" in output.read_text()
+    extracted = output.read_text(encoding="utf-8-sig")
+    assert "Title: Synthetic style preservation" in extracted
+    assert "Style: Synthetic,Arial,30" in extracted
+    assert r"{\i1}合成中文{\i0}\Nテスト" in extracted
     cues = parse_container_subtitles(output, metadata["duration_ms"])
     assert [(c["start_ms"], c["end_ms"], c["text"]) for c in cues] == [
         (750, 1250, "合成中文"), (750, 1250, "テスト"), (1500, 1900, "Ending")]

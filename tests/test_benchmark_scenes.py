@@ -1,7 +1,6 @@
 """Measurement/report integrity using local synthetic fixtures, never live models."""
 import asyncio
 import importlib.util
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -93,21 +92,25 @@ async def test_cancelled_provider_call_persists_unknown_attempt_count_not_zero(t
 
 @pytest.mark.asyncio
 async def test_search_timer_awaits_rebuild_and_does_not_double_count_nested_upsert(tmp_path, monkeypatch):
+    calls = []
+
     def upsert(self, records):
-        time.sleep(.02)
+        calls.append("upsert")
 
     async def rebuild(self, records, *args, **kwargs):
-        await asyncio.sleep(.02)
+        await asyncio.sleep(0)
         self.upsert(records)
+        calls.append("rebuilt")
         return {"completed": True}
 
     monkeypatch.setattr(SearchEngine, "upsert", upsert)
     monkeypatch.setattr(SearchEngine, "rebuild", rebuild)
     search = benchmark.MeasuredSearch(tmp_path / "index", None)
-    started = time.monotonic()
+    ticks = iter([0.0, 0.02, 0.04])
+    monkeypatch.setattr(benchmark.time, "perf_counter", lambda: next(ticks))
     assert await search.rebuild([]) == {"completed": True}
-    elapsed = (time.monotonic() - started) * 1000
-    assert 35 <= search.elapsed_ms <= elapsed + 3
+    assert calls == ["upsert", "rebuilt"]
+    assert search.elapsed_ms == 40
     assert search.depth == 0
 
 

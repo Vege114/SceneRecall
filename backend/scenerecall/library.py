@@ -694,7 +694,7 @@ class Library:
                 SceneStore(self).mark_dependents_stale(asset_id, record["start_ms"], "前序证据的人工解释已变化")
             return annotation
 
-    def records(self, asset_id: str | None = None) -> list[dict]:
+    def records(self, asset_id: str | None = None, *, compact_subtitles: bool = True) -> list[dict]:
         from .characters import CharacterStore
         from .scenes import SceneStore
         from .identity_scene import project_actions, project_audio_evidence
@@ -787,6 +787,9 @@ class Library:
                                    "understanding_level", "needs_deep", "needs_identity_review", "needs_action_deep",
                                    "audio_evidence", "reason", "provenance", "dependencies",
                                    "context_stale", "stale_reasons")} if is_scene else {})})
+        if compact_subtitles:
+            from .subtitle_projection import compact_subtitle_records
+            return compact_subtitle_records(result)
         return result
 
     def save_run(self, asset_id: str, run_id: str, data: dict):
@@ -797,7 +800,7 @@ class Library:
         return [read_json(p) for p in (self.asset_dir(asset_id) / "analyses").glob("*/run.json")]
 
     def collections(self) -> list[dict]:
-        current = {r["id"]: r for r in self.records()}
+        current = {r["id"]: r for r in self.records(compact_subtitles=False)}
         result = [r for r in current.values() if r["favorite"]]
         for asset in self.list_assets():
             states = {}

@@ -128,6 +128,34 @@ class SearchEngine:
                     kind TEXT PRIMARY KEY, records_digest TEXT NOT NULL
                 );
             """)
+            self._migrate_fts_rowids(db)
+
+    @staticmethod
+    def _migrate_fts_rowids(db: sqlite3.Connection) -> None:
+        """Align legacy FTS rows with the indexed records.id -> records.rowid map.
+
+        Existing tokens and vector manifests remain usable. The rename and version
+        marker commit together, so an interrupted upgrade leaves the old index intact.
+        """
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("PRAGMA user_version").fetchone()[0] >= 1:
+            return
+        db.execute("CREATE VIRTUAL TABLE evidence_fts_rowids USING fts5(id UNINDEXED, tokens)")
+        db.execute("""INSERT OR REPLACE INTO evidence_fts_rowids(rowid,id,tokens)
+                      SELECT r.rowid,r.id,f.tokens FROM evidence_fts f JOIN records r ON r.id=f.id
+                      ORDER BY f.rowid""")
+        # Normally every record already has a token row. Repair a missing legacy
+        # row without re-tokenizing the rest of a potentially large local index.
+        missing = db.execute("""SELECT r.rowid,r.data FROM records r
+                                LEFT JOIN evidence_fts_rowids f ON f.rowid=r.rowid
+                                WHERE f.rowid IS NULL""").fetchall()
+        for rowid, data in missing:
+            record = json.loads(data)
+            db.execute("INSERT INTO evidence_fts_rowids(rowid,id,tokens) VALUES (?,?,?)",
+                       (rowid, record["id"], " ".join(tokenize(_search_text(record)))))
+        db.execute("DROP TABLE evidence_fts")
+        db.execute("ALTER TABLE evidence_fts_rowids RENAME TO evidence_fts")
+        db.execute("PRAGMA user_version=1")
 
     @staticmethod
     def _validate_records(records: list[dict]) -> list[dict]:
@@ -156,40 +184,79 @@ class SearchEngine:
         # core may explicitly project an annotation's confirmed character name
         if record.get("character_name"):
             names.append(record["character_name"])
-        if replace_existing:
-            db.execute("DELETE FROM evidence_fts WHERE id=?", (record["id"],))
-        db.execute("""INSERT OR REPLACE INTO records
+        previous = (db.execute("SELECT rowid FROM records WHERE id=?", (record["id"],)).fetchone()
+                    if replace_existing else None)
+        if previous:
+            db.execute("DELETE FROM evidence_fts WHERE rowid=?", (previous[0],))
+        written = db.execute("""INSERT INTO records
                    (id,asset_id,work_id,kind,season,episode,normalized,characters,text_hash,data,is_context)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     asset_id=excluded.asset_id,work_id=excluded.work_id,kind=excluded.kind,
+                     season=excluded.season,episode=excluded.episode,normalized=excluded.normalized,
+                     characters=excluded.characters,text_hash=excluded.text_hash,data=excluded.data,
+                     is_context=excluded.is_context""", (
             record["id"], record["asset_id"], record.get("work_id"), record["kind"],
             record.get("season"), record.get("episode"), normalize(text),
             json.dumps([normalize(name) for name in names], ensure_ascii=False), _text_hash(record),
             json.dumps(record, ensure_ascii=False, allow_nan=False), int(record.get("is_context", False)),
         ))
-        db.execute("INSERT INTO evidence_fts(id,tokens) VALUES (?,?)", (record["id"], " ".join(tokenize(text))))
+        rowid = previous[0] if previous else written.lastrowid
+        db.execute("INSERT INTO evidence_fts(rowid,id,tokens) VALUES (?,?,?)",
+                   (rowid, record["id"], " ".join(tokenize(text))))
+
+    @staticmethod
+    def _delete_record(db: sqlite3.Connection, identity: str) -> None:
+        db.execute("DELETE FROM evidence_fts WHERE rowid=(SELECT rowid FROM records WHERE id=?)", (identity,))
+        db.execute("DELETE FROM records WHERE id=?", (identity,))
+
+    def _sync_records(self, db: sqlite3.Connection, records: list[dict], owner: str, *, retire: bool) -> dict:
+        previous = {row["id"]: json.loads(row["data"]) for row in db.execute(
+            "SELECT id,data FROM records WHERE asset_id=? AND is_context=0", (owner,))}
+        incoming = {record["id"]: record for record in records}
+        if not retire:
+            incoming = {**previous, **incoming}
+        removed = previous.keys() - incoming.keys()
+        for identity in removed:
+            self._delete_record(db, identity)
+        changed_count = context_count = 0
+        for identity, record in incoming.items():
+            if previous.get(identity) != record:
+                self._write_record(db, record)
+                changed_count += 1
+        old_subtitles = {identity: row for identity, row in previous.items() if row["kind"] == "subtitle"}
+        new_subtitles = {identity: row for identity, row in incoming.items() if row["kind"] == "subtitle"}
+        if old_subtitles != new_subtitles:
+            old_contexts = {row["id"]: json.loads(row["data"]) for row in db.execute(
+                "SELECT id,data FROM records WHERE asset_id=? AND is_context=1", (owner,))}
+            new_contexts = {row["id"]: row for row in _context_records(list(new_subtitles.values()))}
+            for identity in old_contexts.keys() - new_contexts.keys():
+                self._delete_record(db, identity)
+                context_count += 1
+            for identity, row in new_contexts.items():
+                if old_contexts.get(identity) != row:
+                    self._write_record(db, row)
+                    context_count += 1
+        return {"upserted": changed_count, "removed": len(removed), "contexts_changed": context_count}
 
     def upsert(self, records: list[dict]) -> None:
         self._validate_records(records)
-        assets = {record["asset_id"] for record in records}
+        assets = defaultdict(list)
+        for record in records:
+            assets[record["asset_id"]].append(record)
         with self._lock, self._db() as db:
-            for record in records:
-                self._write_record(db, record)
-            for asset in assets:
-                db.execute("DELETE FROM evidence_fts WHERE id IN (SELECT id FROM records WHERE asset_id=? AND is_context=1)",
-                           (asset,))
-                db.execute("DELETE FROM records WHERE asset_id=? AND is_context=1", (asset,))
-                source = [json.loads(row[0]) for row in db.execute(
-                    "SELECT data FROM records WHERE asset_id=? AND kind='subtitle' AND is_context=0", (asset,))]
-                for context in _context_records(source):
-                    self._write_record(db, context)
-            db.execute("DELETE FROM build_checkpoints")
-            self._generation += 1
+            changed = False
+            for owner, rows in assets.items():
+                changed |= any(self._sync_records(db, rows, owner, retire=False).values())
+            if changed:
+                db.execute("DELETE FROM build_checkpoints")
+                self._generation += 1
 
     def remove_assets(self, asset_ids):
         """Remove evidence immediately and invalidate any in-flight publication."""
         with self._lock, self._db() as db:
             for asset_id in asset_ids:
-                db.execute("DELETE FROM evidence_fts WHERE id IN (SELECT id FROM records WHERE asset_id=?)", (asset_id,))
+                db.execute("DELETE FROM evidence_fts WHERE rowid IN (SELECT rowid FROM records WHERE asset_id=?)", (asset_id,))
                 db.execute("DELETE FROM records WHERE asset_id=?", (asset_id,))
             db.execute("DELETE FROM build_checkpoints")
             self._generation += 1
@@ -207,37 +274,12 @@ class SearchEngine:
         if len(assets) != 1:
             raise ValueError("增量同步必须指定单个视频资产")
         owner = next(iter(assets))
-        incoming = {record["id"]: record for record in records}
-        changed_count = removed_count = context_count = 0
         with self._lock, self._db() as db:
-            previous = {row["id"]: json.loads(row["data"]) for row in db.execute(
-                "SELECT id,data FROM records WHERE asset_id=? AND is_context=0", (owner,))}
-            for identity in previous.keys() - incoming.keys():
-                db.execute("DELETE FROM evidence_fts WHERE id=?", (identity,))
-                db.execute("DELETE FROM records WHERE id=?", (identity,))
-                removed_count += 1
-            for identity, record in incoming.items():
-                if previous.get(identity) != record:
-                    self._write_record(db, record)
-                    changed_count += 1
-            old_subtitles = {identity: row for identity, row in previous.items() if row["kind"] == "subtitle"}
-            new_subtitles = {identity: row for identity, row in incoming.items() if row["kind"] == "subtitle"}
-            if old_subtitles != new_subtitles:
-                old_contexts = {row["id"]: json.loads(row["data"]) for row in db.execute(
-                    "SELECT id,data FROM records WHERE asset_id=? AND is_context=1", (owner,))}
-                new_contexts = {row["id"]: row for row in _context_records(list(new_subtitles.values()))}
-                for identity in old_contexts.keys() - new_contexts.keys():
-                    db.execute("DELETE FROM evidence_fts WHERE id=?", (identity,))
-                    db.execute("DELETE FROM records WHERE id=?", (identity,))
-                    context_count += 1
-                for identity, row in new_contexts.items():
-                    if old_contexts.get(identity) != row:
-                        self._write_record(db, row)
-                        context_count += 1
-            if changed_count or removed_count or context_count:
+            result = self._sync_records(db, records, owner, retire=True)
+            if any(result.values()):
                 db.execute("DELETE FROM build_checkpoints")
                 self._generation += 1
-        return {"upserted": changed_count, "removed": removed_count, "contexts_changed": context_count}
+        return result
 
     def _signature(self, profile_id: str) -> str:
         profile = self.providers.get(profile_id)
@@ -252,11 +294,21 @@ class SearchEngine:
             if inspect.isawaitable(result):
                 await result
 
+    async def rebuild_from_source(self, source: Callable[[], list[dict]],
+                                  embedding_profile_id: str | None = None, **kwargs) -> dict:
+        """Fence the source snapshot as well as publication against concurrent edits."""
+        with self._lock:
+            generation = self._generation
+        records = await asyncio.to_thread(source)
+        return await self.rebuild(records, embedding_profile_id, expected_generation=generation, **kwargs)
+
     async def rebuild(self, records: list[dict], embedding_profile_id: str | None = None,
                       *, before_batch: Callable | None = None, on_batch: Callable | None = None,
-                      embed_batch: Callable | None = None) -> dict:
+                      embed_batch: Callable | None = None, expected_generation: int | None = None) -> dict:
+        with self._lock:
+            generation = self._generation if expected_generation is None else expected_generation
+            self._check_generation(generation)
         self._validate_records(records)
-        generation = self._generation
         all_records = records + _context_records(records)
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         count, cost, cost_known, cache_hits = 0, 0.0, True, 0
@@ -264,17 +316,18 @@ class SearchEngine:
         records_digest = self._records_digest(all_records)
         signature = self._signature(embedding_profile_id) if embedding_profile_id else None
         with self._lock, self._db() as db:
+            self._check_generation(generation)
             completed = {row[0]: row[1] for row in db.execute("SELECT kind,records_digest FROM build_checkpoints")}
             lexical_ready = (completed.get("lexical") == records_digest
                 and db.execute("SELECT COUNT(*) FROM records").fetchone()[0] == len(all_records)
                 and db.execute("SELECT COUNT(*) FROM evidence_fts").fetchone()[0] == len(all_records))
             vector_ready = bool(signature and completed.get("vector:" + signature) == records_digest
                 and db.execute("SELECT 1 FROM namespaces WHERE signature=?", (signature,)).fetchone())
-        if lexical_ready and (not signature or vector_ready):
-            return {"records": len(records), "contexts": len(all_records) - len(records),
-                    "embedding_profile_id": embedding_profile_id,
-                    "cache_hits": len({_text_hash(record) for record in all_records}) if signature else 0,
-                    "request_count": 0, "usage": usage, "cost": 0.0, "resumed": True}
+            if lexical_ready and (not signature or vector_ready):
+                return {"records": len(records), "contexts": len(all_records) - len(records),
+                        "embedding_profile_id": embedding_profile_id,
+                        "cache_hits": len({_text_hash(record) for record in all_records}) if signature else 0,
+                        "request_count": 0, "usage": usage, "cost": 0.0, "resumed": True}
         if embedding_profile_id and all_records:
             import lancedb
             profile = self.providers.get(embedding_profile_id)
@@ -334,10 +387,13 @@ class SearchEngine:
         return hashlib.sha256(json.dumps(sorted(records, key=lambda row: row["id"]),
             ensure_ascii=False, sort_keys=True, allow_nan=False).encode()).hexdigest()
 
+    def _check_generation(self, generation: int) -> None:
+        if self._generation != generation:
+            raise ValueError("索引构建期间资料发生变化，请重试重建；原索引已保留")
+
     def _publish(self, records: list[dict], namespace: tuple | None, generation: int) -> None:
         with self._lock, self._db() as db:
-            if self._generation != generation:
-                raise ValueError("索引构建期间资料发生变化，请重试重建；原索引已保留")
+            self._check_generation(generation)
             records_digest = self._records_digest(records)
             checkpoint = db.execute("SELECT records_digest FROM build_checkpoints WHERE kind='lexical'").fetchone()
             if (not checkpoint or checkpoint[0] != records_digest
@@ -346,9 +402,7 @@ class SearchEngine:
                 db.execute("DELETE FROM records")
                 db.execute("DELETE FROM evidence_fts")
                 for record in records:
-                    # The FTS table is already empty. Its UNINDEXED id column
-                    # makes a redundant per-record DELETE scan the growing
-                    # table and turn a full publication into quadratic work.
+                    # Both tables are empty, so inserts need no prior-row lookup.
                     self._write_record(db, record, replace_existing=False)
                 db.execute("DELETE FROM build_checkpoints")
                 db.execute("INSERT INTO build_checkpoints VALUES ('lexical',?)", (records_digest,))
@@ -401,7 +455,7 @@ class SearchEngine:
             # Tokens quoted as literal FTS terms; no user-controlled FTS query language.
             fts_query = " OR ".join('"' + term.replace('"', '""') + '"' for term in tokens[:100])
             if fts_query:
-                rows = db.execute(f"""SELECT r.data FROM evidence_fts JOIN records r ON r.id=evidence_fts.id
+                rows = db.execute(f"""SELECT r.data FROM evidence_fts JOIN records r ON r.rowid=evidence_fts.rowid
                                     WHERE evidence_fts MATCH ? AND {where}
                                     ORDER BY bm25(evidence_fts) LIMIT ?""", [fts_query, *params, limit]).fetchall()
                 for row in rows:

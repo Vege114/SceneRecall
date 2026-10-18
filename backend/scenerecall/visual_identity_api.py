@@ -107,7 +107,7 @@ def register_visual_identity_routes(app, library, search):
                        if before[asset["id"]].get(row["id"]) and before[asset["id"]][row["id"]] != row["match"].get("character_id")]
             SceneStore(library).invalidate_identity_inferences(asset["id"], region_ids=changed)
             if search is not None:
-                search.upsert(library.records(asset["id"]))
+                search.sync_asset(library.records(asset["id"]), asset["id"])
         return _public_reference(result)
 
     @app.get("/api/assets/{asset_id}/characters/{character_id}/references/{reference_id}/image")
@@ -149,7 +149,7 @@ def register_visual_identity_routes(app, library, search):
             from .scenes import SceneStore
             SceneStore(library).invalidate_identity_inferences(asset_id, region_ids=[region_id])
         if search is not None:
-            search.upsert(library.records(asset_id))
+            search.sync_asset(library.records(asset_id), asset_id)
         return {key: value for key, value in result.items() if key != "crop_path"}
 
     @app.get("/api/assets/{asset_id}/identity/regions/{region_id}/image")

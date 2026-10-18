@@ -795,7 +795,7 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
                     self.character_context(asset_id, config["character_snapshot"])
                     data = self.characters.apply_observation(asset_id, data, expected_revision=config["character_snapshot"]["revision"])
                     self.library.save_observation(asset_id, data)
-                self.search.upsert(self.library.records(asset_id))
+                self.search.sync_asset(self.library.records(asset_id), asset_id)
                 self.update(job_id, checkpoints=self.get(job_id)["checkpoints"] + [checkpoint_key])
                 observations[cache_key] = data
                 finished_windows[window["id"]] = cache_key
@@ -900,10 +900,9 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
         if job["type"] == "index":
             embedding_profile_id = job["config"].get("embedding_profile_id")
         self.update(job_id, stage="index", message="正在更新本地搜索索引")
-        records = self.library.records()
         # Publishing committed evidence to lexical search must not depend on a
         # paid embedding service or its remaining request budget.
-        await self.search.rebuild(records)
+        await self.search.rebuild_from_source(self.library.records)
         profile = self.providers.get(embedding_profile_id) if embedding_profile_id else None
 
         async def embed_batch(texts):
@@ -915,5 +914,5 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
             return AIResult(data, {}, 0, 0.0)
 
         if profile:
-            await self.search.rebuild(records, embedding_profile_id=embedding_profile_id,
-                                      before_batch=lambda _: self.checkpoint(job_id), embed_batch=embed_batch)
+            await self.search.rebuild_from_source(self.library.records, embedding_profile_id=embedding_profile_id,
+                                                 before_batch=lambda _: self.checkpoint(job_id), embed_batch=embed_batch)

@@ -66,7 +66,7 @@ def register_organization_routes(app, library, queue, search):
         return JSONResponse({"detail": str(exc)}, status_code=409)
 
     async def refresh():
-        await search.rebuild(await asyncio.to_thread(library.records))
+        await search.rebuild_from_source(library.records)
 
     @app.get("/api/projects")
     def projects():

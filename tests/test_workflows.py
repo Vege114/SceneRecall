@@ -189,19 +189,19 @@ def test_import_retry_cannot_relabel_a_committed_item(client, videos, monkeypatc
     queue = client.app.state.jobs
     request = ImportInput(request_id="index-failure", items=[{"item_id": "one", "video_path": str(videos[0])}])
     job = queue.add_import(request)
-    original_upsert = queue.search.upsert
+    original_sync = queue.search.sync_asset
 
     def fail_index(*args, **kwargs):
         raise OSError("synthetic indexing failure after asset commit")
 
-    monkeypatch.setattr(queue.search, "upsert", fail_index)
+    monkeypatch.setattr(queue.search, "sync_asset", fail_index)
     assert run(client, job["id"])["status"] == "partial"
     imported = queue.library.list_assets()
     assert len(imported) == 1
     with pytest.raises(ValueError, match="已经导入"):
         queue.retry_import(job["id"], ImportRetryInput(items=[{"item_id": "one", "video_path": str(videos[1])}]))
     assert queue.get(job["id"])["config"]["items"][0]["video_path"] == str(videos[0])
-    monkeypatch.setattr(queue.search, "upsert", original_upsert)
+    monkeypatch.setattr(queue.search, "sync_asset", original_sync)
     queue.retry_import(job["id"], ImportRetryInput(items=request.items))
     assert run(client, job["id"])["status"] == "completed"
     assert [asset["id"] for asset in queue.library.list_assets()] == [imported[0]["id"]]
