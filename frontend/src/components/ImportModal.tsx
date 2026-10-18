@@ -6,7 +6,7 @@ import type { Asset, ImportInput, Job, SubtitleMode, SubtitleDetection } from '.
 import { compareAnimeImports, inferAnimeFilename } from '../importFilenames';
 import { pairSubtitles } from '../importSubtitles';
 import { groupAnime, animeLabel } from '../anime';
-import { pickLocalFiles } from '../lib/localFiles';
+import { localFileDirectory, pickLocalFiles } from '../lib/localFiles';
 import { Alert, Field, Modal, Spinner, Status } from './ui';
 import SubtitleTrackSelect from './SubtitleTrackSelect';
 import AnimeArchivePicker, { useAnimeArchives } from './AnimeArchive';
@@ -132,7 +132,7 @@ export default function ImportModal({ onClose, projectId, retryJobId }: { onClos
   const chooseFiles = async (kind: 'video' | 'subtitle', replace = false) => {
     setPicking(true); setError('');
     try {
-      const values = await pickLocalFiles(kind, !replace, cleanPath(item.video_path).replace(/[\\/][^\\/]*$/, '') || undefined);
+      const values = await pickLocalFiles(kind, !replace, localFileDirectory(cleanPath(item.video_path)));
       if (!values.length || !mounted.current) return;
       if (kind === 'video') { if (replace) changePath(values[0]); else addPaths(values); return; }
       setSubtitleFiles((current) => [...new Set([...current, ...values])]);

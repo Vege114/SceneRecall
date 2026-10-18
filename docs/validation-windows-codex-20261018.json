@@ -1,0 +1,86 @@
+{
+  "schema_version": "scenerecall-windows-codex-validation-v1",
+  "date": "2026-10-18",
+  "initial_probe": {
+    "status": "passed",
+    "date": "2026-10-18",
+    "scope": "WSL to Windows CLI; synthetic image and output schema",
+    "cli_status": {
+      "installed": true,
+      "authenticated": true,
+      "compatible": true,
+      "version": "0.163.0",
+      "auth_method": "chatgpt",
+      "runtime": "wsl",
+      "cli_runtime": "windows"
+    },
+    "request_count": 1,
+    "usage": {
+      "input_tokens": 2971,
+      "output_tokens": 19,
+      "total_tokens": 2990
+    },
+    "elapsed_s": 8.714,
+    "response": {
+      "text": "BRIDGE TEST 427"
+    },
+    "user_media_used": false,
+    "credentials_read_or_copied": false,
+    "subscription_cost": null
+  },
+  "final_job_object_probe": {
+    "status": "passed",
+    "date": "2026-10-18",
+    "scope": "WSL to Windows CLI; synthetic image and output schema",
+    "cli_status": {
+      "installed": true,
+      "authenticated": true,
+      "compatible": true,
+      "version": "0.163.0",
+      "auth_method": "chatgpt",
+      "runtime": "wsl",
+      "cli_runtime": "windows"
+    },
+    "request_count": 1,
+    "usage": {
+      "input_tokens": 2969,
+      "output_tokens": 19,
+      "total_tokens": 2988
+    },
+    "elapsed_s": 22.189,
+    "response": {
+      "text": "BRIDGE TEST 427"
+    },
+    "user_media_used": false,
+    "credentials_read_or_copied": false,
+    "subscription_cost": null
+  },
+  "total_inference_requests": 2,
+  "total_reported_tokens": 5978,
+  "cost": null,
+  "timing_scope": "Each probe includes CLI discovery/status plus inference preflight and one model request; no throughput comparison",
+  "model_catalog": {
+    "runtime": "windows",
+    "source": "local_cache",
+    "visible_model_count": 7,
+    "custom_windows_codex_home_subprocess_receives_override": true
+  },
+  "cleanup_probes": {
+    "timeout": {
+      "synthetic_parent_and_child_started": true,
+      "no_synthetic_windows_process_alive_at_check": true,
+      "result": "CodexCLIError",
+      "configured_timeout_s": 6,
+      "observation_s": 10,
+      "no_model_invocation": true
+    },
+    "explicit_cancellation": {
+      "synthetic_parent_and_child_started": true,
+      "no_synthetic_windows_process_alive_at_check": true,
+      "result": "CancelledError",
+      "configured_timeout_s": 30,
+      "observation_s": 12,
+      "no_model_invocation": true
+    }
+  }
+}

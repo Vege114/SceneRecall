@@ -1,0 +1,2 @@
+# Bash launchers must remain executable by WSL after a Windows Git checkout.
+*.sh text eol=lf

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import zipfile
 from pathlib import Path
 
 import pytest
 from PIL import Image
-from scenerecall.library import Library, atomic_json, atomic_jsonl
+from scenerecall.library import Library, atomic_json, atomic_jsonl, confined_path
 
 
 ASSET_ID = "asset_synthetic"
@@ -69,7 +70,14 @@ def write_zip(path: Path, files: dict[str, object]) -> Path:
                 encoded = "".join(json.dumps(line) + "\n" for line in value)
             else:
                 encoded = json.dumps(value)
-            archive.writestr(name, encoded)
+            if "\\" in name:
+                # ZipInfo normalizes native separators on Windows. Preserve
+                # the malicious member spelling to exercise the reader guard.
+                info = zipfile.ZipInfo(name)
+                info.filename = name
+                archive.writestr(info, encoded)
+            else:
+                archive.writestr(name, encoded)
     return path
 
 
@@ -88,6 +96,42 @@ def test_metadata_backup_roundtrip_keeps_corrections_and_excludes_secrets(librar
     assert record["summary"] == "人工纠错描述" and record["note"] == "影评笔记" and record["favorite"]
     assert restored.observations(ASSET_ID)[0]["summary"] == "原始模型描述"
     assert not restored.get_asset(ASSET_ID)["source_available"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows writes native separators in stored relative references")
+def test_windows_observation_and_project_backup_restore_preserves_native_references(library, tmp_path):
+    project = library.organization.save_project({"name": "Windows synthetic project", "kind": "animation"})
+    library.save_observation(ASSET_ID, observation())
+    reference = library.active(ASSET_ID)["observations"]["obs_test"]
+    assert "\\" in reference
+    assert library.observations(ASSET_ID)[0]["summary"] == "原始模型描述"
+    backup = library.backup()
+    archive_path = library.root / "runtime" / "backups" / (backup["id"] + ".zip")
+    with zipfile.ZipFile(archive_path) as archive:
+        assert all("\\" not in info.filename for info in archive.infolist())
+        assert all(info.create_system == 0 for info in archive.infolist())
+    restored = Library(tmp_path / "windows-restored")
+    restored.restore(archive_path)
+    assert restored.observations(ASSET_ID)[0]["summary"] == "原始模型描述"
+    assert project["id"] in restored.organization._read()["projects"]
+    assert not restored.organization.journal.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Only Windows permits native backslashes in internal references")
+def test_windows_relative_reference_with_unicode_and_spaces_stays_inside_owner(tmp_path):
+    target = tmp_path / "中文 文件夹" / "evidence.json"
+    assert confined_path(tmp_path, "中文 文件夹\\evidence.json") == target.resolve()
+    assert confined_path(tmp_path, "中文 文件夹/evidence.json") == target.resolve()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path forms must never override the owner directory")
+@pytest.mark.parametrize("relative", [
+    r"..\outside.json", r"nested/..\..\outside.json", r"C:\outside.json", r"C:outside.json",
+    r"\outside.json", r"\\server\share\outside.json", r"\\?\C:\outside.json", "/outside.json",
+])
+def test_windows_native_reference_rejects_drives_roots_and_parent_escape(tmp_path, relative):
+    with pytest.raises(ValueError):
+        confined_path(tmp_path, relative)
 
 
 @pytest.mark.parametrize("bad_name", ["../escaped.json", "/absolute.json", "assets/../../escaped.json", "assets\\escaped.json"])

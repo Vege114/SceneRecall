@@ -11,7 +11,7 @@ import threading
 import uuid
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .models import AssetInput, Observation
 
@@ -88,7 +88,17 @@ def read_jsonl(path: Path) -> list[dict]:
 
 def confined_path(base: Path, relative: str) -> Path:
     """File references are data, never permission to traverse outside an asset."""
-    if not isinstance(relative, str) or not relative or "\\" in relative:
+    if not isinstance(relative, str) or not relative or "\x00" in relative:
+        raise ValueError("资料包含非法文件引用")
+    if os.name == "nt":
+        # Internally persisted Path.relative_to() values use native separators.
+        # Accept those Windows references without allowing drive-relative paths,
+        # UNC shares or rooted paths to override the owning library directory.
+        windows = PureWindowsPath(relative)
+        if windows.drive or windows.root:
+            raise ValueError("资料包含越界文件引用")
+        relative = relative.replace("\\", "/")
+    elif "\\" in relative:
         raise ValueError("资料包含非法文件引用")
     candidate = PurePosixPath(relative)
     if candidate.is_absolute() or ".." in candidate.parts:
@@ -862,7 +872,8 @@ class Library:
                     raise ValueError("备份文件超出恢复上限")
                 for info in members:
                     relative = PurePosixPath(info.filename)
-                    if relative.is_absolute() or ".." in relative.parts or "\\" in info.filename or not relative.parts:
+                    if (relative.is_absolute() or ".." in relative.parts or "\\" in info.orig_filename
+                            or not relative.parts):
                         raise ValueError("备份含非法路径")
                     if relative.parts[0] not in {"library.json", "works", "assets", "collections", "media", "organization"}:
                         raise ValueError("备份包含非资料文件")

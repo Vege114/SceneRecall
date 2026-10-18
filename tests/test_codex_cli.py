@@ -86,10 +86,18 @@ else:
 '''.replace("CONFIGURATION", repr(str(configuration))).replace("LOG", repr(str(log)))
         .replace("FEATURES", repr("\n".join(f"{name} stable true" for name in (
             *codex_cli._DISABLED_FEATURES, "skip_host_skill_discovery")))).replace(
-                "base64_encode(image.read_bytes())", "__import__('base64').b64encode(image.read_bytes()).decode()"))
+                "base64_encode(image.read_bytes())", "__import__('base64').b64encode(image.read_bytes()).decode()"),
+        encoding="utf-8")
     script.chmod(0o700)
     monkeypatch.setenv("SCENERECALL_CODEX_PATH", str(script))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    if os.name == "nt":
+        run = codex_cli._run
+
+        async def run_python_fixture(args, **kwargs):
+            return await run([sys.executable, "-X", "utf8", *args], **kwargs)
+
+        monkeypatch.setattr(codex_cli, "_run", run_python_fixture)
 
     def configure(**values):
         configuration.write_text(json.dumps(values))
@@ -104,7 +112,9 @@ else:
 async def test_status_reports_installation_chatgpt_login_and_compatibility(cli):
     result = await codex_cli.status()
     assert result == {"installed": True, "authenticated": True, "compatible": True,
-                      "auth_method": "chatgpt", "version": "0.155.1", "message": "Codex CLI 已通过 ChatGPT 登录"}
+                      "auth_method": "chatgpt", "version": "0.155.1", "message": "Codex CLI 已通过 ChatGPT 登录",
+                      "runtime": codex_cli._runtime(), "cli_runtime": codex_cli._runtime(),
+                      "executable": codex_cli._executable()}
 
 
 @pytest.mark.asyncio
@@ -173,7 +183,9 @@ async def test_output_schema_is_passed_as_private_temporary_file_and_removed(cli
               "required": ["frame_id"], "additionalProperties": False}
     result = await codex_cli.complete("Return JSON", "fixture", "", 5, output_schema=schema)
     [call] = calls()
-    assert call["output_schema"] == schema and call["schema_mode"] == 0o600
+    assert call["output_schema"] == schema
+    if os.name == "posix":
+        assert call["schema_mode"] == 0o600
     path = Path(call["args"][call["args"].index("--output-schema") + 1])
     assert path.parent.resolve() == Path(call["cwd"]).resolve() and not path.exists()
     assert result.request_count == 1 and result.usage["total_tokens"] == 109
@@ -210,7 +222,8 @@ async def test_images_preserve_frame_order_and_are_private_and_removed(cli):
     await codex_cli.complete("Analyze frames.", content, "gpt-5.4", 5)
     [call] = calls()
     assert call["image_data"] == [base64.b64encode(data).decode() for data in [b"first-image", b"second-image"]]
-    assert call["image_modes"] == [0o600, 0o600]
+    if os.name == "posix":
+        assert call["image_modes"] == [0o600, 0o600]
     assert call["prompt"].index('"f0"') < call["prompt"].index("Attached image 1") < call["prompt"].index('"f1"')
     assert call["prompt"].index('"f1"') < call["prompt"].index("Attached image 2")
     assert call["args"].count("--image") == 2

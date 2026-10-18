@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import platform
 import shutil
 import subprocess
 import sys
 import threading
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -49,9 +51,29 @@ class FilePickerUnavailable(RuntimeError):
     pass
 
 
+def _is_wsl() -> bool:
+    return sys.platform.startswith("linux") and bool(
+        os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP")
+        or "microsoft" in platform.release().lower())
+
+
+def _wsl_path(raw: str, target: str) -> str:
+    """Use WSL's mount configuration, rather than assuming drives live in /mnt."""
+    command = shutil.which("wslpath")
+    if not command:
+        raise FilePickerUnavailable("WSL 文件选择需要 wslpath，请检查 WSL 安装")
+    result = _run([command, target, raw])
+    value = result.stdout.removesuffix("\n")
+    if result.returncode or not value or "\x00" in value:
+        raise FilePickerUnavailable("所选 Windows 路径无法由 WSL 访问，请选择已挂载的本机文件")
+    return value
+
+
 def _requested_local_path(raw: str) -> Path:
     if "\x00" in raw or "://" in raw:
         raise ValueError("请选择本机文件或目录")
+    if _is_wsl() and PureWindowsPath(raw).is_absolute():
+        raw = _wsl_path(raw, "-u")
     requested = Path(raw).expanduser()
     if not requested.is_absolute():
         raise ValueError("请选择本机文件或目录的绝对路径")
@@ -129,24 +151,39 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 $options = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
+$owner = New-Object System.Windows.Forms.Form
 try {
+    # A background web server has no foreground window to own the chooser.
+    # An invisible topmost owner keeps the Explorer dialog above the browser.
+    $owner.ShowInTaskbar = $false
+    $owner.TopMost = $true
+    $owner.Opacity = 0
+    $owner.Show()
+    $owner.Activate() | Out-Null
     $dialog.Title = $options.title
     $dialog.Multiselect = $options.multiple
     $dialog.CheckFileExists = $true
+    $dialog.AutoUpgradeEnabled = $true
+    $dialog.RestoreDirectory = $true
     $dialog.Filter = 'SceneRecall|' + (($options.extensions | ForEach-Object { '*.' + $_ }) -join ';')
     if ($options.directory) { $dialog.InitialDirectory = $options.directory }
-    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
         @{paths=@($dialog.FileNames);cancelled=$false} | ConvertTo-Json -Compress
     } else {
         @{paths=@();cancelled=$true} | ConvertTo-Json -Compress
     }
-} finally { $dialog.Dispose() }
+} finally {
+    $dialog.Dispose()
+    $owner.Dispose()
+}
 '''
 
 
 def _run(command: list[str], *, input: str | None = None):
     try:
-        return subprocess.run(command, input=input, capture_output=True, text=True, encoding="utf-8", check=False)
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
+        return subprocess.run(command, input=input, capture_output=True, text=True, encoding="utf-8", check=False,
+                              **options)
     except OSError as exc:
         raise FilePickerUnavailable("无法打开系统文件选择窗口，请检查本机桌面环境后重试") from exc
 
@@ -155,7 +192,7 @@ def _json_result(result):
     if result.returncode:
         raise FilePickerUnavailable("无法打开系统文件选择窗口，请检查本机桌面环境后重试")
     try:
-        value = json.loads(result.stdout)
+        value = json.loads(result.stdout.lstrip("\ufeff"))
         if not isinstance(value, dict) or not isinstance(value.get("cancelled"), bool):
             raise ValueError
         if not isinstance(value.get("paths"), list) or any(not isinstance(path, str) for path in value["paths"]):
@@ -167,18 +204,34 @@ def _json_result(result):
         raise FilePickerUnavailable("系统文件选择窗口返回了无法读取的结果，请重试") from exc
 
 
+def _open_windows_dialog(options: dict, *, wsl: bool = False):
+    names = ("powershell.exe", "pwsh.exe") if wsl else ("powershell", "pwsh")
+    command = next((found for name in names if (found := shutil.which(name))), None)
+    if not command and wsl:
+        # WSL may disable imported Windows PATH entries while interop is enabled.
+        candidate = _wsl_path(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "-u")
+        if Path(candidate).is_file():
+            command = candidate
+    if not command:
+        raise FilePickerUnavailable("WSL 文件选择需要 Windows PowerShell，请启用 WSL 的 Windows 程序互操作"
+                                    if wsl else "系统文件选择需要本机 PowerShell")
+    if wsl and options.get("directory"):
+        options = {**options, "directory": _wsl_path(options["directory"], "-w")}
+    encoded = base64.b64encode(_WINDOWS_SCRIPT.encode("utf-16-le")).decode("ascii")
+    return _json_result(_run([command, "-NoProfile", "-STA", "-EncodedCommand", encoded,
+                              "-NonInteractive", "-OutputFormat", "Text"],
+                            input=json.dumps(options, ensure_ascii=False)))
+
+
 def _open_dialog(options: dict):
     if sys.platform == "darwin":
         return _json_result(_run(["/usr/bin/osascript", "-l", "JavaScript", "-e", _MAC_SCRIPT,
                                   json.dumps(options, ensure_ascii=False)]))
     if sys.platform == "win32":
-        command = shutil.which("powershell") or shutil.which("pwsh")
-        if not command:
-            raise FilePickerUnavailable("系统文件选择需要本机 PowerShell")
-        encoded = base64.b64encode(_WINDOWS_SCRIPT.encode("utf-16-le")).decode("ascii")
-        return _json_result(_run([command, "-NoProfile", "-STA", "-EncodedCommand", encoded],
-                                input=json.dumps(options, ensure_ascii=False)))
+        return _open_windows_dialog(options)
     if sys.platform.startswith("linux"):
+        if _is_wsl():
+            return _open_windows_dialog(options, wsl=True)
         separator = "\x1f"
         if command := shutil.which("zenity"):
             args = [command, "--file-selection", f"--title={options['title']}",

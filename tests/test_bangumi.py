@@ -174,19 +174,54 @@ console.log(JSON.stringify({
 
 
 async def test_timeout_kills_real_child_process(tmp_path, monkeypatch):
+    import psutil
+
     script = tmp_path / "slow-cli.js"
     pid_file = tmp_path / "pid"
     script.write_text("import fs from 'node:fs';\n"
                       f"fs.writeFileSync({json.dumps(str(pid_file))}, String(process.pid));\n"
                       "setInterval(() => {}, 1000);\n")
     monkeypatch.setenv("SCENERECALL_BGM_CLI_PATH", str(script))
-    with pytest.raises(BangumiError, match="超时"):
-        await BangumiClient(timeout_s=0.2)._run("subject", "get", "1")
-    assert pid_file.exists()
-    # A failed process must be reaped rather than left in the server's event loop.
-    import os
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(pid_file.read_text()), 0)
+    real_timeout = asyncio.timeout
+    timeouts = []
+
+    def timeout_after_startup(delay):
+        assert delay == 0.2
+        # Node startup can exceed the short deadline on a busy host or WSL.
+        # Keep startup bounded, then arm the real deadline after its handshake.
+        timeout = real_timeout(10)
+        timeouts.append(timeout)
+        return timeout
+
+    monkeypatch.setattr("scenerecall.bangumi.asyncio.timeout", timeout_after_startup)
+    request = asyncio.create_task(BangumiClient(timeout_s=0.2)._run("subject", "get", "1"))
+    try:
+        async with real_timeout(10):
+            while True:
+                if request.done():
+                    await request
+                    pytest.fail("Node exited before writing its readiness handshake")
+                try:
+                    pid = int(pid_file.read_text())
+                    break
+                except (FileNotFoundError, ValueError):
+                    await asyncio.sleep(0.01)
+        child = psutil.Process(pid)
+        assert child.is_running()
+        assert len(timeouts) == 1
+        timeouts[0].reschedule(asyncio.get_running_loop().time() + 0.2)
+        async with real_timeout(5):
+            with pytest.raises(BangumiError, match="超时"):
+                await request
+        assert timeouts[0].expired()
+        # is_running checks PID and creation time, so PID reuse cannot produce a
+        # false failure. It also detects an unreaped POSIX zombie; no Windows
+        # os.kill(pid, 0), which can terminate rather than probe a process.
+        assert not child.is_running()
+    finally:
+        if not request.done():
+            request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
 
 
 async def test_request_concurrency_is_bounded(tmp_path, monkeypatch):

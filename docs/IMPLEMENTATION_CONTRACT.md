@@ -2,6 +2,16 @@
 
 Internal records and REST use snake_case. Time is integer milliseconds relative to asset start. Source data are versioned JSON; all indexes disposable. Engineering tests use generated fixtures and provider doubles. Real media/model validation is recorded separately in `VALIDATION.md` and is not inferred from synthetic tests.
 
+## Windows host integration (2026-10-18)
+
+`scripts/start_windows.cmd` runs native Windows PowerShell and `.venv-windows`, with `-Setup` for frozen dependency installation/frontend build and `-Check` for diagnostics. It preserves Linux `.venv` and optional model environments. Existing WSL library/model paths are not implicitly migrated.
+
+WSL file selection uses Windows PowerShell/WinForms with UTF-8 JSON over stdin/stdout; only fixed encoded script text is executed. `wslpath` translates starting directories and returned Windows paths; local file, extension, quantity and cancellation checks still apply. Native Windows uses a topmost owner and no console window. The frontend preserves Windows drive roots instead of turning `C:\` into `C:`. Linux desktop Zenity and macOS AppKit routes remain available.
+
+Codex discovery accepts a server-only explicit path, Windows desktop installations and npm shims resolved to native binaries. WSL prefers an available Windows CLI, converts request-owned image/schema/instruction/working-directory paths and uses the Windows account's own login and model catalog. Linux `CODEX_HOME` is not forwarded into Windows. Prompts remain stdin data; no arbitrary shell command is constructed and no authentication file is read/copied. Status adds `runtime`, `cli_runtime` and `executable` metadata. CLI version/flag/feature/authentication checks and bounded isolated inference remain required.
+
+LR-ASD training, preview, annotation and evaluation contracts and their label semantics are documented in [LRASD_TRAINING.md](LRASD_TRAINING.md) and the standalone [annotation tool](../tools/asd-annotator/README.md). The 2026-10-18 human finetune did not improve held-out metrics; no automatic deployment or trustworthy speaker enrollment follows from these experiments.
+
 ## Character-centric audiovisual identity (2026-10-15)
 
 Identity is an optional local prelude to the existing durable scene queue, not a new scene engine. Fresh jobs freeze identity settings and `scene-visual-preparation-v5` / `scene-contextual-vision-v7`. Previously frozen v4/v6 and v3/v5 jobs preserve their original inputs and receipts. Configuration changes require a new task; human mapping changes are reprojected before future requests without redoing features. Image and audio work may overlap, but resident model inference shares one local resource gate. Remote request budgets, interruption draining and durable receipts remain authoritative.

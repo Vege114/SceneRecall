@@ -93,6 +93,9 @@ export interface Profile {
   has_key?: boolean;
 }
 export interface CodexStatus {
+  runtime?: 'windows' | 'wsl' | 'macos' | 'linux';
+  cli_runtime?: 'windows' | 'wsl' | 'macos' | 'linux';
+  executable?: string | null;
   installed: boolean;
   authenticated: boolean;
   compatible?: boolean;

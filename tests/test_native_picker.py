@@ -1,4 +1,4 @@
-"""Native chooser tests; only the explicit macOS smoke opts into real windows."""
+"""Native chooser tests; ordinary tests never open real selection windows."""
 import base64
 import json
 import os
@@ -17,8 +17,6 @@ from scenerecall.native_picker import FilePickerBusy, FilePickerInput, FilePicke
 
 def test_mac_multiselection_preserves_unicode_quotes_and_newlines(tmp_path, monkeypatch):
     paths = [tmp_path / '字幕 "第一集".ASS', tmp_path / "字幕\n第二集.vtt"]
-    for path in paths:
-        path.write_text("synthetic subtitle", encoding="utf-8")
     commands = []
 
     def run(command, **kwargs):
@@ -29,7 +27,9 @@ def test_mac_multiselection_preserves_unicode_quotes_and_newlines(tmp_path, monk
 
     monkeypatch.setattr(native_picker.sys, "platform", "darwin")
     monkeypatch.setattr(native_picker.subprocess, "run", run)
-    result = pick_local_files(FilePickerInput(kind="subtitle", multiple=True, directory=str(tmp_path)))
+    # Exercise serialization without creating names that are illegal on Windows.
+    result = native_picker._open_dialog({"title": native_picker.TITLES["subtitle"], "multiple": True,
+                                         "directory": str(tmp_path), "extensions": ["ass", "srt", "vtt"]})
     assert result == {"paths": [str(path) for path in paths], "cancelled": False}
     assert commands[0][:4] == ["/usr/bin/osascript", "-l", "JavaScript", "-e"]
     assert commands[0][4] == native_picker._MAC_SCRIPT
@@ -213,6 +213,7 @@ def test_mac_real_panel_is_visible_focused_and_cancellable(tmp_path, kind):
 
 
 def test_system_picker_failure_and_linux_missing_desktop(monkeypatch):
+    monkeypatch.setattr(native_picker, "_is_wsl", lambda: False)
     monkeypatch.setattr(native_picker.sys, "platform", "darwin")
     monkeypatch.setattr(native_picker, "_run", lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", "OS error"))
     with pytest.raises(FilePickerUnavailable, match="桌面环境"):
@@ -224,7 +225,7 @@ def test_system_picker_failure_and_linux_missing_desktop(monkeypatch):
 
 
 def test_windows_system_dialog_uses_fixed_script_and_separate_json(tmp_path, monkeypatch):
-    backup = tmp_path / '备份 "$()".zip'
+    backup = tmp_path / '备份 $() [test].zip'
     backup.write_bytes(b"selection does not inspect archive")
     monkeypatch.setattr(native_picker.sys, "platform", "win32")
     monkeypatch.setattr(native_picker.shutil, "which", lambda command: "powershell.exe")
@@ -232,6 +233,7 @@ def test_windows_system_dialog_uses_fixed_script_and_separate_json(tmp_path, mon
     def run(command, **kwargs):
         assert command[:4] == ["powershell.exe", "-NoProfile", "-STA", "-EncodedCommand"]
         assert base64.b64decode(command[4]).decode("utf-16-le") == native_picker._WINDOWS_SCRIPT
+        assert command[5:] == ["-NonInteractive", "-OutputFormat", "Text"]
         options = json.loads(kwargs["input"])
         assert options["extensions"] == ["zip"] and not options["multiple"]
         return subprocess.CompletedProcess(command, 0, json.dumps({"paths": [str(backup)], "cancelled": False}), "")
@@ -241,6 +243,7 @@ def test_windows_system_dialog_uses_fixed_script_and_separate_json(tmp_path, mon
 
 
 def test_linux_system_dialog_multiselection_and_cancel(tmp_path, monkeypatch):
+    monkeypatch.setattr(native_picker, "_is_wsl", lambda: False)
     paths = [tmp_path / "one.srt", tmp_path / "two.ass"]
     for path in paths:
         path.write_bytes(b"selection only")
@@ -255,6 +258,160 @@ def test_linux_system_dialog_multiselection_and_cancel(tmp_path, monkeypatch):
     assert pick_local_files(FilePickerInput(kind="subtitle", multiple=True, directory=str(tmp_path)))["paths"] == [str(path) for path in paths]
     monkeypatch.setattr(native_picker, "_run", lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", ""))
     assert pick_local_files(FilePickerInput()) == {"paths": [], "cancelled": True}
+
+
+@pytest.mark.parametrize("marker", ["WSL_DISTRO_NAME", "WSL_INTEROP", "kernel"])
+def test_wsl_detection_uses_environment_or_kernel(monkeypatch, marker):
+    monkeypatch.setattr(native_picker.sys, "platform", "linux")
+    monkeypatch.delenv("WSL_DISTRO_NAME", raising=False)
+    monkeypatch.delenv("WSL_INTEROP", raising=False)
+    monkeypatch.setattr(native_picker.platform, "release", lambda: "6.6.87-microsoft-standard-WSL2"
+                        if marker == "kernel" else "6.8.0-generic")
+    if marker != "kernel":
+        monkeypatch.setenv(marker, "Ubuntu" if marker == "WSL_DISTRO_NAME" else "/run/WSL/1_interop")
+    assert native_picker._is_wsl()
+    monkeypatch.setattr(native_picker.sys, "platform", "win32")
+    assert not native_picker._is_wsl()
+
+
+def test_wsl_uses_explorer_and_translates_initial_directory_without_zenity(monkeypatch):
+    monkeypatch.setattr(native_picker.sys, "platform", "linux")
+    monkeypatch.setattr(native_picker, "_is_wsl", lambda: True)
+    programs = {"wslpath": "/usr/bin/wslpath", "powershell.exe": "/windows/powershell.exe"}
+    looked_up = []
+
+    def which(name):
+        looked_up.append(name)
+        return programs.get(name)
+
+    monkeypatch.setattr(native_picker.shutil, "which", which)
+    directory = r"\\wsl.localhost\Ubuntu\home\用户\视频"
+    paths = [r"D:\动画\第 1 集.mkv", r"D:\动画\第 2 集.mkv"]
+
+    def run(command, **kwargs):
+        if command[0] == "/usr/bin/wslpath":
+            assert command == ["/usr/bin/wslpath", "-w", "/home/用户/视频"]
+            return subprocess.CompletedProcess(command, 0, directory + "\n", "")
+        assert command[0] == "/windows/powershell.exe"
+        assert base64.b64decode(command[4]).decode("utf-16-le") == native_picker._WINDOWS_SCRIPT
+        options = json.loads(kwargs["input"])
+        assert options["directory"] == directory and options["multiple"] is True
+        return subprocess.CompletedProcess(command, 0, json.dumps({"paths": paths, "cancelled": False}), "")
+
+    monkeypatch.setattr(native_picker, "_run", run)
+    options = {"title": native_picker.TITLES["video"], "extensions": ["mkv"],
+               "multiple": True, "directory": "/home/用户/视频"}
+    assert native_picker._open_dialog(options) == {"paths": paths, "cancelled": False}
+    assert options["directory"] == "/home/用户/视频"
+    assert "zenity" not in looked_up
+
+
+def test_wsl_selected_windows_files_are_validated_and_returned_in_backend_paths(tmp_path, monkeypatch):
+    video = tmp_path / "动画 第1集.mkv"
+    video.write_bytes(b"synthetic selection")
+    windows_path = r"D:\动画\第1集.mkv"
+    conversions = []
+    monkeypatch.setattr(native_picker, "_is_wsl", lambda: True)
+
+    def translate(raw, target):
+        conversions.append((raw, target))
+        return str(video)
+
+    monkeypatch.setattr(native_picker, "_wsl_path", translate)
+    monkeypatch.setattr(native_picker, "_open_dialog", lambda options: {"paths": [windows_path], "cancelled": False})
+    assert pick_local_files(FilePickerInput()) == {"paths": [str(video)], "cancelled": False}
+    assert conversions == [(windows_path, "-u")]
+    video.unlink()
+    with pytest.raises(FileNotFoundError):
+        pick_local_files(FilePickerInput())
+
+
+def test_wsl_windows_starting_directory_resolves_before_opening(tmp_path, monkeypatch):
+    monkeypatch.setattr(native_picker, "_is_wsl", lambda: True)
+    conversions = []
+
+    def translate(raw, target):
+        conversions.append((raw, target))
+        return str(tmp_path)
+
+    monkeypatch.setattr(native_picker, "_wsl_path", translate)
+    assert native_picker.starting_directory(r"D:\动画") == tmp_path
+    assert conversions == [(r"D:\动画", "-u")]
+
+
+def test_wsl_path_conversion_respects_mounts_and_preserves_embedded_newlines(monkeypatch):
+    monkeypatch.setattr(native_picker.shutil, "which", lambda name: "/usr/bin/wslpath")
+    expected = "/custom-mount/d/动画\n第一集.mkv"
+
+    def run(command, **kwargs):
+        assert command == ["/usr/bin/wslpath", "-u", "D:\\动画\n第一集.mkv"]
+        return subprocess.CompletedProcess(command, 0, expected + "\n", "")
+
+    monkeypatch.setattr(native_picker, "_run", run)
+    assert native_picker._wsl_path("D:\\动画\n第一集.mkv", "-u") == expected
+    monkeypatch.setattr(native_picker, "_run", lambda command: subprocess.CompletedProcess(command, 1, "", "bad path"))
+    with pytest.raises(FilePickerUnavailable, match="无法由 WSL 访问"):
+        native_picker._wsl_path(r"D:\missing", "-u")
+
+
+def test_wsl_missing_windows_path_uses_standard_powershell_install(tmp_path, monkeypatch):
+    executable = tmp_path / "powershell.exe"
+    executable.write_bytes(b"placeholder")
+    monkeypatch.setattr(native_picker.shutil, "which", lambda name: None)
+    monkeypatch.setattr(native_picker, "_wsl_path", lambda raw, target: str(executable))
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, '{"paths":[],"cancelled":true}', "")
+
+    monkeypatch.setattr(native_picker, "_run", run)
+    options = {"title": "test", "multiple": False, "extensions": ["mkv"], "directory": None}
+    assert native_picker._open_windows_dialog(options, wsl=True)["cancelled"]
+    assert commands[0][0] == str(executable)
+    executable.unlink()
+    with pytest.raises(FilePickerUnavailable, match="互操作"):
+        native_picker._open_windows_dialog(options, wsl=True)
+
+
+@pytest.mark.skipif(native_picker.sys.platform != "win32", reason="Windows PowerShell and WinForms are Windows-only")
+@pytest.mark.parametrize("multiple,cancelled", [(False, False), (True, False), (False, True)])
+def test_windows_real_powershell_serialization_without_selection_window(monkeypatch, multiple, cancelled):
+    # Keep the production interpreter and JSON pipe, substitute only the dialog.
+    real_run = subprocess.run
+
+    def timed_run(*args, **kwargs):
+        return real_run(*args, timeout=20, **kwargs)
+
+    monkeypatch.setattr(native_picker.subprocess, "run", timed_run)
+    fake_dialog = r'''
+$dialog = [PSCustomObject]@{
+    Title=$null; Multiselect=$false; CheckFileExists=$false; AutoUpgradeEnabled=$false
+    RestoreDirectory=$false; Filter=$null; InitialDirectory=$null; FileNames=@()
+}
+$dialog | Add-Member -MemberType ScriptMethod -Name ShowDialog -Value {
+    param($window)
+    if (!$window.TopMost -or $window.ShowInTaskbar -or $window.Opacity -ne 0 -or
+        $this.Title -ne $options.title -or $this.InitialDirectory -ne $options.directory -or
+        $this.Multiselect -ne $options.multiple -or !$this.CheckFileExists -or
+        !$this.AutoUpgradeEnabled -or !$this.RestoreDirectory -or $this.Filter -ne 'SceneRecall|*.ass;*.srt') {
+        throw 'Invalid Windows chooser settings'
+    }
+    if ($options.fakeCancelled) { return [System.Windows.Forms.DialogResult]::Cancel }
+    $this.FileNames = if ($options.multiple) { @($options.fakePaths) } else { @($options.fakePaths[0]) }
+    return [System.Windows.Forms.DialogResult]::OK
+}
+$dialog | Add-Member -MemberType ScriptMethod -Name Dispose -Value {}
+'''
+    script = native_picker._WINDOWS_SCRIPT.replace("$dialog = New-Object System.Windows.Forms.OpenFileDialog", fake_dialog)
+    script = script.replace("$owner.Show()", "# owner is hidden during serialization test")
+    script = script.replace("$owner.Activate() | Out-Null", "# no activation during serialization test")
+    monkeypatch.setattr(native_picker, "_WINDOWS_SCRIPT", script)
+    paths = [r"D:\动画\第 1 集.ass", r"D:\动画\字幕 $() [测试].srt"]
+    options = {"title": "SceneRecall · 选择外挂字幕", "extensions": ["ass", "srt"], "directory": r"D:\动画",
+               "multiple": multiple, "fakePaths": paths, "fakeCancelled": cancelled}
+    expected = [] if cancelled else paths if multiple else paths[:1]
+    assert native_picker._open_windows_dialog(options) == {"paths": expected, "cancelled": cancelled}
 
 
 def test_native_api_requires_local_authenticated_session(tmp_path, monkeypatch):

@@ -92,6 +92,17 @@ describe('Codex CLI connections', () => {
   const codex: Profile = { id: 'codex-test', name: '我的 Codex', provider_type: 'codex_cli', base_url: '', model: '', capabilities: ['vision', 'subtitle', 'query', 'decision', 'answer'], secret_mode: 'none', env_var: null, input_price_per_million: null, output_price_per_million: null };
   const ready = { installed: true, authenticated: true, compatible: true, auth_method: 'chatgpt', message: '已通过 ChatGPT 登录。', version: 'codex-cli test' };
 
+  it('explains when the WSL backend uses the Windows Codex login', async () => {
+    const user = userEvent.setup();
+    mockFetch(() => ({ ...ready, runtime: 'wsl', cli_runtime: 'windows', executable: '/mnt/c/Codex/codex.exe' }));
+    renderApp(<Settings />);
+    await user.click(screen.getByRole('button', { name: '添加连接' }));
+    await user.selectOptions(screen.getByLabelText('接入方式'), 'codex_cli');
+    expect(await screen.findByText(/SceneRecall 后端运行于 WSL，通过桥接使用 Windows Codex 的登录状态/)).toBeTruthy();
+    expect(screen.getByText('/mnt/c/Codex/codex.exe')).toBeTruthy();
+    expect(screen.getByText('已就绪')).toBeTruthy();
+  });
+
   it.each([
     [{ ...ready, installed: false, authenticated: false, compatible: false, message: '请安装 Codex CLI。' }, '未检测到 Codex CLI'],
     [{ ...ready, authenticated: false, auth_method: null, message: '请执行 codex login。' }, '需要登录 ChatGPT'],

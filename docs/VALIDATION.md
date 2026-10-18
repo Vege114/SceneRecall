@@ -1,5 +1,37 @@
 # SceneRecall 验证记录
 
+## Windows 文件窗口与 Codex 跨环境路由（2026-10-18）
+
+本机旧的 `Start-SceneRecall.ps1` 明确调用 WSL，`.venv` 只有 Linux `bin/python`；运行中的主应用为 WSL Python，子进程为 Linux Zenity。Windows Codex CLI 0.163.0 则已通过 ChatGPT 登录，原后端没有跨环境路由，因此桌面客户端已启动仍不能连接。
+
+本次验证覆盖 Windows PowerShell 5、原生 Python 3.12.6 与现有 WSL Python 环境。文件选择新增 WSL→Windows PowerShell/WinForms 路由，`wslpath` 处理盘符、中文、空格及 Linux home 的 UNC 路径；Windows 原生调用隐藏控制台并使用置顶 owner。回归发现并修复盘根 `C:\` 被前端截成 `C:` 的问题。普通 Linux 和 macOS 分支保留。
+
+实际 Windows PowerShell 进程通过了单选／多选／取消三类 UTF-8 JSON 与 WinForms 配置检查；对话框对象在这些测试中由可控替身代替，没有宣称手工完成真实影片选择。WSL 真实跨进程检查覆盖中文、空格、`$()`、方括号字幕路径以及 Windows 盘符／Linux home 的双向转换。`-WindowStyle Hidden` 在真实重定向管道测试中挂起，最终已移除；原生 Windows 使用 `CREATE_NO_WINDOW`。
+
+原生 Windows 回归另外复现内部资料引用含本机反斜杠，`confined_path` 无条件拒绝而导致保存观察／恢复备份失败。现仅 Windows 接受安全相对反斜杠路径，继续拒绝 drive-relative、绝对盘符、UNC、根路径、`..` 和实际越界。ZIP 从原始成员名字检查反斜杠，即使 Windows `zipfile` 已归一化读取名字仍拒绝。真实观察、项目和本机生成备份 roundtrip 已通过；没有修改用户正式资料。
+
+Codex 在 Windows 探测桌面 CLI、解析 npm shim 到原生 binary；WSL 经固定 PowerShell 包装把参数和提示词作为 JSON／base64 数据传入 `ProcessStartInfo`，不经过命令 shell。图片、schema、指令和工作目录经 `wslpath` 转换，Windows 子进程实际环境在 Windows 端按白名单重建，Linux `CODEX_HOME` 不转发。自定义 Windows `CODEX_HOME` 已在真实替身子进程核对收到；模型缓存从同一 Windows home 读出 7 个可见模型。发现和缓存检查移入线程，未阻塞主事件循环。
+
+新包装使用 Windows Job Object 回收整个本次子进程树。真实合成父子进程分别验证 6 秒超时和主动取消，观察时 Windows 父／子均不存在，返回 timeout／CancelledError；没有调用模型。此前只 `killpg` 的实现会留下 Windows 子进程，已在同样探针中复现。构建 wheel 后确认同时包含 `codex_windows.py` 和所需 `.ps1`。
+
+两次真实订阅检查均只使用程序生成的 `BRIDGE TEST 427` 卡片及严格输出 schema，正确读取文字。初版直接桥接耗时 8.714 秒、2,990 tokens；最终 Job Object 包装耗时 22.189 秒、2,988 tokens。每次计时均包括 CLI 状态／安装检查、推理前置和一次模型请求，不能当作同条件吞吐比较。合计 2 次请求、5,978 tokens，订阅金额未知；没有发送用户影片、字幕或声音，也没有读取／复制认证文件。[公开检查摘要](validation-windows-codex-20261018.json)不含本机访问凭证。
+
+新增原生启动器的语法、PowerShell 5 执行和独立 `.venv-windows` 已检查，锁定开发依赖已安装。当前本机 Windows PATH 缺少 FFmpeg／ffprobe，`-Check` 正确报出缺失；原生媒体处理与整套重型模型迁移未验收。因此正式现有资料继续使用 WSL 桥接，不直接切换保存着 Linux 源文件和解释器路径的资料库。命令与边界见 [Windows 说明](WINDOWS.md)。
+
+最终 WSL 后端全量 **1,313 通过、21 跳过、47 subtests 通过／363.75 秒**，零失败；跳过项不计为通过。初轮暴露的三处失败分别为旧状态字段断言、Python 3.12 接受非规范 base64，以及 Node 启动未完成便触发 0.2 秒测试超时；已更新断言、严格检查 base64，并用真实就绪握手后再启动短超时，最终重新全量通过。
+
+最终原生 Windows 专项回归 **198 通过、8 跳过／36.80 秒**，覆盖 picker、Codex CLI／集成／路由、任务模型、存储安全和 Bangumi；跳过的是 macOS 实窗及 POSIX fork 分支。前端全量 **228 通过／20 文件／24.28 秒**，独立标注工具 **26 通过**。TypeScript、Vite 生产构建、Ruff（含 `backend tests scripts tools/asd-annotator`）、`uv lock --check --offline` 及差异空白检查通过。Windows 保留现有 TestClient 上游弃用警告；测试沙箱曾阻止 socketpair 和临时文件重命名，最终通过允许本地测试进程运行完成验证，未将这种环境失败记为业务失败。
+
+部署到本机时再次只读核对正式队列为空，仅关闭属于旧主服务的卡住 Zenity 子窗口，再通过项目 `stop` 命令正常退出并以相同资料目录／8765 端口启动新 WSL 服务。实际健康、会话、初始化、Codex 状态和模型目录接口均通过；Codex 报告后端 `wsl`／CLI `windows`、已安装／已登录／兼容，返回 7 个模型。独立 8766 标注服务未停止，未启动新的正式分析；新会话链接保存在本机忽略日志并在 Codex 浏览器面板打开，没有提交仓库。
+
+## LR-ASD 实验与人工标注轮次同步（2026-10-18）
+
+已同步 LR-ASD 训练、模型包校验、短片段预览、Bangumi 图片缓存、独立人工标注工具及冻结导出／比较流程。此前记录的官方来源训练／日语适配和真实预览结果见 [LR-ASD 文档](LRASD_TRAINING.md)，不能从工程回归推导人物识别、声纹或发言准确率。正式双轨预览的两条 CCIP 第一候选均误排，保留候选而不自动确认。
+
+本次核对 2026-10-18 已完成的人工轮：24/24 片段就绪、18 个场景组，69 个人物轨迹窗口（训练／验证／测试 35／16／18），有效人物帧分别 1,715／800／900。微调 4 轮、36 步，独立比较使用各模型仅在验证集选定的阈值。基线→候选验证 AP 为 0.869690→0.866273，测试 AP 为 0.945100→0.943927，测试 F1 为 0.798544→0.771144；结论为保留既有模型，无自动部署。只覆盖同片场景留出，未证明跨作品泛化、概率校准或来源域无遗忘。
+
+重新计算并核对冻结 manifest、规范化场景计划、基线／候选模型与 metadata 的 SHA-256，未重新训练。去除原片、私人绝对路径、权重、标注正文和凭证的[人工评估摘要](validation-lrasd-human-20261018.json)保存完整指标与哈希；训练素材、缓存与运行日志保留在 Git 忽略目录。
+
 ## 角色中心的视听理解（2026-10-15）
 
 修改前基线固定为 `3728bb241c7f913000699b50e15596a360edfe9f`。基线前端 **198 通过／18 文件／6.13 秒**。基线后端在受限沙箱中 **1,077 通过、3 跳过、3 个回环端口测试被权限阻止／109.85 秒**；失败原因是 `socket.bind` 的 `PermissionError`，没有当作识别或业务失败。下面最终全量允许隔离回环服务测试运行。测试套件耗时不是动画处理性能指标。
