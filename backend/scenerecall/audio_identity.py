@@ -242,7 +242,7 @@ class AudioIdentityService:
                "status": "confirmed" if payload.get("confirmed") is True else "proposed",
                "confirmation_source": "human" if payload.get("confirmed") is True else None,
                "quality": info, "provenance": provenance, "version": 1, "created_at": now(),
-               "audio_ref": str(destination.relative_to(path.parent)),
+               "audio_ref": destination.relative_to(path.parent).as_posix(),
                "content_sha256": hashlib.sha256(destination.read_bytes()).hexdigest()}
         with self.library.lock:
             rows = read_jsonl(path)
@@ -476,7 +476,7 @@ class AudioIdentityService:
                       "run_id": run_key, "start_ms": start_ms + turn["start_ms"], "end_ms": start_ms + turn["end_ms"],
                       "speaker_id": f"{asset_id}:{extraction_key}:{digest(diarizer.version)}:{turn['speaker']}",
                       "audio_stream_index": stream, "language": config["language"], "dub_version": config["dub_version"],
-                      "audio_ref": str(clip.relative_to(self.library.asset_dir(asset_id))), "overlap": turn["overlap"],
+                      "audio_ref": clip.relative_to(self.library.asset_dir(asset_id)).as_posix(), "overlap": turn["overlap"],
                       "source": "local_audio", "review_status": "machine", "visual_evidence": False,
                       "evidence_frame_ids": [], "model_versions": {"diarization": diarizer.version,
                        "embedding": embedder.version, "preprocessing": PREPROCESS_VERSION}, "quality": info,
@@ -688,7 +688,7 @@ def validate_audio_artifacts(library) -> None:
                 raise ValueError("备份声音样本身份或作品引用无效")
             CharacterStore._resolve(registry, safe_id(sample.get("character_id")), strict=True)
             seen.add(identity)
-            if sample.get("audio_ref") != f"voice-audio/{identity}.wav":
+            if str(sample.get("audio_ref", "")).replace("\\", "/") != f"voice-audio/{identity}.wav":
                 raise ValueError("备份声音样本文件引用无效")
             path = confined_path(bank_path.parent, sample["audio_ref"])
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != sample.get("content_sha256"):
@@ -733,7 +733,7 @@ def validate_audio_artifacts(library) -> None:
                 if isinstance(stream_index, bool) or not isinstance(stream_index, int) or stream_index < 0:
                     raise ValueError("备份音轨索引无效")
                 relative = record.get("audio_ref", "")
-                parts = Path(relative).parts
+                parts = Path(relative.replace("\\", "/")).parts
                 if len(parts) != 5 or parts[:2] != ("audio", "cache") or parts[3:] != ("clips", f"{identity}.wav"):
                     raise ValueError("备份音频片段文件引用无效")
                 safe_id(parts[2])

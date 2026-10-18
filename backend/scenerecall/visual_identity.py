@@ -13,7 +13,7 @@ import io
 import json
 import math
 import os
-import selectors
+import queue
 import shutil
 import subprocess
 import sys
@@ -266,7 +266,8 @@ class ImgutilsBackend:
                 if not resolved or not Path(resolved).is_file():
                     raise IdentityUnavailable("SCENERECALL_VISUAL_PYTHON 不是可执行的本地 Python 路径")
                 environment = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
-                                   HF_HUB_DISABLE_TELEMETRY="1", OMP_NUM_THREADS="2")
+                                   HF_HUB_DISABLE_TELEMETRY="1", OMP_NUM_THREADS="2",
+                                   PYTHONIOENCODING="utf-8")
                 # The dedicated ML environment need not install SceneRecall's
                 # entire application dependency set; only this private worker
                 # and optional visual dependencies are imported in that process.
@@ -275,16 +276,30 @@ class ImgutilsBackend:
                 self._process = subprocess.Popen(
                     [resolved, "-u", "-m", "scenerecall.visual_identity_worker", self.model],
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    text=True, env=environment)
+                    text=True, encoding="utf-8", env=environment)
             try:
                 self._process.stdin.write(json.dumps({"action": action, **arguments}) + "\n")
                 self._process.stdin.flush()
-                with selectors.DefaultSelector() as selector:
-                    selector.register(self._process.stdout, selectors.EVENT_READ)
-                    if not selector.select(self.timeout_s):
-                        self.close()
-                        raise IdentityUnavailable("imgutils 本地识别超时；已停止该 worker")
-                output = self._process.stdout.readline()
+                # Windows selectors only accept sockets, not subprocess pipes.
+                # Bound the complete line read as a stalled/partial JSON reply
+                # must obey the same worker deadline on every platform.
+                replies = queue.Queue(maxsize=1)
+                stream = self._process.stdout
+
+                def read_reply():
+                    try:
+                        replies.put(stream.readline())
+                    except (OSError, ValueError) as exc:
+                        replies.put(exc)
+
+                threading.Thread(target=read_reply, daemon=True).start()
+                try:
+                    output = replies.get(timeout=self.timeout_s)
+                except queue.Empty:
+                    self.close()
+                    raise IdentityUnavailable("imgutils 本地识别超时；已停止该 worker") from None
+                if isinstance(output, Exception):
+                    raise output
                 result = json.loads(output)
             except (BrokenPipeError, OSError, ValueError) as exc:
                 self.close()

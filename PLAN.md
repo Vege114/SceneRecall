@@ -4,6 +4,18 @@
 
 当前版本：**v0.3.0**（进度更新至 2026-10-18）。使用方式见 [README.md](README.md)，详细验证见 [验证记录](docs/VALIDATION.md)，工程接口见 [实现契约](docs/IMPLEMENTATION_CONTRACT.md)。最初确认的 v0.1 规划保留在本文末尾，作为历史决策记录。
 
+## 2026-10-18 · Windows 原生迁移与完整媒体／模型验证
+
+按用户要求安装 Windows FFmpeg／ffprobe 9.0.2，默认启动入口切换至原生 `.venv-windows`。增加原生后台管理器，核对用户、进程身份、完整参数、独立控制台与实际监听后发送 CTRL_BREAK 正常停止；便携 FFmpeg 和本机缓存设置只作用于本次进程，原 WSL 环境保留。
+
+正式资料库先完整备份并校验 87 个文件，再迁移原片位置与 LR-ASD 四项路径，仅改两个 JSON。原队列为空；原片、模型和历史人工结果保留，迁移后正式接口可读原片、历史人物图和预览。视觉模型与 LR-ASD 使用独立 Windows 环境及原有缓存／权重，100 帧 CUDA 推理与 WSL 逐帧误差为 0；正式 API 又完成一段 4 秒本地预览，状态仍需人工复核，不自动确认身份。
+
+原生文件选择改用 pythonw 承载系统 IFileOpenDialog；正式服务实际呼出的资源管理器窗口完成视频单选、中文字幕多选和 ZIP 筛选／取消。Codex 正式状态为 Windows→Windows，7 个模型；一次合成图片真实推理和严格 schema 返回通过，2,985 tokens，未使用用户媒体。
+
+Windows 全量回归进一步修复 NTFS 不允许回执文件名冒号、音频样本相对路径分隔符，以及视觉 worker 的 Windows 管道读取。最后发现同时间戳任务被反序执行的问题，改为保留稳定入队顺序，并用冻结时钟复现验证多集剧情衔接。新回执保持逻辑 ID 和去重，原 POSIX 命名可回退读取；本库没有旧任务／回执需要跨系统恢复。Windows 使用、模型安装、回退边界与最终检查见 [Windows 说明](docs/WINDOWS.md)、[模型说明](docs/WINDOWS_MODELS.md)和[验证记录](docs/VALIDATION.md)。
+
+验证收尾：Windows 全量轮 1,304 通过／1 个已修复 FIFO 失败／76 跳过／47 subtests 通过；修复后 Windows 受影响组 169 通过／1 跳过，WSL 同组 170 通过。原生启停管理器另 32 通过，迁移相关 WSL 兼容组 230 通过／14 跳过。Ruff、锁文件与差异检查通过；正式服务和浏览器已使用最终原生会话。
+
 ## 2026-10-18 · Windows 文件窗口、Codex 路由与原生启动
 
 核实本机旧启动器调用 WSL，仓库 `.venv` 为 Linux Python，而 Windows Codex CLI 已登录；浏览器开在 Windows 并不意味着后端也在 Windows。新增 Windows 原生启动器及独立 `.venv-windows`，支持依赖准备与只读环境检查，保留已有 WSL/重型模型环境。现有 WSL 资料中的 Linux 路径不自动迁移，先补齐桥接继续使用原库。

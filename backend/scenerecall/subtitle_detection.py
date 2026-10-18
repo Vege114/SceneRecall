@@ -137,7 +137,7 @@ def _candidate(video: Path, subtitle: Path, root: Path) -> dict:
                   for part in ancestors)):
         score, match = 75, "episode"
     return {"path": str(subtitle), "name": subtitle.name,
-            "relative_path": str(subtitle.relative_to(root)), "match": match,
+            "relative_path": subtitle.relative_to(root).as_posix(), "match": match,
             "language": language, "score": score, "forced": forced}
 
 

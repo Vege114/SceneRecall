@@ -119,7 +119,10 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
     def list(self) -> list[dict]:
         import json
         with self.connect() as db:
-            return sorted([json.loads(r[0]) for r in db.execute("SELECT data FROM jobs")], key=lambda j: j["created_at"], reverse=True)
+            # Batch jobs can share a timestamp on Windows. Keep newer inserts
+            # first for ties so the pipeline's reverse traversal remains FIFO.
+            rows = db.execute("SELECT data FROM jobs ORDER BY rowid DESC")
+            return sorted([json.loads(r[0]) for r in rows], key=lambda j: j["created_at"], reverse=True)
 
     def get(self, job_id: str) -> dict:
         import json
@@ -497,7 +500,15 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
         job = self.checkpoint(job_id)
         call_id = uid("call")
         receipt_key = receipt_key or call_id
-        receipt_path = receipt_path or (self.library.root / "runtime" / "call-receipts" / job_id / f"{receipt_key}.json")
+        if receipt_path is None:
+            directory = self.library.root / "runtime" / "call-receipts" / job_id
+            # Logical receipt IDs may contain colons, which are not portable
+            # filenames (and denote alternate data streams on NTFS).
+            receipt_path = directory / f"{digest(receipt_key)}.json"
+            if os.name != "nt":
+                legacy = directory / f"{receipt_key}.json"
+                if legacy.is_file():
+                    receipt_path = legacy
         cached = read_json(receipt_path)
         if cached is not None:
             self._account_scene_receipt(job_id, cached)

@@ -90,16 +90,13 @@ def confined_path(base: Path, relative: str) -> Path:
     """File references are data, never permission to traverse outside an asset."""
     if not isinstance(relative, str) or not relative or "\x00" in relative:
         raise ValueError("资料包含非法文件引用")
-    if os.name == "nt":
-        # Internally persisted Path.relative_to() values use native separators.
-        # Accept those Windows references without allowing drive-relative paths,
-        # UNC shares or rooted paths to override the owning library directory.
-        windows = PureWindowsPath(relative)
-        if windows.drive or windows.root:
-            raise ValueError("资料包含越界文件引用")
-        relative = relative.replace("\\", "/")
-    elif "\\" in relative:
-        raise ValueError("资料包含非法文件引用")
+    # Libraries written on Windows contain native relative separators. Resolve
+    # them on either OS, retaining the same drive/root/traversal restrictions.
+    # ZIP member names are validated separately and still reject backslashes.
+    windows = PureWindowsPath(relative)
+    if windows.drive or windows.root:
+        raise ValueError("资料包含越界文件引用")
+    relative = relative.replace("\\", "/")
     candidate = PurePosixPath(relative)
     if candidate.is_absolute() or ".." in candidate.parts:
         raise ValueError("资料包含越界文件引用")
@@ -443,6 +440,8 @@ class Library:
         directory = self.asset_dir(asset_id)
         path = confined_path(directory, pointer["path"])
         original = confined_path(directory, pointer["original_path"])
+        pointer = {**pointer, "path": pointer["path"].replace("\\", "/"),
+                   "original_path": pointer["original_path"].replace("\\", "/")}
         if (pointer["path"] != f"analyses/{run_id}/subtitles.jsonl"
                 or pointer["original_path"] != f"subtitles/originals/{run_id}{original.suffix}"
                 or original.suffix not in {".ass", ".srt"}

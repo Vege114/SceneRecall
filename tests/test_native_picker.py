@@ -224,22 +224,35 @@ def test_system_picker_failure_and_linux_missing_desktop(monkeypatch):
         pick_local_files(FilePickerInput())
 
 
-def test_windows_system_dialog_uses_fixed_script_and_separate_json(tmp_path, monkeypatch):
+def test_windows_system_dialog_uses_gui_python_and_separate_json(tmp_path, monkeypatch):
     backup = tmp_path / '备份 $() [test].zip'
     backup.write_bytes(b"selection does not inspect archive")
     monkeypatch.setattr(native_picker.sys, "platform", "win32")
-    monkeypatch.setattr(native_picker.shutil, "which", lambda command: "powershell.exe")
+    monkeypatch.setattr(native_picker.shutil, "which", lambda command: pytest.fail("native Windows needs no PowerShell"))
 
     def run(command, **kwargs):
-        assert command[:4] == ["powershell.exe", "-NoProfile", "-STA", "-EncodedCommand"]
-        assert base64.b64decode(command[4]).decode("utf-16-le") == native_picker._WINDOWS_SCRIPT
-        assert command[5:] == ["-NonInteractive", "-OutputFormat", "Text"]
+        assert command[1:] == ["-m", "scenerecall.windows_file_dialog"]
+        gui_python = native_picker.Path(native_picker.sys.executable).with_name("pythonw.exe")
+        assert command[0] == (str(gui_python) if gui_python.is_file() else native_picker.sys.executable)
         options = json.loads(kwargs["input"])
         assert options["extensions"] == ["zip"] and not options["multiple"]
         return subprocess.CompletedProcess(command, 0, json.dumps({"paths": [str(backup)], "cancelled": False}), "")
 
     monkeypatch.setattr(native_picker, "_run", run)
     assert pick_local_files(FilePickerInput(kind="backup"))["paths"] == [str(backup)]
+
+
+def test_windows_system_dialog_falls_back_to_hidden_python_when_pythonw_is_missing(monkeypatch):
+    monkeypatch.setattr(native_picker.Path, "is_file", lambda self: False)
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, '{"paths":[],"cancelled":true}', "")
+
+    monkeypatch.setattr(native_picker, "_run", run)
+    assert native_picker._open_windows_dialog({"multiple": False})["cancelled"]
+    assert commands[0] == [native_picker.sys.executable, "-m", "scenerecall.windows_file_dialog"]
 
 
 def test_linux_system_dialog_multiselection_and_cancel(tmp_path, monkeypatch):
@@ -407,11 +420,45 @@ $dialog | Add-Member -MemberType ScriptMethod -Name Dispose -Value {}
     script = script.replace("$owner.Show()", "# owner is hidden during serialization test")
     script = script.replace("$owner.Activate() | Out-Null", "# no activation during serialization test")
     monkeypatch.setattr(native_picker, "_WINDOWS_SCRIPT", script)
+    monkeypatch.setattr(native_picker, "_wsl_path", lambda value, target: value)
     paths = [r"D:\动画\第 1 集.ass", r"D:\动画\字幕 $() [测试].srt"]
     options = {"title": "SceneRecall · 选择外挂字幕", "extensions": ["ass", "srt"], "directory": r"D:\动画",
                "multiple": multiple, "fakePaths": paths, "fakeCancelled": cancelled}
     expected = [] if cancelled else paths if multiple else paths[:1]
-    assert native_picker._open_windows_dialog(options) == {"paths": expected, "cancelled": cancelled}
+    assert native_picker._open_windows_dialog(options, wsl=True) == {"paths": expected, "cancelled": cancelled}
+
+
+@pytest.mark.skipif(native_picker.sys.platform != "win32", reason="pythonw and Explorer COM require Windows")
+@pytest.mark.parametrize("cancelled", [True, False])
+def test_windows_gui_python_pipe_preserves_unicode_without_locale_dependency(cancelled):
+    gui_python = native_picker.Path(native_picker.sys.executable).with_name("pythonw.exe")
+    source = ("from scenerecall import windows_file_dialog as dialog; "
+              "dialog.choose_files = lambda options: "
+              "{'paths': [] if options['cancelled'] else [options['path']], 'cancelled': options['cancelled']}; "
+              "dialog.main()")
+    options = {"path": 'D:\\中文 文件夹\\字幕 $() [第一集].srt', "cancelled": cancelled}
+    result = subprocess.run([str(gui_python), "-c", source], input=json.dumps(options, ensure_ascii=False),
+                            capture_output=True, text=True, encoding="utf-8", check=False, timeout=20,
+                            env={**os.environ, "PYTHONIOENCODING": "gbk"})
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"paths": [] if cancelled else [options["path"]], "cancelled": cancelled}
+
+
+@pytest.mark.skipif(native_picker.sys.platform != "win32", reason="Explorer COM requires Windows")
+def test_windows_real_explorer_com_rejects_missing_folder_without_showing_window(tmp_path, monkeypatch):
+    real_run = subprocess.run
+
+    def timed_run(*args, **kwargs):
+        return real_run(*args, timeout=20, **kwargs)
+
+    monkeypatch.setattr(native_picker.subprocess, "run", timed_run)
+    # Exercise real COM construction, options, Unicode title/filter and cleanup.
+    # The invalid initial shell item fails before Show; no UI automation needed.
+    options = {"title": "SceneRecall · 合成窗口测试", "multiple": True, "extensions": ["ass", "srt"],
+               "directory": str(tmp_path / "不存在的文件夹")}
+    for _ in range(2):
+        with pytest.raises(FilePickerUnavailable, match="桌面环境"):
+            native_picker._open_windows_dialog(options)
 
 
 def test_native_api_requires_local_authenticated_session(tmp_path, monkeypatch):

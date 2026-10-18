@@ -290,7 +290,7 @@ def test_restore_rejects_invalid_registry_before_importing_any_assets(cast, tmp_
     with zipfile.ZipFile(library.root / "runtime" / "backups" / f"{backup['id']}.zip") as source:
         with zipfile.ZipFile(damaged, "w") as destination:
             for info in source.infolist():
-                data = json.dumps(registry).encode() if info.filename == str(path.relative_to(library.root)) else source.read(info)
+                data = json.dumps(registry).encode() if info.filename == path.relative_to(library.root).as_posix() else source.read(info)
                 destination.writestr(info, data)
     restored = Library(tmp_path / "restored")
     with pytest.raises(ValueError):

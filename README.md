@@ -10,7 +10,7 @@
 
 已加入可选的角色中心视听链路：独立参考图库 → 动漫人物检测/CCIP → 自动说话人分段/ECAPA → 带人物区域和说话人证据的场景理解。默认关闭本地重型识别，原流程仍可使用。安装、权重、双环境运行、纠错和未验证项见 [视听身份使用说明](docs/CHARACTER_AV.md)，Animated_AD 代码核查见 [来源审查](docs/ANIMATED_AD_REVIEW.md)。后续已完成 LR-ASD 训练、真实短片段接入及一轮人工标注微调；新候选未改善留出指标，继续保留原模型，具体指标与限制见 [LR-ASD 实验记录](docs/LRASD_TRAINING.md)。
 
-需要 Python 3.12 或 3.13、[uv](https://docs.astral.sh/uv/)、Node.js 20+ / npm，以及能在终端找到的 `ffmpeg` 和 `ffprobe`。首次安装依赖需要网络。Windows 可原生运行，也可继续使用已有的 WSL 环境，详见 [Windows 与 WSL](docs/WINDOWS.md)。
+需要 Python 3.12 或 3.13、[uv](https://docs.astral.sh/uv/)、Node.js 20+ / npm，以及 FFmpeg／ffprobe（Windows 可使用下面的便携安装目录）。首次安装依赖需要网络。Windows 可原生运行，也可继续使用已有的 WSL 环境，详见 [Windows 与 WSL](docs/WINDOWS.md)。
 
 Windows PowerShell 首次准备并启动：
 
@@ -18,7 +18,9 @@ Windows PowerShell 首次准备并启动：
 .\scripts\start_windows.cmd -Setup -DataDir "D:\SceneRecallLibrary"
 ```
 
-以后运行同一命令时省略 `-Setup`；加 `-Check` 仅检查环境。启动器使用独立 `.venv-windows`，需在 Windows PATH 提供 `ffmpeg.exe` 与 `ffprobe.exe`。现有 WSL 资料库和模型配置中的 Linux 路径不能直接当作 Windows 路径使用；已有 WSL 用户可先沿用 WSL 并使用本次新增的系统文件窗口与 Codex 桥接。
+以后运行同一命令时省略 `-Setup`；加 `-Check` 仅检查环境。启动器使用独立 `.venv-windows`，自动发现 `.cache/ffmpeg/bin`，也可用 `-FfmpegDirectory` 指定 Windows FFmpeg。后台启动、状态和正常停止使用 `scripts/manage_windows_runtime.py`，详见 [Windows 说明](docs/WINDOWS.md)。
+
+本机现已迁为 Windows 原生运行：FFmpeg／ffprobe 9.0.2、现有资料库、视觉与 LR-ASD CUDA 环境均已验证；原 `D:\SceneRecall-Setup` 启停入口已更新。迁移前保留完整资料备份，源视频与模型权重仍在原处。其他 WSL 资料库应先停服务、检查路径并备份迁移，不能直接共用 Linux 解释器；模型依赖见 [Windows 模型说明](docs/WINDOWS_MODELS.md)。
 
 在项目根目录执行：
 
@@ -47,6 +49,14 @@ UV_CACHE_DIR=/tmp/scenerecall-uv-cache uv sync --python 3.12 --extra dev
 `start` 默认以前台方式运行，使用期间请保持启动终端运行。恢复已有任务时，台词整理、视觉分块、深入理解、连续理解更新和字幕 OCR 均恢复已完成的阶段与批次，保留完成进度，只执行未完成部分。深入理解与连续理解更新直接续接已提交场景及剧情记忆，索引未变化时跳过重建；旧任务可从原始场景和成功回执恢复断点。结果已保存但发布或索引尚未完成时，只补齐这些本地步骤，不重复调用模型。批次之间让出执行时间，使页面连接、任务状态查询和暂停操作能够继续响应。
 
 ## 停止
+
+Windows 后台实例使用相同资料目录和端口：
+
+```powershell
+.\.venv-windows\Scripts\python.exe scripts\manage_windows_runtime.py stop --data-dir "D:\SceneRecallLibrary" --port 8765
+```
+
+下面的 `scenerecall stop` 用于 macOS／Linux 的 CLI 实例。
 
 在项目根目录新开一个终端执行，无需查找 PID：
 

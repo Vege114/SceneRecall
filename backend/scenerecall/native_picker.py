@@ -205,7 +205,14 @@ def _json_result(result):
 
 
 def _open_windows_dialog(options: dict, *, wsl: bool = False):
-    names = ("powershell.exe", "pwsh.exe") if wsl else ("powershell", "pwsh")
+    if not wsl:
+        # Host the Explorer COM dialog in a GUI Python process. A native Windows
+        # app should not require PowerShell or inherit a terminal window.
+        gui_python = Path(sys.executable).with_name("pythonw.exe")
+        command = str(gui_python) if gui_python.is_file() else sys.executable
+        return _json_result(_run([command, "-m", "scenerecall.windows_file_dialog"],
+                                 input=json.dumps(options, ensure_ascii=False)))
+    names = ("powershell.exe", "pwsh.exe")
     command = next((found for name in names if (found := shutil.which(name))), None)
     if not command and wsl:
         # WSL may disable imported Windows PATH entries while interop is enabled.

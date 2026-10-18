@@ -1,0 +1,198 @@
+{
+  "date": "2026-10-18",
+  "scope": "existing local library migrated from WSL to native Windows",
+  "runtime": "windows",
+  "python_version": "3.12.6",
+  "ffmpeg": {
+    "version": "9.0.2-essentials_build-www.gyan.dev",
+    "official_download_page": "https://ffmpeg.org/download.html",
+    "build_download_page": "https://www.gyan.dev/ffmpeg/builds/",
+    "archive_url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+    "archive_sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
+    "machine_path_modified": false
+  },
+  "migration": {
+    "library_assets": 1,
+    "source_available": true,
+    "model_paths_exist": true,
+    "historical_thumbnails_readable": 2,
+    "historical_preview_clips_readable": 1,
+    "unchanged_library_files_sha256_verified": 84,
+    "migrated_json_files": 2,
+    "backed_up_files": 87,
+    "final_original_files_unchanged": 84,
+    "final_expected_changes": [
+      "source location",
+      "LR-ASD operational settings",
+      "latest pointer for the newly verified local preview"
+    ],
+    "final_queue_jobs": 0
+  },
+  "codex": {
+    "status": "passed",
+    "date": "2026-10-18",
+    "scope": "native Windows adapter; synthetic image and structured output",
+    "cli_status": {
+      "installed": true,
+      "authenticated": true,
+      "compatible": true,
+      "version": "0.163.0",
+      "auth_method": "chatgpt",
+      "runtime": "windows",
+      "cli_runtime": "windows"
+    },
+    "request_count": 1,
+    "usage": {
+      "input_tokens": 2966,
+      "output_tokens": 19,
+      "total_tokens": 2985
+    },
+    "elapsed_s": 9.104,
+    "response": {
+      "text": "NATIVE TEST 427"
+    },
+    "user_media_used": false,
+    "credentials_read_or_copied": false,
+    "subscription_cost": null
+  },
+  "formal_service": {
+    "status": "passed",
+    "health": {
+      "status": "ok",
+      "version": "0.3.0"
+    },
+    "tools": {
+      "ffmpeg": true,
+      "ffprobe": true
+    },
+    "codex_status": {
+      "runtime": "windows",
+      "cli_runtime": "windows",
+      "version": "0.163.0",
+      "installed": true,
+      "authenticated": true,
+      "compatible": true
+    },
+    "catalog_entries": 7,
+    "browser_library_connected": true,
+    "final_restart_and_api_verification": "passed"
+  },
+  "real_dialogs": {
+    "host": "pythonw / Windows IFileOpenDialog",
+    "via_formal_service": true,
+    "video_single_selection": "passed",
+    "unicode_space_subtitle_multiselection": "passed",
+    "zip_extension_filter_and_cancel": "passed",
+    "returned_filenames_verified": true
+  },
+  "models": {
+    "visual_environment_packages": 65,
+    "lrasd_environment_packages": 44,
+    "dependency_checks": "passed",
+    "lrasd_python_version": "3.10.19",
+    "torch_version": "2.8.0+cu128",
+    "cuda_version": "12.8",
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "model_version": "lrasd:4ad11260f30fb3693042076acbef31dea1c27d7a5a2c8ab79a7885c60196328a",
+    "scored_frames": 100,
+    "input_sha256": {
+      "audio.wav": "c6ced73c8a53dcb408adeebe33b9d78813c844851c34899774634954f9b20117",
+      "frames.rgb": "8f24847abd4d2a781d20f9b55651379ecb804eee74a874e05000a22e99e5eb72"
+    },
+    "last_inference_seconds": 0.836,
+    "same_input_wsl_max_absolute_error": 0.0,
+    "worker_cleanup_remaining_pids": [],
+    "candidate_checkpoint_deployed": false,
+    "unconfigured_audio_models_remain_unconfigured": true
+  },
+  "formal_local_preview": {
+    "status": "passed",
+    "runtime": "windows",
+    "range_ms": [
+      1199000,
+      1203000
+    ],
+    "result_status": "review_required",
+    "cache_hit": false,
+    "tracks": 1,
+    "timings": {
+      "decode_ms": 2984,
+      "clip_encode_ms": 219,
+      "detector_load_ms": 281,
+      "detection_tracking_ms": 4453,
+      "asd_ms": 6843,
+      "matching_ms": 6094,
+      "feature_cache_hits": 17,
+      "feature_ms": 328,
+      "feature_extractions": 1,
+      "total_ms": 21406
+    },
+    "api_elapsed_seconds": 24.203,
+    "clip_and_thumbnails_readable": true,
+    "external_model_requests": 0,
+    "identities_automatically_confirmed": false
+  },
+  "limitations": [
+    "Single existing asset and initially empty job queue.",
+    "Other libraries with paused jobs, identity preludes or legacy colon receipts need separate validation.",
+    "No expanded identity, voice or ASD accuracy claim."
+  ],
+  "private_data_included": false,
+  "engineering_checks": {
+    "wsl_compatibility": {
+      "passed": 230,
+      "skipped": 14,
+      "failed": 0,
+      "elapsed_seconds": 50.33
+    },
+    "ruff": "passed",
+    "uv_lock_check": "passed",
+    "diff_whitespace": "passed",
+    "windows_full_before_fifo_fix": {
+      "passed": 1304,
+      "failed": 1,
+      "skipped": 76,
+      "subtests_passed": 47,
+      "elapsed_seconds": 563.58,
+      "failure_resolved_by": "Deterministic frozen-clock episode regression and 13-file affected suite below."
+    },
+    "fifo_failure_cause": "Windows job timestamps tied; explicit SQLite insertion order now stabilizes FIFO.",
+    "windows_runtime_manager_after_exit_race_fix": {
+      "passed": 32,
+      "failed": 0,
+      "elapsed_seconds": 7.2,
+      "real_hidden_service_lifecycle": true
+    },
+    "windows_affected_after_fifo_fix": {
+      "passed": 169,
+      "failed": 0,
+      "skipped": 1,
+      "files": 13,
+      "groups": [
+        {
+          "passed": 45,
+          "elapsed_seconds": 31.33
+        },
+        {
+          "passed": 124,
+          "skipped": 1,
+          "elapsed_seconds": 225.85
+        }
+      ]
+    },
+    "wsl_affected_after_fifo_fix": {
+      "passed": 170,
+      "failed": 0,
+      "skipped": 0,
+      "files": 13,
+      "elapsed_seconds": 103.92,
+      "temporary_filesystem": "Linux /tmp"
+    },
+    "wsl_ntfs_temporary_library_attempt": {
+      "status": "interrupted_and_retested",
+      "event_or_completion_timeout_failures": 8,
+      "corrected_by": "Use Linux /tmp for synthetic test libraries; retain original assertions."
+    }
+  },
+  "status": "passed_after_followup_fixes"
+}

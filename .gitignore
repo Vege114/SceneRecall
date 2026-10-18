@@ -8,6 +8,8 @@
 .venv/
 .venv-visual/
 .venv-windows/
+.venv-visual-windows/
+.venv-lrasd-windows/
 .cache/
 __pycache__/
 *.pyc

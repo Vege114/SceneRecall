@@ -117,14 +117,12 @@ def test_windows_observation_and_project_backup_restore_preserves_native_referen
     assert not restored.organization.journal.exists()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Only Windows permits native backslashes in internal references")
 def test_windows_relative_reference_with_unicode_and_spaces_stays_inside_owner(tmp_path):
     target = tmp_path / "中文 文件夹" / "evidence.json"
     assert confined_path(tmp_path, "中文 文件夹\\evidence.json") == target.resolve()
     assert confined_path(tmp_path, "中文 文件夹/evidence.json") == target.resolve()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows path forms must never override the owner directory")
 @pytest.mark.parametrize("relative", [
     r"..\outside.json", r"nested/..\..\outside.json", r"C:\outside.json", r"C:outside.json",
     r"\outside.json", r"\\server\share\outside.json", r"\\?\C:\outside.json", "/outside.json",
