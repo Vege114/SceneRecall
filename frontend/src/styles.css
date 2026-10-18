@@ -128,4 +128,8 @@ fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.7}.o
 .audio-identity > .section-row { margin-top: 20px; }
 .records-tabs .tabs { flex-wrap: wrap; row-gap: 12px; }
 .search-audio-evidence { margin: 14px 0; }
+.lrasd-preview { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.lrasd-preview .section-row { flex-wrap: wrap; }
+.lrasd-preview .identity-region > div, .lrasd-preview .section-row > * { min-width: 0; max-width: 100%; }
+.lrasd-preview .player-wrap, .lrasd-preview video { min-width: 0; max-width: 100%; }
 @media(max-width:620px) { .identity-add-form, .audio-settings, .audio-run, .identity-record { padding: 13px; }.identity-reference, .identity-region { flex-wrap: wrap; padding: 13px; }.identity-reference > img, .identity-region > img { width: 100%; height: 170px; flex-basis: 100%; }.identity-reference > div, .identity-region > div { flex-basis: 100%; }.audio-identity .form-grid { grid-template-columns: 1fr; } }

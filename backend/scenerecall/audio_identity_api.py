@@ -24,6 +24,12 @@ class AudioConfirmation(BaseModel):
     note: str = Field(default="", max_length=2000)
 
 
+class LrasdPreviewRange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start_ms: int = Field(ge=0, strict=True)
+    end_ms: int = Field(gt=0, strict=True)
+
+
 class VoiceSampleInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     record_id: str | None = None
@@ -44,6 +50,9 @@ class VoiceSampleStatus(BaseModel):
 
 def register_audio_routes(app, library, characters=None, refresh=None) -> AudioIdentityService:
     service = AudioIdentityService(library, characters)
+    from .lrasd_preview import LrasdPreviewService, PreviewBusy
+    previews = LrasdPreviewService(service)
+    service.lrasd_previews = previews
     cancellations = {}
 
     async def refreshed(asset_id):
@@ -157,5 +166,25 @@ def register_audio_routes(app, library, characters=None, refresh=None) -> AudioI
     async def sync_review(asset_id: str, record_id: str, payload: dict):
         from .av_sync import review_segment
         return await asyncio.to_thread(review_segment, service, asset_id, record_id, payload.get("tracks", []))
+
+    @app.post("/api/assets/{asset_id}/audio/lrasd-preview")
+    async def start_lrasd_preview(asset_id: str, payload: LrasdPreviewRange):
+        try:
+            return await asyncio.to_thread(previews.start, asset_id, payload.start_ms, payload.end_ms)
+        except PreviewBusy as exc:
+            from fastapi import HTTPException
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.get("/api/assets/{asset_id}/audio/lrasd-preview")
+    async def get_lrasd_preview(asset_id: str):
+        return await asyncio.to_thread(previews.latest, asset_id)
+
+    @app.get("/api/assets/{asset_id}/audio/lrasd-previews/{key}/tracks/{track_id}/thumbnail")
+    async def lrasd_preview_thumbnail(asset_id: str, key: str, track_id: str):
+        return FileResponse(previews.thumbnail(asset_id, key, track_id), media_type="image/png")
+
+    @app.get("/api/assets/{asset_id}/audio/lrasd-previews/{key}/clip")
+    async def lrasd_preview_clip(asset_id: str, key: str):
+        return FileResponse(previews.clip(asset_id, key), media_type="video/mp4")
 
     return service

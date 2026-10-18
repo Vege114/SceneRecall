@@ -7,6 +7,8 @@
 *.mov
 .venv/
 .venv-visual/
+.venv-windows/
+.cache/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -22,4 +24,5 @@ frontend/.vite/
 dist/
 build/
 test-results/
+/training/
 playwright-report/

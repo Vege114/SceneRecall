@@ -146,7 +146,7 @@ class SearchEngine:
         return records
 
     @staticmethod
-    def _write_record(db: sqlite3.Connection, record: dict) -> None:
+    def _write_record(db: sqlite3.Connection, record: dict, *, replace_existing: bool = True) -> None:
         text = _search_text(record)
         names = []
         for entity in record.get("entities", []) or []:
@@ -156,7 +156,8 @@ class SearchEngine:
         # core may explicitly project an annotation's confirmed character name
         if record.get("character_name"):
             names.append(record["character_name"])
-        db.execute("DELETE FROM evidence_fts WHERE id=?", (record["id"],))
+        if replace_existing:
+            db.execute("DELETE FROM evidence_fts WHERE id=?", (record["id"],))
         db.execute("""INSERT OR REPLACE INTO records
                    (id,asset_id,work_id,kind,season,episode,normalized,characters,text_hash,data,is_context)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
@@ -345,7 +346,10 @@ class SearchEngine:
                 db.execute("DELETE FROM records")
                 db.execute("DELETE FROM evidence_fts")
                 for record in records:
-                    self._write_record(db, record)
+                    # The FTS table is already empty. Its UNINDEXED id column
+                    # makes a redundant per-record DELETE scan the growing
+                    # table and turn a full publication into quadratic work.
+                    self._write_record(db, record, replace_existing=False)
                 db.execute("DELETE FROM build_checkpoints")
                 db.execute("INSERT INTO build_checkpoints VALUES ('lexical',?)", (records_digest,))
             if namespace:

@@ -43,8 +43,11 @@ class AudioSettings(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     max_duration_ms: int = Field(default=60000, ge=1000, le=14400000, strict=True)
     sync_enabled: bool = False
+    sync_model_type: Literal["animated_ad_lwtnet", "lrasd"] = "animated_ad_lwtnet"
+    sync_python_path: str = ""
     sync_repository_path: str = ""
     sync_checkpoint_path: str = ""
+    sync_detector_path: str = ""
     sync_animation_verified: bool = False
     sync_license_acknowledged: bool = False
 

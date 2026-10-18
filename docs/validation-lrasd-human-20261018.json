@@ -1,0 +1,229 @@
+{
+  "schema_version": "scenerecall-public-human-lrasd-validation-v1",
+  "date": "2026-10-18",
+  "status": "completed",
+  "round": "human-20261018-v1",
+  "evidence": [
+    {
+      "role": "human_round_result",
+      "filename": "result-summary.json",
+      "file_sha256": "5f55af1f6acdcb590b52d917f55a12586259e850dbe3f0ca6f34587ab2ac92c1"
+    },
+    {
+      "role": "independent_final_comparison",
+      "filename": "comparison.json",
+      "file_sha256": "3a9f2eae5efdf538bfd8f71b4097618a2532a085bb6b37c3af1be699a67d9a9b"
+    },
+    {
+      "role": "readiness",
+      "filename": "readiness.json",
+      "file_sha256": "aa0f2f88ff0af63a68d92074a4b4f1f8ff7a04334df512ed252fee491aa1dcbc"
+    },
+    {
+      "role": "fixed_scene_plan",
+      "filename": "annotation-plan.json",
+      "file_sha256": "f907b21c637727e64844e8dbe48b93a6a715ff32d8d0db8be9580e442ec49cd4"
+    }
+  ],
+  "data": {
+    "label_source": "human_frame_asd",
+    "label_semantics": "human_reviewed_frame_asd_agreement",
+    "planned_clips": 24,
+    "ready_clips": 24,
+    "planned_clip_duration_seconds": 80.0,
+    "scene_groups": 18,
+    "frames_per_second": 25,
+    "window_frames": 50,
+    "window_seconds": 2,
+    "sample_unit": "one_person_track_in_one_continuous_50_frame_window",
+    "metric_unit": "unmasked_person_track_frame",
+    "unique_source_duration_not_inferred_from_track_frames": true,
+    "original_annotations_preserved": true,
+    "all_unknown_tracks_skipped": 3,
+    "training_ready": true,
+    "manifest_sha256": "9ad1b6394b7fa95bcdfd7d183fafc993c58c5b4ccd2649bf990d56253189aad1",
+    "annotation_plan_canonical_sha256": "75887c8706c17d9d2c8b008fdc9645889e084fbe63a2245f21deafe4899c2959",
+    "annotation_plan_hash_encoding": "utf8_json_sorted_keys_compact_separators_ensure_ascii_false",
+    "splits": {
+      "train": {
+        "planned_clips": 16,
+        "scene_groups": 10,
+        "windows": 35,
+        "positive_frames": 1018,
+        "negative_frames": 697,
+        "masked_frames": 35,
+        "track_frames": 1750,
+        "valid_track_frames": 1715,
+        "split_sha256": "1e5bd8cf798e9862ec8748eab373da9f96cbd86b5b4325511959ae90033f3d00"
+      },
+      "val": {
+        "planned_clips": 4,
+        "scene_groups": 4,
+        "windows": 16,
+        "positive_frames": 346,
+        "negative_frames": 454,
+        "masked_frames": 0,
+        "track_frames": 800,
+        "valid_track_frames": 800,
+        "split_sha256": "51ff99c2c1c059496a37a7ac50c07ec79b7939ea32c2e3103c247d5bc19f75c5"
+      },
+      "test": {
+        "planned_clips": 4,
+        "scene_groups": 4,
+        "windows": 18,
+        "positive_frames": 477,
+        "negative_frames": 423,
+        "masked_frames": 0,
+        "track_frames": 900,
+        "valid_track_frames": 900,
+        "split_sha256": "2a0ce73f910bae96bef56468157c25d0b6ea7a7cf91e48a4e9a81d1ff07da559"
+      }
+    }
+  },
+  "scope": {
+    "validation_scope": "within_title_scene_holdout",
+    "minimum_cross_split_gap_ms": 90000,
+    "same_scene_tracks_and_windows_share_split": true,
+    "cross_title_validation": false,
+    "baseline_prior_film_exposure": "previous_weak_adaptation_not_pristine",
+    "known_prior_manifest_check": "known_manifest_checked_other_exposure_not_ruled_out",
+    "known_prior_manifest_sha256": "74de0a7738a09b094a33cbd2ada06c6eb8da07b90b9f72e98f0ded5a0fdc9eb4",
+    "known_prior_window_conflicts": 0,
+    "pristine_test_claimed": false,
+    "temporally_correlated_frames_are_not_independent_scenes": true,
+    "probabilities_calibrated": false,
+    "source_domain_forgetting_evaluated": false,
+    "test_reuse_for_further_tuning_allowed": false
+  },
+  "training": {
+    "status": "completed",
+    "epochs_completed": 4,
+    "steps": 36,
+    "best_epoch": 1,
+    "seed": 114,
+    "precision": "float32",
+    "window_frames": 50,
+    "batch_size": 4,
+    "elapsed_seconds": 18.315036505000535,
+    "cuda_peak_allocated_bytes": 1252680192,
+    "cuda_peak_reserved_bytes": 1440743424,
+    "process_peak_rss_bytes": 1825251328,
+    "exported_checkpoint_epoch": 1,
+    "exported_checkpoint_steps": 9,
+    "early_stopped": true,
+    "initialization": "parent_bundle_fresh_optimizer",
+    "upstream_commit": "1b6dcd2d8fc2895683de6508ec6294ec47d388ca",
+    "max_epochs": 6,
+    "early_stopping_patience": 3,
+    "learning_rate": 2e-05,
+    "official_replay_windows": 0,
+    "training_label_sources": {
+      "human_frame_asd": 35
+    },
+    "model_selection_split": "val",
+    "model_selection_metric": "pooled_ap",
+    "test_deferred_in_training_runner": true,
+    "test_inference_performed_in_independent_comparison": true
+  },
+  "models": {
+    "baseline": {
+      "checkpoint_sha256": "4ad11260f30fb3693042076acbef31dea1c27d7a5a2c8ab79a7885c60196328a",
+      "metadata_sha256": "6020273c2b55f50d8f54974e8cbb77e4d7b947b8b10e23e14780571f67e5a99b",
+      "threshold": 0.7737769484519958,
+      "threshold_selected_on": "val",
+      "validation": {
+        "ap": 0.8696904576397044,
+        "auc": 0.8289641211071783,
+        "tp": 234,
+        "fp": 22,
+        "tn": 432,
+        "fn": 112,
+        "n": 800,
+        "precision": 0.9140625,
+        "recall": 0.6763005780346821,
+        "f1": 0.7774086378737541,
+        "balanced_accuracy": 0.8139212141274732,
+        "accuracy": 0.8325,
+        "threshold": 0.7737769484519958
+      },
+      "test": {
+        "ap": 0.9450996695763574,
+        "auc": 0.9352880245426746,
+        "tp": 329,
+        "fp": 18,
+        "tn": 405,
+        "fn": 148,
+        "n": 900,
+        "precision": 0.9481268011527377,
+        "recall": 0.689727463312369,
+        "f1": 0.7985436893203883,
+        "balanced_accuracy": 0.8235871359115037,
+        "accuracy": 0.8155555555555556,
+        "threshold": 0.7737769484519958
+      }
+    },
+    "candidate": {
+      "checkpoint_sha256": "441a978d2a1f770a08cc5e5207befc90d1532582ff71f1c52e45ef8ecdc78e4d",
+      "metadata_sha256": "17303208a994e1dbfb751726dd82892dbeb66f1806a6610a9834a2824846dcfd",
+      "threshold": 0.814092218875885,
+      "threshold_selected_on": "val",
+      "validation": {
+        "ap": 0.8662727080131759,
+        "auc": 0.825851136971302,
+        "tp": 216,
+        "fp": 6,
+        "tn": 448,
+        "fn": 130,
+        "n": 800,
+        "precision": 0.972972972972973,
+        "recall": 0.6242774566473989,
+        "f1": 0.7605633802816901,
+        "balanced_accuracy": 0.8055307988082809,
+        "accuracy": 0.83,
+        "threshold": 0.814092218875885
+      },
+      "test": {
+        "ap": 0.9439270507498256,
+        "auc": 0.9342571529109733,
+        "tp": 310,
+        "fp": 17,
+        "tn": 406,
+        "fn": 167,
+        "n": 900,
+        "precision": 0.9480122324159022,
+        "recall": 0.649895178197065,
+        "f1": 0.7711442786069652,
+        "balanced_accuracy": 0.8048530264507784,
+        "accuracy": 0.7955555555555556,
+        "threshold": 0.814092218875885
+      }
+    }
+  },
+  "comparison": {
+    "validation_ap_delta": -0.003417749626528521,
+    "test_ap_delta": -0.001172618826531746
+  },
+  "verification": {
+    "historical_regression_tests_reported": "26 passed, 8 subtests passed",
+    "historical_annotation_export_audit": "passed",
+    "historical_model_weights_changed": true,
+    "this_document_update_actual_manifest_plan_model_and_metadata_hash_checks": "passed",
+    "new_training_or_inference_performed_for_this_document_update": false
+  },
+  "decision": {
+    "recommendation": "retain_existing_baseline",
+    "reason": "Candidate validation AP, test AP, and test F1 decreased in the fixed within-title human scene holdout",
+    "automatic_deployment_performed": false,
+    "cross_title_validated": false
+  },
+  "exported_bundle_acceptance_state": {
+    "training_completion_scope": "training_and_validation_only",
+    "final_acceptance_status": "deferred_not_evaluated",
+    "independent_comparison_does_not_automatically_promote_bundle": true
+  },
+  "privacy": {
+    "private_absolute_paths_included": false,
+    "tokens_credentials_or_session_links_included": false,
+    "source_media_images_weights_or_annotation_text_included": false
+  }
+}

@@ -43,6 +43,10 @@ class VisualRun(Contract):
     frame_ids: list[str] = Field(min_length=1, max_length=256)
 
 
+class BangumiReferenceCacheInput(Contract):
+    max_images: int = Field(default=12, ge=1, le=20, strict=True)
+
+
 def _public_reference(row):
     return {key: value for key, value in row.items() if key != "path"}
 
@@ -55,10 +59,16 @@ def _public_reviews(result):
 
 
 def register_visual_identity_routes(app, library, search):
+    from .bangumi_reference_cache import BangumiReferenceCache
     gallery = ReferenceGallery(library)
     pipeline = VisualIdentityPipeline(library)
     app.state.visual_identity = pipeline
     app.state.reference_gallery = gallery
+    app.state.bangumi_reference_cache = BangumiReferenceCache(library, gallery)
+
+    @app.post("/api/assets/{asset_id}/references/cache-bangumi")
+    async def cache_bangumi_references(asset_id: str, payload: BangumiReferenceCacheInput):
+        return await asyncio.to_thread(app.state.bangumi_reference_cache.run, asset_id, payload.max_images)
 
     @app.post("/api/assets/{asset_id}/characters")
     def create_character(asset_id: str, payload: CharacterCreate):
