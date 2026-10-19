@@ -16,7 +16,7 @@ const estimate = { duration_ms: 12000, estimated_frames: 8, estimated_requests: 
 function context(overrides: Partial<AppContextValue> = {}): AppContextValue {
   return {
     bootstrap: { library_path: '/tmp/character-ui-tests', settings: { defaults: DEFAULTS, bindings: { vision: 'vision' } }, provider_profiles: [{ id: 'vision', name: '画面模型', model: 'vision-test', base_url: 'https://example.invalid/v1', capabilities: ['vision'], secret_mode: 'session' }], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.2.0' },
-    assets: [asset, episodeTwo], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn(), ...overrides,
+    assets: [asset, episodeTwo], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn(), ...overrides,
   };
 }
 function setup(customContext = context()) {

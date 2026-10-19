@@ -15,7 +15,7 @@ const apiProfile: Profile = { ...codex, id: 'api', name: '我的 API', provider_
 const catalog: CodexModelCatalog = { models: [{ id: 'test-deep', name: '测试深入模型', reasoning_efforts: ['medium', 'high', 'xhigh'], default_reasoning_effort: 'medium' }, { id: 'test-fast', name: '测试快速模型', reasoning_efforts: ['low', 'medium'], default_reasoning_effort: 'low' }], default_model: 'test-deep', message: '已读取本机 Codex 模型目录缓存。' };
 const estimate: Estimate = { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] };
 function context(profiles = [codex]): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/task-model-ui-tests', settings: { defaults: DEFAULTS, bindings: { preparation: profiles[0].id, vision: profiles[0].id, subtitle: profiles[0].id } }, provider_profiles: profiles, stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/task-model-ui-tests', settings: { defaults: DEFAULTS, bindings: { preparation: profiles[0].id, vision: profiles[0].id, subtitle: profiles[0].id } }, provider_profiles: profiles, stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function mount(ui: ReactNode, app = context()) { return render(<AppContext.Provider value={app}>{ui}</AppContext.Provider>); }
 function mockFetch(handler?: (url: string, options?: RequestInit) => unknown) {

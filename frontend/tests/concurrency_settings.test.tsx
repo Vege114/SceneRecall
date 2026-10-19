@@ -12,7 +12,7 @@ const other: Profile = { id: 'other', name: '检索连接', provider_type: 'open
 const mixed: ExecutionOptions = { transcript: 'serial', preparation: 'parallel', subtitle: 'serial', max_concurrency: 5 };
 
 function context(execution: ExecutionOptions = DEFAULT_EXECUTION, profiles = [shared, other]): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/concurrency-ui-tests', settings: { defaults: { ...DEFAULTS, max_requests: 37, max_cost: 0.25, execution }, bindings: { preparation: shared.id, vision: shared.id, subtitle: shared.id, embedding: other.id } }, provider_profiles: profiles, stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/concurrency-ui-tests', settings: { defaults: { ...DEFAULTS, max_requests: 37, max_cost: 0.25, execution }, bindings: { preparation: shared.id, vision: shared.id, subtitle: shared.id, embedding: other.id } }, provider_profiles: profiles, stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function mount(app: AppContextValue) { return render(<AppContext.Provider value={app}><Settings /></AppContext.Provider>); }
 function mockFetch(app: AppContextValue, failure?: string) {

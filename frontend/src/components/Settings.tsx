@@ -26,7 +26,8 @@ function CodexConnectionStatus() {
     <div className="section-row"><h3><Terminal size={17} />本地 Codex CLI</h3><button type="button" className="button small secondary" disabled={checking} onClick={() => setCheckCount((count) => count + 1)}>{checking ? <Spinner label="检查中" /> : <><RefreshCw size={14} />重新检查</>}</button></div>
     {status && <Alert tone={ready ? 'success' : 'warning'}><strong>{ready ? '已就绪' : !status.installed ? '未检测到 Codex CLI' : status.compatible === false ? 'Codex CLI 需要升级' : '需要登录 ChatGPT'}</strong>{status.version && <span className="codex-version">{status.version}</span>}<p>{status.message}</p></Alert>}
     {error && <Alert tone="error">{error}</Alert>}
-    <p className="helper">在运行 SceneRecall 的电脑上，以同一系统用户安装 Codex CLI，执行 <code>codex login</code> 并选择 ChatGPT 登录，然后重新检查。无需额外启动路由服务。</p>
+    {status?.runtime && <p className="helper">SceneRecall 后端运行于 {({ windows: 'Windows', wsl: 'WSL', macos: 'macOS', linux: 'Linux' })[status.runtime]}{status.cli_runtime === 'windows' && status.runtime === 'wsl' ? '，通过桥接使用 Windows Codex 的登录状态' : ''}。{status.executable && <>CLI：<code>{status.executable}</code></>}</p>}
+    <p className="helper">在运行 SceneRecall 的电脑上，以同一系统用户安装 Codex CLI。Windows 桌面版及 WSL 桥接可直接使用 Windows Codex 登录；需要时执行 <code>codex login</code> 并选择 ChatGPT 登录，然后重新检查。无需额外启动路由服务。</p>
     <p className="helper">使用已登录账号的 Codex 订阅额度；剩余额度与美元费用无法在此估算。画面和文本会通过 CLI 发送给 Codex。</p>
   </section>;
 }

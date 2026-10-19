@@ -93,6 +93,9 @@ export interface Profile {
   has_key?: boolean;
 }
 export interface CodexStatus {
+  runtime?: 'windows' | 'wsl' | 'macos' | 'linux';
+  cli_runtime?: 'windows' | 'wsl' | 'macos' | 'linux';
+  executable?: string | null;
   installed: boolean;
   authenticated: boolean;
   compatible?: boolean;
@@ -160,7 +163,7 @@ export interface ImportInput {
   subtitle_mode: SubtitleMode; subtitle_path: string | null; subtitle_stream_index?: number | null; subtitle_offset_ms: number;
   anime_profile?: AnimeProfileSelection;
 }
-export interface ImportItem { item_id: string; name: string; status: string; asset_id?: string; error?: string; warnings?: string[]; input?: ImportInput }
+export interface ImportItem { item_id: string; name: string; status: string; phase?: string; asset_id?: string; error?: string; warnings?: string[]; input?: ImportInput }
 export interface KeyframePlan {
   id: string; plan_id?: string; job_id: string; status: string; error?: string; progress?: number; message?: string;
   frames?: { id: string; at_ms: number; thumbnail_url: string; reason?: string }[];
@@ -441,7 +444,7 @@ export const KIND_LABELS: Record<AssetKind, string> = { movie: '电影', animati
 export function keyframeReason(reason?: string): string { return ({ stable_pose: '稳定姿态', representative_pose: '代表姿态', content_change: '画面内容变化', shot_representative: '镜头代表帧' } as Record<string, string>)[reason || ''] || '内容代表帧'; }
 
 export function stageLabel(stage?: string): string {
-  return ({ visual_identity: '人物检测与匹配', identity: '身份复核', audio: '音频识别', audio_extraction: '音频提取', diarization: '说话人分段', voice_matching: '声音匹配', audio_sync: '音画复核', transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
+  return ({ visual_identity: '人物检测与匹配', identity: '身份复核', audio: '音频识别', audio_extraction: '音频提取', diarization: '说话人分段', voice_matching: '声音匹配', audio_sync: '音画复核', transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', import: '校验视频与提取字幕', import_profile: '同步作品档案', import_index: '建立搜索索引', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
 }
 
 export function estimatedRequests(estimate: Estimate): string {

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from pathlib import Path
 
 from .library import atomic_json, digest, now, read_json, safe_id, uid
@@ -125,38 +126,72 @@ class WorkflowQueueMixin:
             if items[item_id]["status"] in {"completed", "existing"}:
                 continue
             item_key = digest([job_id, item_id])
-            items[item_id].update(status="running", error=None)
-            self.update(job_id, stage="import", items=list(items.values()), message=f"正在导入 {items[item_id]['name']}")
+            items[item_id].update(status="running", error=None, phase="import")
+            self.update(job_id, stage="import", items=list(items.values()),
+                        message=f"正在校验视频与提取字幕：{items[item_id]['name']}")
             try:
-                existing = next((asset for asset in self.library.list_assets(include_deleted=True)
-                                 if asset.get("import_item_key") == item_key), None)
-                if existing and existing.get("deleted"):
-                    from .library import DeletedAssetError
-                    raise DeletedAssetError()
-                if existing is None:
-                    payload = AssetInput.model_validate({key: value for key, value in config.items()
-                                                        if key not in {"item_id", "anime_profile", "anime_dossier"}})
-                    existing = await self._local_work(job_id, lambda _check: self.library.register(payload, import_item_key=item_key))
+                def register(check):
+                    check()
+                    existing = next((asset for asset in self.library.list_assets(include_deleted=True)
+                                     if asset.get("import_item_key") == item_key), None)
+                    if existing and existing.get("deleted"):
+                        from .library import DeletedAssetError
+                        raise DeletedAssetError()
+                    if existing is None:
+                        payload = AssetInput.model_validate({key: value for key, value in config.items()
+                                                            if key not in {"item_id", "anime_profile", "anime_dossier"}})
+                        existing = self.library.register(payload, import_item_key=item_key)
+                    return existing
+
+                started = time.perf_counter()
+                existing = await self._local_work(job_id, register)
+                timings = {"import": round((time.perf_counter() - started) * 1000)}
                 index_asset_ids = {existing["id"]}
+                items[item_id].update(asset_id=existing["id"],
+                                      warnings=existing.get("subtitle_import_warnings", []), timings_ms=timings)
+                self.update(job_id, items=list(items.values()))
+                self.checkpoint(job_id)
                 if config.get("anime_profile"):
-                    from .anime_profiles import AnimeProfileStore
-                    old_anime_id = existing.get("anime_id")
-                    AnimeProfileStore(self.library).apply_asset(existing["id"], config["anime_profile"],
-                                                               config.get("anime_dossier"), for_import=True)
-                    existing = self.library.get_asset(existing["id"])
-                    # Binding a roster also updates earlier matching episodes,
-                    # changing their animation identity. Shared cast profiles
-                    # can update searchable names in other works of the series.
-                    # Refresh those projections without regenerating vectors or
-                    # touching their immutable analysis evidence.
-                    anime_ids = {old_anime_id, existing.get("anime_id")} - {None}
-                    index_asset_ids.update(asset["id"] for asset in self.library.list_assets()
-                                           if asset.get("anime_id") in anime_ids
-                                           or asset.get("character_scope_id") == existing.get("character_scope_id"))
-                items[item_id].update(status="completed", asset_id=existing["id"],
-                                      warnings=existing.get("subtitle_import_warnings", []))
-                self.search.upsert([record for asset_id in sorted(index_asset_ids)
-                                    for record in self.library.records(asset_id)])
+                    items[item_id]["phase"] = "import_profile"
+                    self.update(job_id, stage="import_profile", items=list(items.values()),
+                                message=f"正在同步作品档案：{items[item_id]['name']}")
+
+                    def bind_profile(check):
+                        from .anime_profiles import AnimeProfileStore
+                        check()
+                        old_anime_id = existing.get("anime_id")
+                        AnimeProfileStore(self.library).apply_asset(existing["id"], config["anime_profile"],
+                                                                   config.get("anime_dossier"), for_import=True)
+                        current = self.library.get_asset(existing["id"])
+                        # Earlier episodes can acquire a new animation identity or
+                        # cast names. Compare their projections, preserving vectors
+                        # and skipping unchanged rows instead of rewriting them.
+                        anime_ids = {old_anime_id, current.get("anime_id")} - {None}
+                        return {asset["id"] for asset in self.library.list_assets()
+                                if asset.get("anime_id") in anime_ids
+                                or asset.get("character_scope_id") == current.get("character_scope_id")}
+
+                    started = time.perf_counter()
+                    index_asset_ids.update(await self._local_work(job_id, bind_profile))
+                    timings["import_profile"] = round((time.perf_counter() - started) * 1000)
+                    self.checkpoint(job_id)
+                items[item_id]["phase"] = "import_index"
+                self.update(job_id, stage="import_index", items=list(items.values()),
+                            message=f"正在建立搜索索引：{items[item_id]['name']}")
+
+                def publish_index(check):
+                    for asset_id in sorted(index_asset_ids):
+                        # Serialize the source snapshot and publication with
+                        # annotation, subtitle-switch and deletion mutations.
+                        with self.library.lock:
+                            check()
+                            self.search.sync_asset(self.library.records(asset_id), asset_id)
+
+                started = time.perf_counter()
+                await self._local_work(job_id, publish_index)
+                timings["import_index"] = round((time.perf_counter() - started) * 1000)
+                self.checkpoint(job_id)
+                items[item_id].update(status="completed", timings_ms=timings)
             except Exception as exc:
                 from .jobs import StopJob
                 if isinstance(exc, StopJob):

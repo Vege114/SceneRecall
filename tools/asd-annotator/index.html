@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>逐帧人工标注 · ASD Annotator</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="workspace">
+    <header class="page-header"><div><p class="eyebrow">本机人工标注</p><h1>看片段，标谁在说话</h1><p id="asset-title" class="muted">正在连接本机素材…</p></div><a id="export" class="button secondary" href="/api/asd-annotations/export" download>导出已保存标注</a></header>
+    <section id="session" class="panel" hidden><h2>连接标注小程序</h2><p>使用启动时提供的链接，或填写本机会话令牌。</p><form id="session-form"><label>本机会话令牌<input id="token" type="password" required autocomplete="off"></label><button class="button primary" type="submit">连接</button></form></section>
+    <div id="error" class="alert error" role="alert" hidden></div>
+    <div id="notice" class="alert info" role="status" hidden></div>
+    <section id="task-panel" class="panel" hidden><div class="row"><div><h2>推荐标注任务</h2><p id="task-progress" class="muted"></p></div><div class="task-navigation"><button id="previous-task" class="button secondary" type="button">上一任务</button><button id="next-task" class="button secondary" type="button">下一任务</button></div></div><label class="task-picker">挑选场景<select id="task-select" aria-label="推荐标注任务"></select></label><p id="task-description" class="muted"></p><p class="muted">这些是分散场景的标注候选，不是说话或角色答案。验证、测试场景将单独保留。</p></section>
+    <section id="prepare-panel" class="panel" hidden>
+      <details><summary>自选时间片段</summary>
+      <form id="prepare-form" class="prepare-form"><div><h2>选择要标注的片段</h2><p class="muted">默认 4 秒。准备只解码原片与检测人物框，不运行说话或身份预测。</p></div><label>片段起点（秒）<input id="start-seconds" type="number" min="0" step="0.04" required></label><label>片段终点（秒）<input id="end-seconds" type="number" min="0" step="0.04" required></label><button id="prepare" class="button primary" type="submit">准备标注片段</button></form>
+      </details></section>
+    <section id="preparing" class="panel" role="status" hidden></section>
+    <section id="editor" hidden>
+      <div class="editor-heading"><div><h2 id="clip-heading">当前片段</h2><p id="task-context" class="muted"></p></div><span id="save-state" class="badge"></span></div>
+      <div class="editor-grid">
+        <section class="panel video-panel" aria-label="片段画面与人物框">
+          <div id="stage" class="stage"><video id="clip-video" controls preload="metadata" playsinline aria-label="人工标注片段播放器"></video><svg id="boxes" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-label="人物框编辑画布"></svg></div>
+          <div class="transport"><button id="previous-frame" type="button" class="button secondary">← 上一帧</button><button id="toggle-play" type="button" class="button secondary">播放 / 暂停</button><button id="next-frame" type="button" class="button secondary">下一帧 →</button><label class="inline-check"><input id="loop" type="checkbox" checked>循环</label><label>速度<select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option></select></label></div>
+          <p id="frame-position" class="timecode"></p>
+          <input id="frame-slider" type="range" min="0" max="99" value="0" step="1" aria-label="当前帧">
+          <div class="frame-range"><label>范围起始帧<input id="range-start" type="number" min="0" step="1" value="0"></label><label>范围结束帧（不含）<input id="range-end" type="number" min="1" step="1" value="1"></label><button id="current-frame-range" class="button secondary" type="button">仅当前帧</button><button id="whole-track-range" class="button secondary" type="button">选择整段帧</button></div>
+          <p id="range-description" class="muted"></p>
+          <div id="timeline" class="timeline" aria-label="当前人物逐帧标签"></div>
+          <div class="legend"><span><i class="state-speaking"></i>说话</span><span><i class="state-silent"></i>未说话</span><span><i class="state-uncertain"></i>不确定</span><span><i class="state-missing"></i>缺人物框</span><span class="muted">点击色条只定位，不改变范围</span></div>
+          <div class="label-scope"><label>这些按钮处理谁<select id="label-target"><option value="current">当前查看的人物</option><option value="checked">勾选的所有人物</option></select></label><label class="check"><input id="batch-unknown" type="checkbox">只填不确定帧，保留已有标签</label></div><p id="operation-summary" class="operation-summary"></p>
+          <div class="label-actions"><button data-label="1" class="button speaking" type="button">说话 S</button><button data-label="0" class="button silent" type="button">未说话 N</button><button data-label="-1" class="button secondary" type="button">不确定 U</button></div>
+          <button id="batch-speaker" type="button" class="button secondary speaker-action">仅当前人物说话，其余勾选人物未说话</button><p id="batch-result" role="status" class="action-result" hidden></p><div id="missing-guidance" class="missing-guidance" hidden><p id="missing-description"></p><button id="jump-missing" class="button secondary" type="button">定位第一个缺框帧</button><button id="fix-missing" class="button secondary" type="button">定位并画框</button><p class="muted">缺框可能是人物尚未入镜，也可能是检测漏掉。人物不在画面时保持缺框；确实在画面里才补框。不会自动复制框或猜标签。</p></div>
+          <details class="batch-panel" aria-label="本段批量操作"><summary>高级：本段批量身份、复核与排除</summary>
+            <h3>本段批量操作</h3><p id="batch-summary" class="muted"></p>
+            <div class="selection-actions"><button data-select-tracks="all" type="button" class="button secondary">全选本段人物</button><button data-select-tracks="none" type="button" class="button secondary">清空人物选择</button><button data-select-tracks="invert" type="button" class="button secondary">反选本段人物</button></div>
+            <p class="muted">与上方 S / N / U 使用同一个帧范围、同一个“只填不确定帧”选项。</p>
+            <div class="batch-actions"><button data-batch-label="1" type="button" class="button speaking">勾选人物都说话</button><button data-batch-label="0" type="button" class="button silent">勾选人物都未说话</button><button data-batch-label="-1" type="button" class="button secondary">勾选人物设为不确定</button></div>
+            <div class="batch-controls"><label>统一指定为同一角色<select id="batch-character"><option value="">未知 / 暂不关联</option></select></label><button id="batch-identity" type="button" class="button secondary">为勾选轨迹指定角色</button></div>
+            <div class="batch-actions"><button data-batch-track="reviewed" type="button" class="button secondary">我已复核勾选轨迹</button><button data-batch-track="unreviewed" type="button" class="button secondary">撤回复核</button><button data-batch-track="exclude" type="button" class="button secondary">排除勾选轨迹</button><button data-batch-track="restore" type="button" class="button secondary">恢复勾选轨迹</button></div>
+            <p class="muted">使用勾选的人物。缺框帧会跳过；身份与复核对整轨生效。修改后仍需保存，可一次撤销整批修改。</p>
+          </details>
+        </section>
+        <aside class="panel track-panel" aria-label="人物轨迹与身份">
+          <h2>选择人物、确认角色</h2>
+          <div class="selection-actions"><button data-select-tracks="all" type="button" class="button secondary">全选人物</button><button data-select-tracks="none" type="button" class="button secondary">只处理当前人物</button></div><details class="selection-advanced"><summary>更多人物选择</summary><div class="selection-actions"><button data-select-tracks="invert" type="button" class="button secondary">反选</button><button data-select-tracks="visible" type="button" class="button secondary">选当前帧人物</button><button data-select-tracks="unreviewed" type="button" class="button secondary">选未复核</button><button data-select-tracks="same" type="button" class="button secondary">选同角色轨迹</button><button id="add-track" class="button secondary" type="button">新增人物</button></div></details>
+          <p class="muted">勾选框用于批量处理；点击人物名称查看画面。每行角色下拉框一次关联该人物的所有帧。</p>
+          <div id="track-list" class="track-list"></div>
+          <div id="track-editor" hidden>
+            <label class="check"><input id="reviewed" type="checkbox">我已检查当前人物的框、身份和说话标签</label><p id="box-description" class="muted"></p><details id="box-tools" class="advanced-tools"><summary>修正人物框 / 备注 / 排除</summary>
+            <label>角色身份<select id="character"><option value="">未知 / 暂不关联</option></select></label>
+            <p class="muted">选项来自当前角色档案。参考图片只供你辨认，不会自动填写身份。</p>
+            <div class="box-actions"><button id="draw-box" class="button secondary" type="button">暂停后拖拽画框 / 重画</button><button id="clear-box" class="button secondary" type="button">清除当前帧框</button><button id="copy-box" class="button secondary" type="button">将当前框应用到选中帧范围</button></div>
+            <p class="muted">应用范围会逐帧复制同一个框，不会推测人物运动或自动插值。</p>
+            <label>人物备注<textarea id="track-note" rows="2" placeholder="遮挡、镜头切换或身份存疑…"></textarea></label>
+            <label class="check"><input id="excluded" type="checkbox">排除这条坏轨迹，不用于训练</label>
+            </details>
+          </div>
+          <div class="editor-actions"><button id="undo" class="button secondary" type="button">撤销上一步</button><button id="save" class="button primary" type="button">保存本段</button><button id="save-next" class="button secondary" type="button">保存并下一任务</button><details><summary>片段备注</summary><label>片段备注<textarea id="clip-note" rows="2"></textarea></label></details></div>
+          <div id="conflict-actions" hidden><p class="muted">本地修改仍保留。可先下载草稿，再重新读取服务器版本。</p><button id="download-draft" class="button secondary" type="button">下载本地草稿</button><button id="reload-clip" class="button secondary" type="button">重新读取服务器版本</button></div>
+        </aside>
+      </div>
+      <p class="shortcuts">Space 播放 / 暂停 · ← → 前后 40ms（保留选中范围）· S / N / U 标记上方明确的人物和范围。编辑输入框时不会触发快捷键。</p>
+      <details class="panel"><summary>本机角色参考图</summary><p class="muted">包含已缓存的候选图，仅供人工辨认。点击“选为本轨角色”才会更改身份；不会确认图片可信或产生原片出场证据。</p><div id="reference-grid" class="reference-grid"></div></details>
+    </section>
+    <section id="progress-panel" class="panel" hidden><div class="row"><div><h2>保存进度</h2><p id="stats" class="muted"></p></div><button id="refresh-progress" class="button secondary" type="button">刷新任务与进度</button></div><details><summary>所有片段（含原有练习片段）</summary><p class="muted">点击已有片段继续。勾选片段后可跨片段处理，导出文件仅包含已保存的标注。</p>
+      <div class="selection-actions"><button data-select-clips="all" type="button" class="button secondary">全选已就绪片段</button><button data-select-clips="none" type="button" class="button secondary">清空片段选择</button><button data-select-clips="invert" type="button" class="button secondary">反选片段</button><button data-select-clips="unreviewed" type="button" class="button secondary">选未复核片段</button></div><div id="clip-list" class="clip-list"></div>
+      </details><details class="batch-panel"><summary>高级：跨片段批量操作（直接保存）</summary><div class="batch-controls"><label>处理哪些人物<select id="saved-track-filter"><option value="active">所有未排除轨迹</option><option value="all">所有轨迹，含已排除</option><option value="unknown">身份尚未指定的轨迹</option></select></label><label>跨片段操作<select id="saved-action"><option value="reviewed">我已复核这些轨迹</option><option value="unreviewed">撤回复核</option><option value="exclude">排除轨迹</option><option value="restore">恢复轨迹</option><option value="silent">整段标为未说话</option><option value="speaking">整段标为说话</option><option value="uncertain">整段设为不确定</option><option value="identity">统一指定同一角色</option></select></label><label id="saved-character-label" hidden>统一指定角色<select id="saved-character"><option value="">未知 / 暂不关联</option></select></label><label class="check"><input id="saved-unknown" type="checkbox" checked>说话标签只填不确定帧</label></div>
+        <p id="saved-batch-summary" class="muted"></p><p class="muted">角色筛选依赖你已关联的身份，不会把不同片段的“人物1”当成同一个人。操作对命中的整条轨迹生效；标签操作跳过缺框帧。请先保存当前草稿。</p><div class="batch-actions"><button id="saved-batch-apply" type="button" class="button primary">执行并保存所选片段</button><button id="saved-batch-undo" type="button" class="button secondary" disabled>撤销上次跨片段批量操作</button></div><p id="saved-batch-result" class="muted" role="status"></p>
+      </details>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "scenerecall-asd-annotator",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test editor.test.js app.test.js" }
+}

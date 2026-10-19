@@ -104,30 +104,30 @@ class MeasuredSearch(SearchEngine):
 
     def __getattribute__(self, name):
         method = super().__getattribute__(name)
-        if name not in {"sync_asset", "upsert", "rebuild"}:
+        if name not in {"sync_asset", "upsert", "rebuild", "rebuild_from_source"}:
             return method
 
         if inspect.iscoroutinefunction(method):
             async def measured_async(*args, **kwargs):
-                started = time.monotonic()
+                started = time.perf_counter()
                 self.depth += 1
                 try:
                     return await method(*args, **kwargs)
                 finally:
                     self.depth -= 1
                     if not self.depth:
-                        self.elapsed_ms += round((time.monotonic() - started) * 1000)
+                        self.elapsed_ms += round((time.perf_counter() - started) * 1000)
             return measured_async
 
         def measured(*args, **kwargs):
-            started = time.monotonic()
+            started = time.perf_counter()
             self.depth += 1
             try:
                 return method(*args, **kwargs)
             finally:
                 self.depth -= 1
                 if not self.depth:
-                    self.elapsed_ms += round((time.monotonic() - started) * 1000)
+                    self.elapsed_ms += round((time.perf_counter() - started) * 1000)
         return measured
 
 

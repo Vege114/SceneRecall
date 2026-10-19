@@ -34,6 +34,8 @@ def identity_context(context, result, frames, *, top_k=5):
     ranked = {}
     for region in regions:
         match = region.get("match", {})
+        if match.get("status") not in {"candidate", "confirmed"}:
+            continue
         for item in match.get("candidates", [])[:top_k]:
             identity = item["character_id"]
             ranked[identity] = min(ranked.get(identity, float("inf")), item["distance"])
@@ -41,9 +43,18 @@ def identity_context(context, result, frames, *, top_k=5):
             ranked[match["character_id"]] = -1
     # Top-K is per observed person; keep their union for multi-person batches.
     selected = sorted(ranked, key=lambda key: (ranked[key], key))
-    complete = {p["id"]: p for p in [*context.get("profiles", []), *result.get("selected_profiles", [])]}
-    context["profiles"] = [copy.deepcopy(complete[key]) for key in selected if key in complete]
-    context["retrieval"] = {"method": "complete_allowed_gallery_then_per_region_top_k", "top_k": top_k}
+    complete = {p["id"]: p for p in [*result.get("selected_profiles", []), *context.get("profiles", [])]}
+    selected = [key for key in selected if key in complete]
+    if selected:
+        context["profiles"] = [copy.deepcopy(complete[key]) for key in selected]
+        context["retrieval"] = {"method": "complete_allowed_gallery_then_per_region_top_k", "top_k": top_k}
+    else:
+        # Failure to retrieve a visual match is not evidence that an allowed
+        # Bangumi dossier is irrelevant. Keep the supplied roster/reference
+        # context as priors while unknown regions still prevent identity claims.
+        context["retrieval"] = {"method": "allowed_roster_without_visual_match", "top_k": top_k,
+                                "identity_status": "unverified_prior", "reference_only": True,
+                                "presence_verified": False}
     context["identity_regions"] = [{key: copy.deepcopy(row[key]) for key in
         ("id", "entity_id", "local_id", "frame_id", "at_ms", "box", "quality", "match") if key in row} for row in regions]
     # A bounded number of clear current crops supplements the partition sheets;
@@ -57,6 +68,8 @@ def identity_context(context, result, frames, *, top_k=5):
             by_character.setdefault(reference["character_id"], []).append(reference)
     # Round robin includes multiple references when space permits without letting
     # the first character consume the entire image budget.
+    if not selected:
+        return context
     context["reference_frames"] = []
     for index in range(8):
         for identity in selected:

@@ -21,6 +21,12 @@ from scenerecall import service
 from scenerecall import windows_service
 
 
+# This module verifies the POSIX CLI's UID/SIGTERM lifecycle. Windows uses
+# manage_windows_runtime.py, whose process identity and CTRL_BREAK integration
+# are exercised by test_windows_runtime_manager.py.
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX service lifecycle")
+
+
 TEST_PORT = 19321
 
 

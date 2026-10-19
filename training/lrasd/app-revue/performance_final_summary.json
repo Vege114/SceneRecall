@@ -1,0 +1,207 @@
+{
+  "schema_version": "scenerecall-final-performance-summary-v1",
+  "report_state": "final",
+  "target_episodes": [
+    1
+  ],
+  "completed_at_utc": "2026-10-18T17:47:52.013447+00:00",
+  "completed_at_local": "2026-10-19T01:47:52.013447+08:00",
+  "target_job_status": "completed",
+  "scene_count": 88,
+  "deep_parent_units": 223,
+  "context_units": 48,
+  "request_count": 583,
+  "stage_request_sum": 583,
+  "successful_provider_receipts": 566,
+  "zero_call_aggregate_receipts": 142,
+  "all_receipt_files": 708,
+  "requests_without_success_receipt": 17,
+  "request_gap_semantics": "Unsuccessful/incomplete counted attempts, not17timeouts. Monetary cost is unknown.",
+  "monetary_cost": null,
+  "analysis_lifecycle_seconds": 33050.692662,
+  "scan_to_completion_seconds": 35023.04823291016,
+  "full_chain_including_import_seconds": null,
+  "asd_scored_windows": 2,
+  "asd_no_tracks_windows": 1,
+  "full_episode_asd_scored": false,
+  "audio_identity_status": "unavailable",
+  "excluded_history": [
+    {
+      "episode": 2,
+      "status": "cancelled",
+      "request_count": 8
+    },
+    {
+      "episode": 3,
+      "status": "cancelled",
+      "request_count": 7
+    }
+  ],
+  "steps": [
+    {
+      "key": "keyframe_scan",
+      "title": "关键帧预扫描",
+      "state_text": "已完成",
+      "completed": null,
+      "total": null,
+      "wall_ms": 1892445.767,
+      "wall_kind": "任务生命周期，含排队与暂停",
+      "accumulated_ms": null,
+      "requests": null,
+      "cache_hits": null,
+      "failures": {},
+      "fallback": 0
+    },
+    {
+      "key": "transcript",
+      "title": "台词预理解",
+      "state_text": "已完成",
+      "completed": 8,
+      "total": 8,
+      "wall_ms": 58672,
+      "wall_kind": "最近一次运行墙钟",
+      "accumulated_ms": 441779,
+      "requests": 8,
+      "cache_hits": 0,
+      "failures": {},
+      "fallback": 0
+    },
+    {
+      "key": "audio_identity",
+      "title": "音频身份预处理",
+      "state_text": "不可用",
+      "completed": null,
+      "total": null,
+      "wall_ms": null,
+      "wall_kind": "未单独记录",
+      "accumulated_ms": 2203,
+      "requests": 0,
+      "cache_hits": 1,
+      "failures": {},
+      "fallback": 0
+    },
+    {
+      "key": "visual_identity",
+      "title": "视觉身份预处理",
+      "state_text": "已完成",
+      "completed": null,
+      "total": null,
+      "wall_ms": 2029000,
+      "wall_kind": "已保存视觉结果的运行计时",
+      "accumulated_ms": 2029765,
+      "requests": 0,
+      "cache_hits": 0,
+      "failures": {},
+      "fallback": 0
+    },
+    {
+      "key": "preparation",
+      "title": "视觉分块与简要索引",
+      "state_text": "已完成",
+      "completed": 145,
+      "total": 145,
+      "wall_ms": 862719,
+      "wall_kind": "最近一次运行墙钟",
+      "accumulated_ms": 17243027,
+      "requests": 296,
+      "cache_hits": 22,
+      "failures": {
+        "invalid_output": 10,
+        "timeout": 2
+      },
+      "fallback": 139
+    },
+    {
+      "key": "lrasd",
+      "title": "LR-ASD 抽样复核",
+      "state_text": "部分完成",
+      "completed": null,
+      "total": null,
+      "wall_ms": null,
+      "wall_kind": "未单独记录",
+      "accumulated_ms": 65752,
+      "requests": 0,
+      "cache_hits": 21,
+      "failures": {},
+      "fallback": 0
+    },
+    {
+      "key": "deep_analysis",
+      "title": "深入视觉理解",
+      "state_text": "已完成",
+      "completed": 223,
+      "total": 223,
+      "wall_ms": null,
+      "wall_kind": "未单独记录",
+      "accumulated_ms": 9665124,
+      "requests": 231,
+      "cache_hits": 2,
+      "failures": {
+        "timeout": 4
+      },
+      "fallback": 3
+    },
+    {
+      "key": "context_refresh",
+      "title": "连续上下文刷新",
+      "state_text": "已完成",
+      "completed": 48,
+      "total": 48,
+      "wall_ms": null,
+      "wall_kind": "未单独记录",
+      "accumulated_ms": 618922,
+      "requests": 48,
+      "cache_hits": 0,
+      "failures": {},
+      "fallback": 0
+    },
+    {
+      "key": "index",
+      "title": "场景索引发布",
+      "state_text": "已完成任务的累计计时",
+      "completed": null,
+      "total": null,
+      "wall_ms": null,
+      "wall_kind": "未单独记录",
+      "accumulated_ms": 428021,
+      "requests": 0,
+      "cache_hits": 0,
+      "failures": {},
+      "fallback": 0
+    }
+  ],
+  "sources": [
+    {
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\performance_data.json"
+    },
+    {
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\performance_annotations.json"
+    },
+    {
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\final-completion-audit.json"
+    },
+    {
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\final-scope-validation.json"
+    }
+  ],
+  "timeline_policy": {
+    "queue_wait_ms": null,
+    "paused_ms": null,
+    "repair_ms": null,
+    "retry_wall_ms": null,
+    "reason": "No durable complete status-transition history; current job timestamps cannot separate these durations.",
+    "events_source": {
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\performance_annotations.json",
+      "kind": "json",
+      "selector": "/timeline_events"
+    },
+    "rules": [
+      "Use observed snapshot timestamps as transition bounds only, not exact transitions.",
+      "Use receipt intervals only as approximate call intervals.",
+      "Do not add per-episode walls when scans/transcripts overlap.",
+      "Never sum concurrent receipt elapsed to label end-to-end wall time.",
+      "Do not subtract counters from differently scoped measurements to invent repair time."
+    ]
+  },
+  "end_to_end_speedup_proven": false
+}

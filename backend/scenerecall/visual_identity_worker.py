@@ -9,6 +9,57 @@ from pathlib import Path
 import sys
 
 
+def configure_onnx_runtime():
+    """Opt-in CUDA DLL loading and FP32 parity controls for an isolated worker.
+
+    Do not import optional ML dependencies or change imgutils defaults unless a
+    runtime option is explicitly set. Model/cache identity remains unchanged.
+    """
+    directory = os.environ.get("SCENERECALL_CUDA_DLL_DIRECTORY", "").strip()
+    disable_tf32 = os.environ.get("SCENERECALL_ORT_DISABLE_TF32", "").strip().lower() in {"1", "true", "yes"}
+    if not directory and not disable_tf32:
+        return None
+    with contextlib.redirect_stdout(sys.stderr):
+        import onnxruntime as ort
+
+        if directory:
+            path = Path(directory).expanduser().resolve()
+            if not path.is_dir():
+                raise ValueError("SCENERECALL_CUDA_DLL_DIRECTORY 不是本机 DLL 目录")
+            if "CUDAExecutionProvider" not in ort.get_available_providers():
+                raise RuntimeError("当前视觉环境未安装 CUDA ONNX Runtime")
+            # ORT can print dependency diagnostics to stdout; keep the worker's
+            # stdout exclusively available for one JSON reply per input line.
+            ort.preload_dlls(directory=str(path))
+        import imgutils.utils.onnxruntime as img_ort
+
+    runtime = {"onnxruntime_version": ort.__version__, "cuda_dll_directory": directory or None,
+               "disable_tf32": disable_tf32, "sessions": []}
+    original_session = img_ort.InferenceSession
+
+    def open_session(*args, **kwargs):
+        providers = kwargs.get("providers", [])
+        requested_cuda = any((item[0] if isinstance(item, tuple) else item) == "CUDAExecutionProvider"
+                             for item in providers)
+        if disable_tf32:
+            configured = []
+            for item in providers:
+                provider, options = item if isinstance(item, tuple) else (item, {})
+                configured.append((provider, {**options, "use_tf32": 0})
+                                  if provider == "CUDAExecutionProvider" else item)
+            kwargs["providers"] = configured
+        session = original_session(*args, **kwargs)
+        actual = session.get_providers()
+        if directory and requested_cuda and "CUDAExecutionProvider" not in actual:
+            raise RuntimeError("视觉模型未成功启用 CUDA provider；拒绝静默回退 CPU")
+        runtime["sessions"].append({"model": Path(str(args[0] if args else kwargs.get("path_or_bytes", ""))).name,
+                                    "providers": actual, "provider_options": session.get_provider_options()})
+        return session
+
+    img_ort.InferenceSession = open_session
+    return runtime
+
+
 def main():
     # These flags must be set before importing Hugging Face or imgutils.
     os.environ["HF_HUB_OFFLINE"] = "1"
@@ -16,11 +67,13 @@ def main():
     output = sys.stdout
     model = sys.argv[1]
     backend = None
+    runtime = None
     for line in sys.stdin:
         try:
             request = json.loads(line)
             with contextlib.redirect_stdout(sys.stderr):
                 if backend is None:
+                    runtime = configure_onnx_runtime()
                     import numpy as np
                     from huggingface_hub import hf_hub_download
                     from imgutils.detect import detect_person
@@ -48,6 +101,8 @@ def main():
                 np, detect_person, extract_feature, difference, version = backend
                 if request["action"] == "metadata":
                     result = {"model_version": version, "offline": True}
+                    if runtime is not None:
+                        result["runtime"] = runtime
                 elif request["action"] == "detect":
                     result = [{"box": list(box), "label": label, "detection_score": float(score)}
                               for box, label, score in detect_person(request["path"], level="m", version="v1.1")]

@@ -11,7 +11,7 @@ import threading
 import uuid
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .models import AssetInput, Observation
 from .file_io import atomic_replace
@@ -96,8 +96,15 @@ def read_jsonl(path: Path) -> list[dict]:
 
 def confined_path(base: Path, relative: str) -> Path:
     """File references are data, never permission to traverse outside an asset."""
-    if not isinstance(relative, str) or not relative or "\\" in relative:
+    if not isinstance(relative, str) or not relative or "\x00" in relative:
         raise ValueError("资料包含非法文件引用")
+    # Libraries written on Windows contain native relative separators. Resolve
+    # them on either OS, retaining the same drive/root/traversal restrictions.
+    # ZIP member names are validated separately and still reject backslashes.
+    windows = PureWindowsPath(relative)
+    if windows.drive or windows.root:
+        raise ValueError("资料包含越界文件引用")
+    relative = relative.replace("\\", "/")
     candidate = PurePosixPath(relative)
     if candidate.is_absolute() or ".." in candidate.parts:
         raise ValueError("资料包含越界文件引用")
@@ -444,6 +451,8 @@ class Library:
         directory = self.asset_dir(asset_id)
         path = confined_path(directory, pointer["path"])
         original = confined_path(directory, pointer["original_path"])
+        pointer = {**pointer, "path": pointer["path"].replace("\\", "/"),
+                   "original_path": pointer["original_path"].replace("\\", "/")}
         if (pointer["path"] != f"analyses/{run_id}/subtitles.jsonl"
                 or pointer["original_path"] != f"subtitles/originals/{run_id}{original.suffix}"
                 or original.suffix not in {".ass", ".srt"}
@@ -696,7 +705,7 @@ class Library:
                 SceneStore(self).mark_dependents_stale(asset_id, record["start_ms"], "前序证据的人工解释已变化")
             return annotation
 
-    def records(self, asset_id: str | None = None) -> list[dict]:
+    def records(self, asset_id: str | None = None, *, compact_subtitles: bool = True) -> list[dict]:
         from .characters import CharacterStore
         from .scenes import SceneStore
         from .identity_scene import project_actions, project_audio_evidence
@@ -789,6 +798,9 @@ class Library:
                                    "understanding_level", "needs_deep", "needs_identity_review", "needs_action_deep",
                                    "audio_evidence", "reason", "provenance", "dependencies",
                                    "context_stale", "stale_reasons")} if is_scene else {})})
+        if compact_subtitles:
+            from .subtitle_projection import compact_subtitle_records
+            return compact_subtitle_records(result)
         return result
 
     def save_run(self, asset_id: str, run_id: str, data: dict):
@@ -799,7 +811,7 @@ class Library:
         return [read_json(p) for p in (self.asset_dir(asset_id) / "analyses").glob("*/run.json")]
 
     def collections(self) -> list[dict]:
-        current = {r["id"]: r for r in self.records()}
+        current = {r["id"]: r for r in self.records(compact_subtitles=False)}
         result = [r for r in current.values() if r["favorite"]]
         for asset in self.list_assets():
             states = {}

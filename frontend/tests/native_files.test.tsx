@@ -5,12 +5,12 @@ import { AppContext, type AppContextValue } from '../src/context';
 import { DEFAULTS, type Asset } from '../src/types';
 import AssetDetail from '../src/components/AssetDetail';
 import Settings from '../src/components/Settings';
-import { pickLocalFiles } from '../src/lib/localFiles';
+import { localFileDirectory, pickLocalFiles } from '../src/lib/localFiles';
 
 const asset: Asset = { id: 'local-video', work_id: 'local-work', title: '本机片段', kind: 'movie', duration_ms: 12000, width: 640, height: 360, subtitle_mode: 'external', source_available: false, source_changed: false, created_at: '2026-01-01T00:00:00Z', status: 'ready' };
 const detail = { asset, observations: [], subtitles: [], annotations: [], runs: [] };
 function context(): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/native-files-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.2.0' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/native-files-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.2.0' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function mockFetch(handler: (url: string, options?: RequestInit) => unknown | Promise<unknown>) {
   const fetch = vi.fn(async (url: string, options?: RequestInit) => {
@@ -35,6 +35,19 @@ async function showBackup(value = context()) {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
 describe('Native local file selection', () => {
+  it.each([
+    ['C:\\episode.mkv', 'C:\\'],
+    ['D:\\动画\\episode.mkv', 'D:\\动画'],
+    ['C:/episode.mkv', 'C:/'],
+    ['\\\\server\\share\\episode.mkv', '\\\\server\\share'],
+    ['/episode.mkv', '/'],
+    ['/tmp/动画/episode.mkv', '/tmp/动画'],
+    ['', undefined],
+    ['episode.mkv', undefined],
+  ])('keeps an absolute starting directory for %s', (path, expected) => {
+    expect(localFileDirectory(path!)).toBe(expected);
+  });
+
   it('requests multiple subtitle files in the requested starting folder', async () => {
     const paths = ['/tmp/字幕/E01.zh.ass', '/tmp/字幕/E02.zh.ass'];
     const fetch = mockFetch(() => ({ paths, cancelled: false }));

@@ -25,6 +25,7 @@ export interface AudioSettings {
   asr_enabled: boolean; device: string; sync_enabled: boolean; sync_repository_path: string;
   sync_checkpoint_path: string; sync_animation_verified: boolean; calibration_path: string;
   sync_license_acknowledged?: boolean; max_duration_ms?: number; top_k?: number;
+  sync_model_type?: 'animated_ad_lwtnet' | 'lrasd'; sync_python_path?: string; sync_detector_path?: string;
 }
 export interface AudioAvailability {
   diarization: { available: boolean; reason: string }; embedding: { available: boolean; reason: string };
@@ -49,6 +50,38 @@ export interface AudioRecord {
 export interface AudioResult {
   status: string; records: AudioRecord[]; timings?: Record<string, number>;
   degraded?: string[]; cache_hits?: number;
+}
+export interface LRASDPreviewTrack {
+  id: string; start_ms: number; end_ms: number; thumbnail_url?: string;
+  character_id?: string | null; association_status?: 'candidate';
+  active_speaker_probability: number | null; frame_probabilities?: { at_ms: number; probability: number }[];
+  candidates: { character_id: string; distance: number; reference_ids: string[] }[];
+}
+export interface LRASDPreviewResult {
+  status: 'not_started' | 'running' | 'review_required' | 'no_tracks' | 'unavailable' | 'failed';
+  start_ms?: number; end_ms?: number; job_id?: string; tracks?: LRASDPreviewTrack[];
+  timings?: Record<string, number>; reason?: string; cache_hit?: boolean; clip_url?: string;
+  model_version?: string; checkpoint_sha256?: string; preprocessing?: string; score_domain?: string;
+}
+export interface LRASDSceneReview extends LRASDPreviewResult {
+  scene_id: string; scene_start_ms: number; scene_end_ms: number;
+  start_ms: number; end_ms: number; review_status: 'candidate';
+  subtitle_ids: string[]; frame_ids: string[]; audio_record_ids: string[];
+}
+export interface LRASDSceneReviewRun {
+  run_id: string; job_id: string; created_at?: string; source?: 'full_scene_job';
+  status: 'running' | 'completed' | 'partial' | 'unavailable';
+  coverage: { mode: 'bounded_scene_sample'; max_windows: number; selected_windows: number;
+    selected_duration_ms: number; analysis_duration_ms: number; full_episode_scored: false };
+  degraded: string[]; reviews: LRASDSceneReview[];
+}
+export interface LRASDSceneReviewsResult {
+  status: 'not_started' | 'running' | 'completed' | 'partial' | 'unavailable';
+  runs: LRASDSceneReviewRun[];
+}
+export interface BangumiReferenceCacheResult {
+  imported: number; existing: number; skipped: number;
+  errors: { character_id: string; reason: string }[]; references?: CharacterReference[];
 }
 export const identityStatusLabel = (status?: string) => ({ confirmed: '已确认', candidate: '候选 · 待确认', unknown: '未知', revoked: '已撤销', proposed: '提议 · 未入可信库' }[status || ''] || '未知');
 export const identitySourceLabel = (source?: string) => ({ manual: '人工确认', human: '人工确认', ccip: 'CCIP 图像匹配', voice: '声音匹配', voice_bank: '可信声音库匹配', unmatched: '尚未匹配', ecapa: 'ECAPA 声音匹配', upload: '人工上传', external_cached: '已缓存外部图', frame_crop: '原片裁剪', original_clip: '原片声音片段', external_licensed: '有权使用的外部声音' }[source || ''] || source || '未记录来源');

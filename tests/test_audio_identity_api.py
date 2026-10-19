@@ -105,6 +105,10 @@ def test_restore_audio_graph_rejects_escape_and_preserves_merged_historical_samp
     validate_audio_artifacts(app.state.library)
     bank, _ = service._bank("asset")
     original = read_jsonl(bank)
+    assert original[0]["audio_ref"].startswith("voice-audio/")
+    # Existing Windows libraries may have stored native relative separators.
+    atomic_jsonl(bank, [{**original[0], "audio_ref": original[0]["audio_ref"].replace("/", "\\")}])
+    validate_audio_artifacts(app.state.library)
     atomic_jsonl(bank, [{**original[0], "audio_ref": "../../outside.wav"}])
     with pytest.raises(ValueError, match="文件引用"):
         validate_audio_artifacts(app.state.library)

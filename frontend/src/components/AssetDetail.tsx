@@ -79,9 +79,38 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
   const pendingSeek = useRef(initialTime);
   const appliedCue = useRef('');
   const appliedChunk = useRef('');
-  const load = useCallback(async () => {
-    try { setDetail(await api<AssetDetailType>(`/assets/${encodeURIComponent(id)}`)); setError(''); }
-    catch (error) { setError(message(error)); } finally { setLoading(false); }
+  const detailFlight = useRef<{ assetId: string; promise: Promise<void>; dirty: boolean; cancelled: boolean; controller: AbortController } | null>(null);
+  const load = useCallback((afterMutation = false): Promise<void> => {
+    if (detailFlight.current?.assetId === id) {
+      if (afterMutation) detailFlight.current.dirty = true;
+      return detailFlight.current.promise;
+    }
+    const flight = { assetId: id, promise: Promise.resolve(), dirty: false, cancelled: false, controller: new AbortController() };
+    detailFlight.current = flight;
+    flight.promise = (async () => {
+      try {
+        do {
+          flight.dirty = false;
+          try {
+            const next = await api<AssetDetailType>(`/assets/${encodeURIComponent(id)}`, { signal: flight.controller.signal });
+            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) { setDetail(next); setError(''); }
+          } catch (error) {
+            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) setError(message(error));
+          }
+        } while (flight.dirty && !flight.cancelled);
+      } finally {
+        if (!flight.cancelled && detailFlight.current === flight) setLoading(false);
+        if (detailFlight.current === flight) detailFlight.current = null;
+      }
+    })();
+    return flight.promise;
+  }, [id]);
+  useEffect(() => {
+    setDetail(null); setLoading(true); setError('');
+    return () => {
+      const flight = detailFlight.current;
+      if (flight?.assetId === id) { flight.cancelled = true; flight.controller.abort(); detailFlight.current = null; }
+    };
   }, [id]);
   useEffect(() => { pendingSeek.current = initialTime; setCurrentTime(initialTime); if (video.current && video.current.readyState > 0) video.current.currentTime = initialTime / 1000; }, [initialTime]);
   useEffect(() => {
@@ -114,8 +143,21 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
     if (initialChunk && tab === 'visual') document.getElementById(`scene-${initialChunk}`)?.scrollIntoView?.({ block: 'center' });
   }, [initialChunk, tab, limit, detail]);
   const running = jobs.some((job) => job.asset_id === id && ['queued', 'pending', 'running'].includes(job.status));
-  useEffect(() => { void load(); if (!running) return; const timer = window.setInterval(() => { void load(); }, 5000); return () => window.clearInterval(timer); }, [running, load]);
-  const saveAndReload = async () => { await load(); await refresh(); };
+  useEffect(() => {
+    let stopped = false;
+    let generation = 0;
+    let timer: number | undefined;
+    const poll = async (current: number) => {
+      if (stopped || document.hidden) return;
+      await load();
+      if (!stopped && !document.hidden && generation === current && running) timer = window.setTimeout(() => { void poll(current); }, 5000);
+    };
+    const visible = () => { generation += 1; window.clearTimeout(timer); if (!document.hidden) void poll(generation); };
+    document.addEventListener('visibilitychange', visible);
+    void poll(generation);
+    return () => { stopped = true; generation += 1; window.clearTimeout(timer); document.removeEventListener('visibilitychange', visible); };
+  }, [running, load]);
+  const saveAndReload = async () => { await load(true); await refresh(); };
   const seek = (at: number) => { pendingSeek.current = at; setCurrentTime(at); if (video.current && video.current.readyState > 0) { video.current.currentTime = at / 1000; void video.current.play().catch(() => undefined); } };
   const annotation = (recordId: string): Annotation | undefined => {
     const related = detail?.annotations?.filter((item) => item.record_id === recordId) || [];
@@ -125,7 +167,7 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
     return merged;
   };
   const favorite = async (record: Observation | SceneChunk | Subtitle) => {
-    try { await post(`/assets/${encodeURIComponent(id)}/annotations`, { record_id: record.id, favorite: !annotation(record.id)?.favorite }); await load(); notify(annotation(record.id)?.favorite ? '已取消收藏' : '片段已加入收藏'); } catch (error) { notify(message(error), 'error'); }
+    try { await post(`/assets/${encodeURIComponent(id)}/annotations`, { record_id: record.id, favorite: !annotation(record.id)?.favorite }); await load(true); notify(annotation(record.id)?.favorite ? '已取消收藏' : '片段已加入收藏'); } catch (error) { notify(message(error), 'error'); }
   };
   const createProxy = async () => {
     setProxyBusy(true);

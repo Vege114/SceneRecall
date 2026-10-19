@@ -186,6 +186,13 @@ else:
     monkeypatch.setattr(codex_cli, "_command", command)
     monkeypatch.setenv("SCENERECALL_CODEX_PATH", str(script))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    if os.name == "nt":
+        run = codex_cli._run
+
+        async def run_python_fixture(args, **kwargs):
+            return await run([sys.executable, "-X", "utf8", *args], **kwargs)
+
+        monkeypatch.setattr(codex_cli, "_run", run_python_fixture)
 
     def configure(**values):
         configuration.write_text(json.dumps(values))
@@ -200,7 +207,9 @@ else:
 async def test_status_reports_installation_chatgpt_login_and_compatibility(cli):
     result = await codex_cli.status()
     assert result == {"installed": True, "authenticated": True, "compatible": True,
-                      "auth_method": "chatgpt", "version": "0.155.1", "message": "Codex CLI 已通过 ChatGPT 登录"}
+                      "auth_method": "chatgpt", "version": "0.155.1", "message": "Codex CLI 已通过 ChatGPT 登录",
+                      "runtime": codex_cli._runtime(), "cli_runtime": codex_cli._runtime(),
+                      "executable": codex_cli._executable()}
 
 
 @pytest.mark.asyncio

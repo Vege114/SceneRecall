@@ -1,0 +1,130 @@
+{
+  "date_local": "2026-10-18",
+  "timezone": "Asia/Shanghai",
+  "platform": "Windows",
+  "validation_scope": "Isolated-copy benchmark followed by a separately verified graceful upgrade of the authorized local library; source media and existing evidence were preserved.",
+  "method": {
+    "copy": "metadata and evidence only; original videos, cache, runtime and vector files excluded",
+    "index_snapshot": "SQLite online backup from a mode=ro source connection",
+    "snapshot_limit": "The active service continued importing during copying. The SQLite backup is internally consistent; metadata files and the old index are separate snapshots, so their starting counts need not match.",
+    "network": "blocked for the whole benchmark",
+    "embedding_profile": null,
+    "performance_limit": "Single local run; durations are measurements, not a Windows/macOS comparison or a speed guarantee."
+  },
+  "isolated_copy": {
+    "seconds": 1.7418,
+    "assets": 8,
+    "evidence_files_verified": 50,
+    "evidence_bytes_verified": 146490929,
+    "evidence_sha256_before_equals_after": true
+  },
+  "legacy_index_migration": {
+    "before_user_version": 0,
+    "after_user_version": 1,
+    "source_records": 36144,
+    "contexts": 69552,
+    "total_rows": 105696,
+    "fts_rows_preserved": 105696,
+    "rowid_identity_mismatches": 0,
+    "seconds": 2.1095
+  },
+  "library_projection": {
+    "raw_records": 36830,
+    "raw_contexts": 70716,
+    "raw_seconds": 1.6019,
+    "projected_records": 12415,
+    "projected_contexts": 21898,
+    "seconds": 2.4953
+  },
+  "largest_subtitle_asset": {
+    "raw_subtitles": 31872,
+    "raw_contexts": 62406,
+    "projected_subtitles": 7803,
+    "projected_contexts": 14280
+  },
+  "lexical_rebuild": {
+    "seconds": 6.0067,
+    "records": 12415,
+    "contexts": 21898,
+    "embedding_profile_id": null,
+    "cache_hits": 0,
+    "request_count": 0,
+    "usage": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "total_tokens": 0
+    },
+    "cost": 0.0
+  },
+  "unchanged_asset_sync": {
+    "assets": 8,
+    "seconds": 0.4469,
+    "upserted": 0,
+    "removed": 0,
+    "contexts_changed": 0
+  },
+  "committed_episode_index_recovery": {
+    "episode": 7,
+    "scope": "one already committed asset, removed only from the isolated index",
+    "elapsed_seconds": 1.103,
+    "phase_timings_ms": {
+      "import": 31,
+      "import_profile": 157,
+      "import_index": 906
+    },
+    "target_sync": {
+      "target_asset": true,
+      "records": 636,
+      "seconds": 0.1866,
+      "upserted": 636,
+      "removed": 0,
+      "contexts_changed": 1064
+    },
+    "earlier_assets_compared": 6,
+    "earlier_asset_rows_written": 0,
+    "source_import_reentered": false,
+    "model_requests": 0
+  },
+  "external_network_attempts": 0,
+  "model_requests": 0,
+  "live_upgrade": {
+    "backup_files_verified": 163,
+    "backup_bytes_verified": 428252407,
+    "existing_asset_files_sha256_unchanged": 78,
+    "graceful_restart": true,
+    "completed_episodes": 12,
+    "total_episodes": 12,
+    "job_status": "completed",
+    "model_requests": 0,
+    "resumed_episode_phase_timings_ms": {
+      "9": {
+        "import": 48,
+        "import_profile": 327,
+        "import_index": 1505
+      },
+      "10": {
+        "import": 6333,
+        "import_profile": 432,
+        "import_index": 1890
+      },
+      "11": {
+        "import": 1453,
+        "import_profile": 540,
+        "import_index": 1910
+      },
+      "12": {
+        "import": 3051,
+        "import_profile": 658,
+        "import_index": 2074
+      }
+    },
+    "records": 15333,
+    "contexts": 26592,
+    "fts_rowid_mismatches": 0,
+    "sqlite_quick_check": "ok",
+    "health_samples_during_import_ms": [
+      51.88,
+      101.05
+    ]
+  }
+}

@@ -243,6 +243,10 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
                 config["warnings"] = ["window_ms / frames_per_window 已弃用；新画面任务统一使用内容关键帧。"]
             if request.keyframe_plan_id:
                 self.validated_plan(request.asset_id, request.start_ms, end, request.keyframe_plan_id)
+        audio_identity = config.get("identity_settings", {}).get("audio", {})
+        if audio_identity.get("enabled") and audio_identity.get("sync_enabled") and audio_identity.get("sync_model_type") == "lrasd":
+            from .scene_lrasd import VERSION
+            config["lrasd_scene_sampling_version"] = VERSION
         return asset, config
 
     def estimate(self, request: AnalysisInput, settings: dict) -> dict:
@@ -561,7 +565,7 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
             except ValueError as exc:
                 self.update(job_id, status="cancelled", stale_deletion=True, message=str(exc))
                 return
-            job = self.update(job_id, status="running", error=None)
+            job = self.update(job_id, status="running", error=None, error_code=None)
             self._executing_jobs.add(job_id)
         try:
             if prepare_only:
@@ -600,13 +604,18 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
         except Exception as exc:
             # Provider exceptions are already sanitized. Do not persist arbitrary HTTP bodies.
             message = error_message(exc)
-            self.update(job_id, status="failed", error=message, message=message)
+            code = getattr(exc, "code", None)
+            if not isinstance(code, str) or code not in {
+                    "timeout", "invalid_output", "preflight", "preflight_version",
+                    "preflight_exec_help", "preflight_features", "preflight_login_status"}:
+                code = None
+            self.update(job_id, status="failed", error=message, error_code=code, message=message)
         finally:
             self._executing_jobs.discard(job_id)
             job = self.get(job_id)
             if job.get("asset_id") and job["type"] == "analysis":
                 self.library.save_run(job["asset_id"], job["run_id"], {k: job[k] for k in
-                    ("config", "status", "usage", "request_count", "cost", "known_cost", "cost_incomplete",
+                    ("config", "status", "error_code", "usage", "request_count", "cost", "known_cost", "cost_incomplete",
                      "created_at", "updated_at", "failures", "stage_metrics") if k in job})
 
     async def frame(self, asset_id, source, at_ms, crop=None):
@@ -796,7 +805,7 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
                     self.character_context(asset_id, config["character_snapshot"])
                     data = self.characters.apply_observation(asset_id, data, expected_revision=config["character_snapshot"]["revision"])
                     self.library.save_observation(asset_id, data)
-                self.search.upsert(self.library.records(asset_id))
+                self.search.sync_asset(self.library.records(asset_id), asset_id)
                 self.update(job_id, checkpoints=self.get(job_id)["checkpoints"] + [checkpoint_key])
                 observations[cache_key] = data
                 finished_windows[window["id"]] = cache_key
@@ -901,10 +910,9 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
         if job["type"] == "index":
             embedding_profile_id = job["config"].get("embedding_profile_id")
         self.update(job_id, stage="index", message="正在更新本地搜索索引")
-        records = self.library.records()
         # Publishing committed evidence to lexical search must not depend on a
         # paid embedding service or its remaining request budget.
-        await self.search.rebuild(records)
+        await self.search.rebuild_from_source(self.library.records)
         profile = self.providers.get(embedding_profile_id) if embedding_profile_id else None
 
         async def embed_batch(texts):
@@ -916,5 +924,5 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
             return AIResult(data, {}, 0, 0.0)
 
         if profile:
-            await self.search.rebuild(records, embedding_profile_id=embedding_profile_id,
-                                      before_batch=lambda _: self.checkpoint(job_id), embed_batch=embed_batch)
+            await self.search.rebuild_from_source(self.library.records, embedding_profile_id=embedding_profile_id,
+                                                 before_batch=lambda _: self.checkpoint(job_id), embed_batch=embed_batch)

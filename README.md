@@ -8,9 +8,20 @@
 
 ## 启动
 
-本轮新增可选的角色中心视听链路：独立参考图库 → 动漫人物检测/CCIP → 自动说话人分段/ECAPA → 带人物区域和说话人证据的场景理解。默认关闭本地重型识别，原流程仍可使用。安装、权重、双环境运行、纠错和未验证项见 [视听身份使用说明](docs/CHARACTER_AV.md)，Animated_AD 代码核查见 [来源审查](docs/ANIMATED_AD_REVIEW.md)。**本轮没有使用真实动画或下载模型权重进行效果验收，不能据此声称提速或准确率提升。**
+已加入可选的角色中心视听链路：独立参考图库 → 动漫人物检测/CCIP → 自动说话人分段/ECAPA → 带人物区域和说话人证据的场景理解。默认关闭本地重型识别，原流程仍可使用。安装、权重、双环境运行、纠错和未验证项见 [视听身份使用说明](docs/CHARACTER_AV.md)，Animated_AD 代码核查见 [来源审查](docs/ANIMATED_AD_REVIEW.md)。后续已完成 LR-ASD 训练、真实短片段接入及一轮人工标注微调；新候选未改善留出指标，继续保留原模型，具体指标与限制见 [LR-ASD 实验记录](docs/LRASD_TRAINING.md)。
 
 需要 Python 3.12 或 3.13、[uv](https://docs.astral.sh/uv/)、Node.js 20+ / npm，以及能在终端找到的 `ffmpeg` 和 `ffprobe`。推荐使用本次验证的 Python 3.12 与 Node.js 22；首次安装依赖需要网络。支持 macOS 和 Windows 本机运行；Windows 验证范围见 [验证记录](docs/VALIDATION.md)，Linux 尚未完成平台验收。
+
+
+Windows PowerShell 首次准备并启动：
+
+```powershell
+.\scripts\start_windows.cmd -Setup -DataDir "D:\SceneRecallLibrary"
+```
+
+以后运行同一命令时省略 `-Setup`；加 `-Check` 仅检查环境。启动器使用独立 `.venv-windows`，自动发现 `.cache/ffmpeg/bin`，也可用 `-FfmpegDirectory` 指定 Windows FFmpeg。后台启动、状态和正常停止使用 `scripts/manage_windows_runtime.py`，详见 [Windows 说明](docs/WINDOWS.md)。
+
+本机现已迁为 Windows 原生运行：FFmpeg／ffprobe 9.0.2、现有资料库、视觉与 LR-ASD CUDA 环境均已验证；原 `D:\SceneRecall-Setup` 启停入口已更新。迁移前保留完整资料备份，源视频与模型权重仍在原处。其他 WSL 资料库应先停服务、检查路径并备份迁移，不能直接共用 Linux 解释器；模型依赖见 [Windows 模型说明](docs/WINDOWS_MODELS.md)。
 
 macOS / Linux 在项目根目录执行：
 
@@ -55,6 +66,14 @@ UV_CACHE_DIR=/tmp/scenerecall-uv-cache uv sync --python 3.12 --extra dev
 `start` 默认以前台方式运行，使用期间请保持启动终端运行。恢复已有任务时，台词整理、视觉分块、深入理解、连续理解更新和字幕 OCR 均恢复已完成的阶段与批次，保留完成进度，只执行未完成部分。深入理解与连续理解更新直接续接已提交场景及剧情记忆，索引未变化时跳过重建；旧任务可从原始场景和成功回执恢复断点。结果已保存但发布或索引尚未完成时，只补齐这些本地步骤，不重复调用模型。批次之间让出执行时间，使页面连接、任务状态查询和暂停操作能够继续响应。
 
 ## 停止
+
+Windows 后台实例使用相同资料目录和端口：
+
+```powershell
+.\.venv-windows\Scripts\python.exe scripts\manage_windows_runtime.py stop --data-dir "D:\SceneRecallLibrary" --port 8765
+```
+
+下面的 `scenerecall stop` 用于 macOS／Linux 的 CLI 实例。
 
 在项目根目录新开一个终端执行，无需查找 PID：
 
@@ -159,7 +178,9 @@ API 连接支持 OpenAI-compatible 的图像消息、文本消息和 embedding �
 
 批量导入在后台逐集处理，一集失败不会撤销已成功的项目。任务队列保留每项结果，刷新或重启后可修改失败项再重试；相同视频可再次导入，每个新导入项建立独立档案、字幕和分析记录，既有资料与回收站均不阻止导入。相同批次请求重放或失败重试仍复用该项已提交的资产，避免网络重试额外创建档案。若旧任务已生成的档案后来被删除，可新建导入批次再次导入。导入与本地关键帧扫描不调用模型，导入后不会自动启动付费分析。
 
-视频导入、外挂字幕、定位原文件和 ZIP 备份恢复都使用系统文件选择窗口；取消选择保留当前设置。macOS 直接打开原生 AppKit 文件窗口，无须先唤起 Finder 或授予控制 Finder 的自动化权限，视频和字幕支持多选，定位与恢复一次选择一个文件。Windows 使用系统文件窗口，Linux 需要图形桌面和 Zenity；后两者尚未完成真实平台验收。
+导入进度分别显示「校验视频与提取字幕 → 同步作品档案 → 建立搜索索引」；索引在线程中增量发布，未变化的旧集不重复写入。ASS 中同一文字的重叠特效层只在检索投影中合并，保留全部来源 ID 与原始时间；首尾相接或有间隔的重复台词、收藏、笔记和人工确认记录保持独立。原视频、原字幕与已保存证据不改。旧索引在更新后首次启动时自动升级并重新投影，无需重新导入媒体或调用模型；修复范围与测速口径见[导入性能验证](docs/VALIDATION.md#导入索引性能与-ass-特效投影2026-10-18)。
+
+视频导入、外挂字幕、定位原文件和 ZIP 备份恢复都使用系统文件选择窗口；取消选择保留当前设置。macOS 直接打开原生 AppKit 文件窗口，无须先唤起 Finder 或授予控制 Finder 的自动化权限，视频和字幕支持多选，定位与恢复一次选择一个文件。Windows 使用系统文件窗口；WSL 通过 Windows PowerShell 打开同一类窗口并转换路径，普通 Linux 需要图形桌面和 Zenity。平台检查范围见验证记录。
 
 批量分析按项目、季、集排序，底层仍是每集独立任务：每集使用自己的累计请求／费用上限，整批显示估算合计与执行进度。任何一集费用未知时，整批金额也显示未知。旧版定时采样及 `content-keyframes-v1` 任务保留原策略、配置与成功产物；界面新任务采用分块策略，不改变本地选帧算法；扫描和台词前置可跨集并行，剧情理解与角色发布仍保持集序。任务名称显示动画、季集号和版本，缺少编号时显示源文件名或视频短 ID。
 
@@ -210,6 +231,8 @@ API 连接支持 OpenAI-compatible 的图像消息、文本消息和 embedding �
 重新识别会调用已绑定的视觉模型并产生用量，整剧处理按季／集排序。所有选中原视频需可访问。识别过程中再次修改档案，会阻止旧档案任务继续提交过期结果；请从角色档案页重新发起识别。自动关联仍可能认错，真实影视准确率需要结合所选模型验收。
 
 ## 使用 Codex 订阅
+
+Windows 已安装并登录 Codex 桌面版时，应用会探测其 CLI。WSL 后端也可通过 Windows 桥接复用该登录，模型与设置中会显示实际后端／CLI 环境和路径；更新后需重启后端。完整路由与环境排查见 [Windows 与 WSL](docs/WINDOWS.md)。
 
 在**运行 SceneRecall 后端的机器和系统用户下**安装 Codex CLI **0.155.1 或更新版本**，然后使用自己的 ChatGPT 账户登录：
 

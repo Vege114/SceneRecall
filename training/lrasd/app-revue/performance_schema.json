@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SceneRecall episode-one completion target with excluded episode history",
+  "type": "object",
+  "required": ["schema_version", "capture_started_utc", "capture_finished_utc", "report_state", "library_read_only", "episodes", "timeline_policy"],
+  "properties": {
+    "schema_version": {"const": "scenerecall-performance-v1"},
+    "capture_started_utc": {"type": "string", "format": "date-time"},
+    "capture_finished_utc": {"type": "string", "format": "date-time"},
+    "report_state": {"enum": ["partial_requires_final_refresh", "final"]},
+    "completion_scope": {"type": "object", "required": ["target_episodes", "excluded_episodes"], "properties": {"target_episodes": {"const": [1]}, "excluded_episodes": {"const": [2, 3]}}},
+    "library_read_only": {"const": true},
+    "timezone_display": {"const": "Asia/Shanghai"},
+    "snapshot_history_source": {"$ref": "#/$defs/source"},
+    "job_snapshot_changed_during_capture": {"type": "array", "items": {"type": "string"}},
+    "episodes": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/episode"}, "description": "Episode1 is the sole completion target; episodes2/3 remain as excluded historical expenditure, not failures."},
+    "timeline_policy": {
+      "type": "object",
+      "description": "Unidentified components are null. Exact queue/pause/repair/retry walls cannot be inferred from a current job row.",
+      "properties": {"queue_wait_ms": {"type": "null"}, "paused_ms": {"type": "null"}, "repair_ms": {"type": "null"}, "retry_wall_ms": {"type": "null"}},
+      "required": ["queue_wait_ms", "paused_ms", "repair_ms", "retry_wall_ms", "reason", "rules"]
+    },
+    "annotations": {"type": "object"},
+    "historical_audit_observations": {"type": "array"},
+    "instrumentation_sources": {"type": "array"}
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["path", "kind"],
+      "properties": {"path": {"type": "string"}, "kind": {"enum": ["json", "jsonl", "sqlite", "directory"]}, "selector": {"type": "string"}},
+      "description": "Absolute source path plus a JSON selector, SQL row selector or glob; not a network link. No media source locations or secrets are included."
+    },
+    "metric": {
+      "type": "object",
+      "required": ["value", "unit", "semantics", "source", "limitations"],
+      "properties": {"value": {"type": ["number", "null"]}, "unit": {"type": "string"}, "semantics": {"type": "string"}, "source": {"$ref": "#/$defs/source"}, "limitations": {"type": "array", "items": {"type": "string"}}}
+    },
+    "episode": {
+      "type": "object",
+      "required": ["episode", "asset_id", "manifest_source", "scan_jobs", "analysis_runs"],
+      "properties": {"episode": {"type": "integer", "minimum": 1, "maximum": 3}, "asset_id": {"type": "string"}, "title": {"type": ["string", "null"]}, "media_duration_ms": {"type": ["number", "null"]}, "manifest_source": {"$ref": "#/$defs/source"}, "scan_jobs": {"type": "array"}, "analysis_runs": {"type": "array", "items": {"$ref": "#/$defs/run"}}}
+    },
+    "run": {
+      "type": "object",
+      "required": ["job", "job_source", "run_source", "stage_timings", "receipts", "artifacts", "visual_identity", "audio_identity", "asd_reviews"],
+      "properties": {
+        "job": {"type": "object", "required": ["id", "asset_id", "run_id", "status"]},
+        "job_source": {"$ref": "#/$defs/source"},
+        "run_source": {"$ref": "#/$defs/source"},
+        "stage_timings": {"type": "object", "additionalProperties": {"type": "object", "properties": {"accumulated_elapsed": {"$ref": "#/$defs/metric"}, "latest_recorded_wall": {"$ref": "#/$defs/metric"}}}},
+        "receipts": {"type": "object", "required": ["entries", "totals_by_stage", "limitations"], "properties": {"entries": {"type": "array", "items": {"type": "object", "required": ["source", "owned_by_current_job", "provider_success_receipt", "interval_estimate"]}}, "totals_by_stage": {"type": "object"}}},
+        "artifacts": {"type": "object"},
+        "visual_identity": {"type": "object"},
+        "audio_identity": {"type": "object"},
+        "asd_reviews": {"type": "object"}
+      }
+    }
+  }
+}

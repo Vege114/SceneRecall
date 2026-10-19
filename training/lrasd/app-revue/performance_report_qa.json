@@ -1,0 +1,59 @@
+{
+  "kind": "offline-jsdom-and-static-css-qa",
+  "passed": 10,
+  "checks": [
+    "inline JavaScript executes without errors",
+    "only episode1 completes the target; excluded history is cancelled",
+    "all sections and upstream timing limits render",
+    "default target view renders nine steps and one episode",
+    "three timeout repairs and final completion are visible",
+    "excluded and all-episode controls preserve target counts",
+    "source search, empty state and pagination work",
+    "evidence dialog opens by click and closes",
+    "ASD, dossier, voice and visual QA limits remain explicit",
+    "offline resources and 320px CSS are statically bounded"
+  ],
+  "sectionCounts": {
+    "overview": {
+      "textCharacters": 311,
+      "childElements": 24
+    },
+    "upstream": {
+      "textCharacters": 389,
+      "childElements": 17
+    },
+    "timeline": {
+      "textCharacters": 504,
+      "childElements": 631
+    },
+    "steps": {
+      "textCharacters": 967,
+      "childElements": 155
+    },
+    "stalls": {
+      "textCharacters": 2822,
+      "childElements": 166
+    },
+    "optimization": {
+      "textCharacters": 846,
+      "childElements": 38
+    },
+    "outcomes": {
+      "textCharacters": 829,
+      "childElements": 33
+    },
+    "sources": {
+      "textCharacters": 3008,
+      "childElements": 136
+    }
+  },
+  "sourceCount": 818,
+  "dataFinal": true,
+  "externalRequests": 0,
+  "browserUsed": false,
+  "serverStarted": false,
+  "visualLayoutInspected": false,
+  "limitations": [
+    "DOM interaction and static CSS assertions do not prove real browser layout or 320px pixel rendering."
+  ]
+}

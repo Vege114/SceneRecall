@@ -43,8 +43,11 @@ class AudioSettings(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     max_duration_ms: int = Field(default=60000, ge=1000, le=14400000, strict=True)
     sync_enabled: bool = False
+    sync_model_type: Literal["animated_ad_lwtnet", "lrasd"] = "animated_ad_lwtnet"
+    sync_python_path: str = ""
     sync_repository_path: str = ""
     sync_checkpoint_path: str = ""
+    sync_detector_path: str = ""
     sync_animation_verified: bool = False
     sync_license_acknowledged: bool = False
 
@@ -685,7 +688,7 @@ def validate_audio_artifacts(library) -> None:
                 raise ValueError("备份声音样本身份或作品引用无效")
             CharacterStore._resolve(registry, safe_id(sample.get("character_id")), strict=True)
             seen.add(identity)
-            if sample.get("audio_ref") != f"voice-audio/{identity}.wav":
+            if str(sample.get("audio_ref", "")).replace("\\", "/") != f"voice-audio/{identity}.wav":
                 raise ValueError("备份声音样本文件引用无效")
             path = confined_path(bank_path.parent, sample["audio_ref"])
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != sample.get("content_sha256"):
@@ -730,7 +733,7 @@ def validate_audio_artifacts(library) -> None:
                 if isinstance(stream_index, bool) or not isinstance(stream_index, int) or stream_index < 0:
                     raise ValueError("备份音轨索引无效")
                 relative = record.get("audio_ref", "")
-                parts = Path(relative).parts
+                parts = Path(relative.replace("\\", "/")).parts
                 if len(parts) != 5 or parts[:2] != ("audio", "cache") or parts[3:] != ("clips", f"{identity}.wav"):
                     raise ValueError("备份音频片段文件引用无效")
                 safe_id(parts[2])

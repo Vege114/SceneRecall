@@ -14,7 +14,7 @@ const inputs: ImportInput[] = [1, 2].map((episode) => ({ item_id: `item-${episod
 const job: Job = { id: 'import1', type: 'import', status: 'completed', progress: 1, completed: 2, total: 2, created_at: '2026-10-14T00:00:00Z', items: [{ item_id: 'item-1', name: 'episode-1.mkv', status: 'completed', asset_id: asset.id, warnings: [warning] }, { item_id: 'item-2', name: 'episode-2.mkv', status: 'completed', asset_id: 'ep2' }] };
 
 function context(): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/import-warning-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [job], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/import-warning-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [job], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function show(ui: ReactNode) { return render(<AppContext.Provider value={context()}>{ui}</AppContext.Provider>); }
 function mockFetch(data: unknown) {

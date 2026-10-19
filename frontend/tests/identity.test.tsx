@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import AudioIdentity from '../src/components/AudioIdentity';
 import CharacterReferences, { CreateCharacter } from '../src/components/CharacterReferences';
 import { type Asset, type CharacterProfile } from '../src/types';
-import { type AudioConfiguration, type AudioRecord, type CharacterReference } from '../src/identityTypes';
+import { type AudioConfiguration, type AudioRecord, type CharacterReference, type IdentityRegion } from '../src/identityTypes';
 
 const asset: Asset = { id: 'episode', work_id: 'work', title: '动画', kind: 'animation', duration_ms: 120000, width: 640, height: 360, subtitle_mode: 'external', source_available: true, source_changed: false, created_at: '', status: 'ready' };
 const profiles: CharacterProfile[] = Array.from({ length: 20 }, (_, i) => ({ id: `c${i + 1}`, name: `角色 ${i + 1}`, aliases: [], description: '', notes: '', appearances: [], appearance_count: 0 }));
@@ -31,6 +31,88 @@ function mockApi(overrides: (url: string, options?: RequestInit) => unknown = ()
   vi.stubGlobal('fetch', fetch); return fetch;
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+function regionRows(count: number, prefix = 'region'): IdentityRegion[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: prefix + String(index).padStart(4, '0'), local_id: 'P' + index,
+    frame_id: 'frame' + Math.floor(index / 2), at_ms: Math.floor(index / 2) * 1000,
+    box: [0.1, 0.1, 0.2, 0.6], crop_url: '/api/crop/' + index, quality: {},
+    match: { status: 'candidate' as const, candidate_character_id: 'c20', source: 'ccip' },
+  })).reverse();
+}
+
+describe('Visual identity region pagination', () => {
+  it('renders only 24 regions in stable time order and keeps every region reachable through previous/next pages', async () => {
+    const regions = regionRows(53);
+    const fetch = mockApi((url) => url.endsWith('/identity/reviews') ? { status: 'completed', regions } : undefined);
+    const seek = vi.fn();
+    render(<AudioIdentity asset={asset} onSeek={seek} onSaved={vi.fn()} />);
+    const pagination = within(await screen.findByRole('navigation', { name: '人物区域分页' }));
+    expect(pagination.getByText('共 53 个人物区域 · 第 1 / 3 页 · 显示 1–24 · 按原片时间排序')).toBeTruthy();
+    const firstPage = screen.getAllByRole('article', { name: /^人物区域 / });
+    expect(firstPage).toHaveLength(24);
+    expect(firstPage[0].getAttribute('aria-label')).toBe('人物区域 P0 region0000');
+    expect(firstPage[1].getAttribute('aria-label')).toBe('人物区域 P1 region0001');
+    expect((pagination.getByRole('button', { name: '上一页人物区域' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(firstPage[0]).getByRole('button', { name: '00:00:00' }));
+    expect(seek).toHaveBeenCalledWith(0);
+    const seen = new Set(firstPage.map((element) => element.getAttribute('aria-label')));
+    fireEvent.click(pagination.getByRole('button', { name: '下一页人物区域' }));
+    const secondPage = screen.getAllByRole('article', { name: /^人物区域 / });
+    expect(secondPage).toHaveLength(24);
+    secondPage.forEach((element) => seen.add(element.getAttribute('aria-label')));
+    expect(screen.queryByRole('article', { name: '人物区域 P0 region0000' })).toBeNull();
+    fireEvent.click(pagination.getByRole('button', { name: '下一页人物区域' }));
+    const lastPage = screen.getAllByRole('article', { name: /^人物区域 / });
+    expect(lastPage).toHaveLength(5);
+    lastPage.forEach((element) => seen.add(element.getAttribute('aria-label')));
+    expect(seen.size).toBe(53);
+    expect(pagination.getByText('共 53 个人物区域 · 第 3 / 3 页 · 显示 49–53 · 按原片时间排序')).toBeTruthy();
+    expect((pagination.getByRole('button', { name: '下一页人物区域' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(lastPage[0]).getByRole('option', { name: '角色 20' })).toBeTruthy();
+    fireEvent.click(pagination.getByRole('button', { name: '上一页人物区域' }));
+    expect(screen.getAllByRole('article', { name: /^人物区域 / })).toHaveLength(24);
+    expect(fetch.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+    expect(regions[0].id).toBe('region0052');
+  });
+
+  it('clamps the current page when refreshed results shrink', async () => {
+    let regions = regionRows(53);
+    mockApi((url) => url.endsWith('/identity/reviews') ? { status: 'completed', regions } : undefined);
+    render(<AudioIdentity asset={asset} onSeek={vi.fn()} onSaved={vi.fn()} />);
+    const pagination = within(await screen.findByRole('navigation', { name: '人物区域分页' }));
+    fireEvent.click(pagination.getByRole('button', { name: '下一页人物区域' }));
+    fireEvent.click(pagination.getByRole('button', { name: '下一页人物区域' }));
+    regions = regionRows(7);
+    fireEvent.click(screen.getByRole('button', { name: '刷新身份记录' }));
+    await screen.findByText('共 7 个人物区域 · 第 1 / 1 页 · 显示 1–7 · 按原片时间排序');
+    expect(screen.getAllByRole('article', { name: /^人物区域 / })).toHaveLength(7);
+    expect((pagination.getByRole('button', { name: '上一页人物区域' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((pagination.getByRole('button', { name: '下一页人物区域' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('starts at the first page after switching assets', async () => {
+    mockApi((url) => url.endsWith('/identity/reviews')
+      ? { status: 'completed', regions: regionRows(53, url.includes('/episode-two/') ? 'second' : 'first') } : undefined);
+    const { rerender } = render(<AudioIdentity asset={asset} onSeek={vi.fn()} onSaved={vi.fn()} />);
+    const pagination = within(await screen.findByRole('navigation', { name: '人物区域分页' }));
+    fireEvent.click(pagination.getByRole('button', { name: '下一页人物区域' }));
+    rerender(<AudioIdentity asset={{ ...asset, id: 'episode-two' }} onSeek={vi.fn()} onSaved={vi.fn()} />);
+    await screen.findByRole('article', { name: '人物区域 P0 second0000' });
+    expect(screen.getByText('共 53 个人物区域 · 第 1 / 3 页 · 显示 1–24 · 按原片时间排序')).toBeTruthy();
+    expect(screen.getAllByRole('article', { name: /^人物区域 / })).toHaveLength(24);
+    expect(screen.queryByRole('article', { name: /first/ })).toBeNull();
+  });
+
+  it('keeps the visual page bounded when a deep audio link expands the separate audio record list', async () => {
+    mockApi((url) => url.endsWith('/identity/reviews') ? { status: 'completed', regions: regionRows(53) }
+      : url.endsWith('/audio/records') ? { status: 'completed', records: Array.from({ length: 60 }, (_, index) => ({ ...record, id: 'r' + index })) } : undefined);
+    render(<AudioIdentity asset={asset} initialAudio="r59" onSeek={vi.fn()} onSaved={vi.fn()} />);
+    await screen.findByRole('article', { name: '声音记录 r59' });
+    expect(screen.getAllByRole('article', { name: /^声音记录 / })).toHaveLength(60);
+    expect(screen.getAllByRole('article', { name: /^人物区域 / })).toHaveLength(24);
+  });
+});
 
 describe('Audiovisual identity workflow', () => {
   it('shows disabled and unverified capability state, source track offsets and scoped evidence', async () => {

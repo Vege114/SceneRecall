@@ -213,7 +213,9 @@ def test_changed_source_blocks_playback_until_verified(tmp_path, synthetic):
         asset = client.post("/api/assets", json={"video_path": str(source), "subtitle_mode": "external",
                                                  "subtitle_path": str(synthetic[1])}).json()
         original = source.stat()
-        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns + 1000000))
+        # Shared Windows/WSL mounts may round explicit timestamp writes to
+        # whole seconds; still exercise a metadata-only source change.
+        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns + 2000000000))
         assert app.state.library.get_asset(asset["id"])["source_changed"]
         assert client.get(f"/api/assets/{asset['id']}/media").status_code == 400
         verified = client.post(f"/api/assets/{asset['id']}/relocate", json={"video_path": str(source)})

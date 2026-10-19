@@ -12,6 +12,11 @@ Desktop.ini
 *.mov
 .venv/
 .venv-visual/
+.venv-windows/
+.venv-visual-windows/
+.venv-visual-gpu-windows/
+.venv-lrasd-windows/
+.cache/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -27,4 +32,5 @@ frontend/.vite/
 dist/
 build/
 test-results/
+/training/
 playwright-report/

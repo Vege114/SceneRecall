@@ -31,11 +31,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from . import codex_cli
 from .file_io import atomic_replace
+from .execution import finish_on_cancel
 from .scene_preparation import (
     CONTEXTUAL_VISION_PROMPT_VERSION, MAX_PREPARATION_OUTPUT_TOKENS,
     RECONCILIATION_PROMPT_VERSION, SUBTITLE_PREPARATION_PROMPT_VERSION, VISUAL_PREPARATION_PROMPT_VERSION,
     bounded_json, checked_cues, checked_frames, contact_sheets, subtitle_context_data,
     reconciliation_scene_data, validate_scene_reconciliation, validate_subtitle_preparation, validate_visual_preparation,
+    VisualPreparation,
 )
 from .scene_preparation import PREPARATION_PROMPT_VERSION as PREPARATION_PROMPT_VERSION
 
@@ -315,6 +317,42 @@ def _vision_output_schema(frame_ids: set[str], character_ids: set[str], start_ms
     events = schema["$defs"]["Event"]["properties"]
     events["start_ms"].update(minimum=start_ms, maximum=end_ms - 1)
     events["end_ms"].update(minimum=start_ms, maximum=end_ms)
+    return schema
+
+
+def _preparation_output_schema(frame_ids: set[str], cue_ids: set[str], character_ids: set[str],
+                               start_ms: int, end_ms: int, *, named_identities: bool = True) -> dict:
+    """Give preparation the same typed identities and exact citations as vision."""
+    def strict(node):
+        if isinstance(node, list):
+            return [strict(value) for value in node]
+        if not isinstance(node, dict):
+            return node
+        value = {key: strict(item) for key, item in node.items()
+                 if key not in {"default", "title", "minLength", "maxLength"}}
+        properties = value.get("properties")
+        if isinstance(properties, dict):
+            value["required"] = list(properties)
+            value["additionalProperties"] = False
+            for field in ("frame_ids", "representative_frame_ids", "deep_frame_ids"):
+                if field in properties:
+                    properties[field]["items"] = {"type": "string", "enum": sorted(frame_ids)}
+            if "cue_ids" in properties:
+                if cue_ids:
+                    properties["cue_ids"]["items"] = {"type": "string", "enum": sorted(cue_ids)}
+                else:
+                    properties["cue_ids"].update(minItems=0, maxItems=0)
+        return value
+
+    schema = strict(VisualPreparation.model_json_schema())
+    vision = _vision_output_schema(frame_ids, character_ids, start_ms, end_ms, named_identities=named_identities)
+    for name in ("Entity", "Event"):
+        schema["$defs"][name] = vision["$defs"][name]
+    chunk = schema["$defs"]["PreparedChunk"]["properties"]
+    chunk["entities"]["items"] = {"$ref": "#/$defs/Entity"}
+    chunk["events"]["items"] = {"$ref": "#/$defs/Event"}
+    if not cue_ids:
+        chunk["dialogue_facts"]["maxItems"] = 0
     return schema
 
 
@@ -830,7 +868,8 @@ class ProviderManager:
         if context is None:
             return ""
         value = {key: context.get(key) for key in ("scope_id", "revision", "profiles")}
-        for key in ("identity_regions", "retrieval", "dossier_detail_omitted"):
+        for key in ("identity_regions", "retrieval", "reference_policy", "dossier_detail_omitted",
+                    "dossier_detail_compacted", "dossier_detail_truncated", "dossier_metadata_omitted"):
             if key in context:
                 value[key] = context[key]
         if context.get("cast_policy"):
@@ -839,7 +878,8 @@ class ProviderManager:
             value["work_summary"] = context["work_summary"]
         text = json.dumps(value, ensure_ascii=False, allow_nan=False)
         if len(text.encode("utf-8")) > MAX_CHARACTER_CONTEXT_BYTES:
-            raise ProviderError("角色档案上下文超过单次识别上限，请精简档案描述或合并重复档案后重新分析")
+            raise ProviderError("角色档案上下文超过单次识别上限，请精简档案描述或合并重复档案后重新分析",
+                                code="character_context_too_large")
         return text
 
     async def prepare_subtitles(self, id: str, cues: list[dict], story_context: dict | None = None) -> AIResult:
@@ -869,16 +909,22 @@ class ProviderManager:
     async def prepare_visual(self, id: str, frames: list[dict], context_frames: list[dict],
                              subtitle_context: dict | list | None, story_context: dict | None,
                              character_context: dict | None = None) -> AIResult:
-        self._profile(id, "preparation")
+        profile = self._profile(id, "preparation")
         checked_frames(frames, context_frames)
         version = self._scene_version(VISUAL_PREPARATION_PROMPT_VERSION)
         subtitles, cue_ids = subtitle_context_data(subtitle_context)
         cues = subtitles.get("cues", []) if isinstance(subtitles, dict) else subtitles or []
         bounds = ({key: subtitles[key] for key in ("start_ms", "end_ms") if key in subtitles}
                   if isinstance(subtitles, dict) else {})
-        context = bounded_json({"subtitle_context": subtitles, "story_context": story_context,
-                                "character_context": (json.loads(self.character_context_text(character_context))
-                                                      if character_context is not None else None)})
+        context_data = {"subtitle_context": subtitles, "story_context": story_context,
+                        "character_context": (json.loads(self.character_context_text(character_context))
+                                              if character_context is not None else None)}
+        try:
+            context = bounded_json(context_data)
+        except ValueError as exc:
+            if str(exc) != "片段上下文超过单次请求上限，请缩小准备批次":
+                raise
+            raise ProviderError(str(exc), code="character_context_too_large") from None
         prompt = (
             f"SceneRecall {version}. Read the numbered chronological contact-sheet "
             "tiles and their original frame-ID map. Write concise Chinese searchable scene summaries. "
@@ -925,7 +971,8 @@ class ProviderManager:
                 "Otherwise set content_kind=narrative. For each narrative chunk also return entities for every "
                 "clearly visible character, with id, kind, description, position, name, evidence_frame_ids, "
                 "is_character, character_id, match_confidence, match_reason, observed_traits, portrait_frame_id "
-                "and portrait_box. Entity IDs must be unique within a chunk. Compare current visible appearance "
+                "and portrait_box. Entity kind must be exactly one of person, object, animal, character, "
+                "anthropomorphic_character, other. Entity IDs must be unique within a chunk. Compare current visible appearance "
                 "with supplied dossiers and reference images, including aliases and human corrections. Return "
                 "the supplied persistent character_id only with visible matching evidence, confidence>=0.65 and "
                 "a concise visual match_reason. Biography, subtitle names and cast order alone do not identify "
@@ -973,31 +1020,45 @@ class ProviderManager:
                                                                  for entity in chunk["entities"])
             return result
 
-        with tempfile.TemporaryDirectory(prefix="scenerecall-scenes-") as directory:
-            sheets, mapping = contact_sheets(frames, context_frames, Path(directory))
-            content = [{"type": "text", "text": "Context data: " + context},
-                       {"type": "text", "text": "Original frame map: " + bounded_json(mapping)}]
-            if version in {VISUAL_PREPARATION_PROMPT_VERSION, "scene-visual-preparation-v4"}:
-                allowed = {profile["id"] for profile in (character_context or {}).get("profiles", [])}
-                references = (character_context or {}).get("reference_frames", [])
-                if len(references) > MAX_CHARACTER_REFERENCES:
-                    raise ProviderError("角色参考图数量超过单次请求上限")
-                for reference in references:
-                    if reference.get("character_id") not in allowed:
-                        raise ProviderError("角色参考图不属于当前档案范围")
-                    content.append({"type": "text", "text": "Dossier reference only, never current evidence: "
-                                    + reference["character_id"]})
-                    content.extend(self._images([{**reference, "id": "reference:" + reference["character_id"], "at_ms": 0}]))
-            if version == VISUAL_PREPARATION_PROMPT_VERSION:
-                content.extend(self._identity_images(character_context))
-            content.extend(self._images(sheets))
-            return await self._chat(id, "preparation", prompt, content,
-                                    validate,
-                                    max_output_tokens=MAX_PREPARATION_OUTPUT_TOKENS,
-                                    # Scene jobs shrink invalid image partitions and
-                                    # save each smaller result. Repeating the same
-                                    # large CLI input first only consumes more turns.
-                                    validation_attempts=1)
+        def build_content():
+            # This worker owns its directory through image encoding and cleanup.
+            with tempfile.TemporaryDirectory(prefix="scenerecall-scenes-") as directory:
+                sheets, mapping = contact_sheets(frames, context_frames, Path(directory))
+                content = [{"type": "text", "text": "Context data: " + context},
+                           {"type": "text", "text": "Original frame map: " + bounded_json(mapping)}]
+                if version in {VISUAL_PREPARATION_PROMPT_VERSION, "scene-visual-preparation-v4"}:
+                    allowed = {profile["id"] for profile in (character_context or {}).get("profiles", [])}
+                    references = (character_context or {}).get("reference_frames", [])
+                    if len(references) > MAX_CHARACTER_REFERENCES:
+                        raise ProviderError("角色参考图数量超过单次请求上限")
+                    for reference in references:
+                        if reference.get("character_id") not in allowed:
+                            raise ProviderError("角色参考图不属于当前档案范围")
+                        content.append({"type": "text", "text": "Dossier reference only, never current evidence: "
+                                        + reference["character_id"]})
+                        content.extend(self._images([{**reference, "id": "reference:" + reference["character_id"], "at_ms": 0}]))
+                if version == VISUAL_PREPARATION_PROMPT_VERSION:
+                    content.extend(self._identity_images(character_context))
+                content.extend(self._images(sheets))
+                return content
+
+        content = await finish_on_cancel(asyncio.to_thread(build_content))
+        schema = None
+        if (profile["provider_type"] == "codex_cli"
+                and version in {VISUAL_PREPARATION_PROMPT_VERSION, "scene-visual-preparation-v4"}):
+            schema = _preparation_output_schema(
+                {frame["id"] for frame in frames}, cue_ids,
+                {row["id"] for row in (character_context or {}).get("profiles", [])},
+                bounds.get("start_ms", frames[0]["at_ms"]),
+                bounds.get("end_ms", max([frames[-1]["at_ms"] + 1, *(cue["end_ms"] for cue in cues)])),
+                named_identities=(character_context or {}).get("cast_policy", {}).get("mode") != "bangumi")
+        return await self._chat(id, "preparation", prompt, content,
+                                validate,
+                                max_output_tokens=MAX_PREPARATION_OUTPUT_TOKENS,
+                                # Scene jobs shrink invalid image partitions and
+                                # save each smaller result. Repeating the same
+                                # large CLI input first only consumes more turns.
+                                validation_attempts=1, output_schema=schema)
 
     async def reconcile_scene(self, id: str, scene: dict, story_context: dict | None) -> AIResult:
         self._profile(id, "preparation")

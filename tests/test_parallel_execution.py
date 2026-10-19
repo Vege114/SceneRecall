@@ -478,4 +478,6 @@ async def test_controlled_latency_parallel_benchmark_reports_wall_time(scene_wor
     parallel_wall = accelerated["stage_metrics"]["preparation"]["wall_elapsed_ms"]
     assert parallel_wall < serial_wall * .8
     assert baseline["request_count"] == accelerated["request_count"] == 4
-    assert accelerated["stage_metrics"]["preparation"]["elapsed_ms"] >= parallel_wall
+    # elapsed_ms sums provider calls; wall_elapsed_ms also includes local
+    # publication and filesystem work, which can exceed that sum on Windows.
+    assert accelerated["stage_metrics"]["preparation"]["elapsed_ms"] >= 4 * 80

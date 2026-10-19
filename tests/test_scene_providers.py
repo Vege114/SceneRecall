@@ -345,8 +345,10 @@ async def test_compact_contextual_items_reject_dialogue_memory_and_reference_ima
 async def test_preparation_capability_works_for_codex_and_connection_test(tmp_path, monkeypatch):
     captured = []
 
-    async def complete(instruction, content, model, timeout_s):
+    async def complete(instruction, content, model, timeout_s, **kwargs):
         captured.append((instruction, deepcopy(content)))
+        assert kwargs["output_schema"]["$defs"]["Entity"]["properties"]["kind"]["enum"] == [
+            "person", "object", "animal", "character", "anthropomorphic_character", "other"]
         mapping = json.loads(next(part["text"].split(": ", 1)[1] for part in content
                                   if part.get("text", "").startswith("Original frame map:")))
         data = {"chunks": [chunk([item["frame_id"] for item in mapping if not item["reference_only"]])],

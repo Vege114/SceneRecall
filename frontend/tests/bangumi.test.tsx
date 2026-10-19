@@ -9,7 +9,7 @@ import CharacterProfiles from '../src/components/CharacterProfiles';
 const dossier = (id = 42, name = '星海'): BangumiDossier => ({ source: 'bangumi', subject: { id, name, name_cn: name, date: '2026-01-01', summary: '来自 Bangumi 的作品简介。', image_url: 'https://lain.bgm.tv/pic/cover.jpg', url: `https://bgm.tv/subject/${id}`, infobox: [] }, characters: [{ id: 9, name: '小夏', name_cn: '小夏', aliases: ['夏同学'], description: '角色现成资料。', image_url: 'https://lain.bgm.tv/pic/character.jpg', url: 'https://bgm.tv/character/9' }], fetched_at: '2026-10-14T00:00:00Z' });
 const project: Project = { id: 'anime', name: '星海', kind: 'animation', folder_id: null, tags: [], asset_count: 0 };
 function context(projects: Project[] = []): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/bangumi-ui', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.3' }, assets: [], projects, jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/bangumi-ui', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.3' }, assets: [], projects, jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function show(projects: Project[] = [], projectId?: string) {
   return render(<AppContext.Provider value={context(projects)}><ImportModal onClose={vi.fn()} projectId={projectId} /></AppContext.Provider>);

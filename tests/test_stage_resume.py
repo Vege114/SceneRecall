@@ -4,10 +4,10 @@ import os
 import pytest
 
 from scenerecall.jobs import JobQueue
+from scenerecall.library import atomic_json, digest, read_json
 from scenerecall.models import AnalysisInput
 from scenerecall.providers import ProviderError
 from scenerecall.search import SearchEngine
-from scenerecall.library import digest, read_json
 from test_jobs_review import worker as worker
 from test_search import record, vector_provider
 
@@ -158,4 +158,37 @@ async def test_legacy_macos_receipt_is_reused_without_a_second_paid_call(worker)
     second = await queue.call(job["id"], profile, queue.providers.embed, ["legacy macOS cache"], receipt_key=key)
     assert second == first
     assert queue.providers.calls == ["embedding"]
+    assert queue.get(job["id"])["request_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_logical_embedding_receipt_id_has_portable_filename_and_reuses_response(worker):
+    queue, _, _ = worker
+    job = queue.add("index", {"max_requests": 100})
+    profile = queue.providers.get("test")
+    key = "embedding:stable-logical-id"
+    arguments = (job["id"], profile, queue.providers.embed, ["合成字幕"])
+    first = await queue.call(*arguments, receipt_key=key)
+    directory = queue.library.root / "runtime" / "call-receipts" / job["id"]
+    receipt = directory / f"{digest(key)}.json"
+    assert list(directory.iterdir()) == [receipt]
+    assert read_json(receipt)["receipt_id"] == key
+    assert await queue.call(*arguments, receipt_key=key) == first
+    assert queue.providers.calls == ["embedding"]
+    assert queue.get(job["id"])["request_count"] == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Legacy colon filenames can only exist on POSIX filesystems")
+@pytest.mark.asyncio
+async def test_legacy_logical_receipt_filename_keeps_paid_response(worker):
+    queue, _, _ = worker
+    job = queue.add("index", {"max_requests": 100})
+    key = "embedding:legacy-response"
+    directory = queue.library.root / "runtime" / "call-receipts" / job["id"]
+    atomic_json(directory / f"{key}.json", {
+        "receipt_id": key, "call_id": "call_legacy", "job_id": job["id"], "stage": "index",
+        "data": [[1.0, 0.1]], "usage": {}, "request_count": 1, "cost": 0.01, "elapsed_ms": 1})
+    assert await queue.call(job["id"], queue.providers.get("test"), queue.providers.embed,
+                            ["cached"], receipt_key=key) == [[1.0, 0.1]]
+    assert queue.providers.calls == []
     assert queue.get(job["id"])["request_count"] == 1

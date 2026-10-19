@@ -53,7 +53,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @asynccontextmanager
     async def lifespan(app):
         # Reconcile derived lexical records with source files on every launch.
-        await search.rebuild(library.records())
+        await search.rebuild_from_source(library.records)
         if start_worker:
             await queue.start()
         yield
@@ -247,6 +247,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     register_visual_identity_routes(app, library, search)
     app.state.audio_identity = register_audio_routes(app, library, characters,
         refresh=lambda asset_id: search.sync_asset(library.records(asset_id), asset_id=asset_id))
+    queue.lrasd_previews = app.state.audio_identity.lrasd_previews
 
     @app.get("/api/assets")
     def assets():
@@ -275,7 +276,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         if payload.subtitle_mode == "embedded" and not settings()["bindings"].get("subtitle"):
             raise ValueError("画面内嵌字幕模式请先配置并绑定字幕视觉模型")
         asset = await asyncio.to_thread(library.register, payload)
-        await search.rebuild(library.records())
+        await search.rebuild_from_source(library.records)
         return asset_view(asset)
 
     @app.get("/api/assets/{asset_id}/subtitle-tracks")
@@ -287,13 +288,13 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     async def asset_subtitle_extract(asset_id: str, payload: SubtitleExtractInput):
         asset = await asyncio.to_thread(library.extract_subtitles, asset_id,
                                        payload.subtitle_stream_index, payload.subtitle_offset_ms)
-        await search.rebuild(library.records())
+        await search.rebuild_from_source(library.records)
         return asset_view(asset)
 
     @app.get("/api/assets/{asset_id}")
     def asset_detail(asset_id: str):
         asset = asset_view(library.get_asset(asset_id))
-        projection = {r["id"]: r for r in library.records(asset_id)}
+        projection = {r["id"]: r for r in library.records(asset_id, compact_subtitles=False)}
         observations = [{**r, "model_summary": r["summary"],
                          **{k: projection[r["id"]][k] for k in ("summary", "entities", "review_status", "note", "favorite") if r["id"] in projection},
                          "asset_id": asset_id} for r in library.observations(asset_id) if r["id"] in projection]
@@ -331,7 +332,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     def refresh_character_search(asset_id: str):
         # Dossiers are shared across episodes, so all affected projections change.
         for related in characters.catalog(asset_id)["assets"]:
-            search.upsert(library.records(related["id"]))
+            search.sync_asset(library.records(related["id"]), related["id"])
 
     @app.get("/api/assets/{asset_id}/characters")
     def character_catalog(asset_id: str):
@@ -457,7 +458,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         bindings = settings()["bindings"]
         result = await search.search(payload.query, filters=payload.filters, limit=payload.limit,
                                     **{k + "_profile_id": bindings.get(k) for k in ("embedding", "query", "decision", "answer")})
-        actual_records = {r["id"]: r for r in library.records()}
+        actual_records = {r["id"]: r for r in await asyncio.to_thread(library.records)}
         results = []
         changed = False
         for record in result.get("results", []):
@@ -498,10 +499,14 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.post("/api/assets/{asset_id}/annotations")
     async def annotation(asset_id: str, payload: AnnotationInput):
-        value = library.annotate(asset_id, payload.model_dump(exclude_unset=True))
-        # Refresh lexical projection immediately; vector namespace reports staleness until rebuild.
-        search.upsert(library.records(asset_id))
-        return value
+        def save():
+            with library.lock:
+                value = library.annotate(asset_id, payload.model_dump(exclude_unset=True))
+                # Refresh immediately, retiring any superseded compacted cues.
+                # Existing vectors remain available for unchanged text hashes.
+                search.sync_asset(library.records(asset_id), asset_id)
+                return value
+        return await asyncio.to_thread(save)
 
     @app.get("/api/collections")
     def collections():
@@ -556,7 +561,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             result = await asyncio.to_thread(library.restore, path)
         except zipfile.BadZipFile as exc:
             raise ValueError("所选文件不是有效的 ZIP 备份") from exc
-        await search.rebuild(library.records())
+        await search.rebuild_from_source(library.records)
         return result
 
     @app.post("/api/backups/restore-local")

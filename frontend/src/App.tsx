@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ArrowRight, Bookmark, Check, ChevronRight, Clapperboard, Film, HardDrive, KeyRound, Menu, Plus, Search, Settings2, ShieldCheck, Workflow, Trash2, X } from 'lucide-react';
 import { api, ApiError, message, post } from './api';
 import { AppContext } from './context';
@@ -13,6 +13,16 @@ import AssetDetail from './components/AssetDetail';
 import ImportModal from './components/ImportModal';
 import JobModal from './components/JobModal';
 import { Alert, Spinner } from './components/ui';
+
+type FollowupRefresh = { after: Promise<void>; promise: Promise<void> };
+function afterCurrentRefresh(current: Promise<void>, queued: { current: FollowupRefresh | null }, start: () => Promise<void>): Promise<void> {
+  if (queued.current?.after === current) return queued.current.promise;
+  const pending = current.catch(() => undefined).then(start).finally(() => {
+    if (queued.current?.promise === pending) queued.current = null;
+  });
+  queued.current = { after: current, promise: pending };
+  return pending;
+}
 
 function useRoute() {
   const [hash, setHash] = useState(window.location.hash || '#/library');
@@ -51,11 +61,77 @@ export default function App() {
   const [jobAsset, setJobAsset] = useState<Asset | null>(null);
   const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error'; key: number } | null>(null);
   const [mobileNav, setMobileNav] = useState(false);
-  const refresh = useCallback(async () => {
-    const [data, allAssets, allJobs, allProjects, allFolders] = await Promise.all([api<Bootstrap>('/bootstrap'), api<Asset[]>('/assets'), api<Job[]>('/jobs'), api<Project[]>('/projects'), api<Folder[]>('/folders')]);
-    setProjects(allProjects); setFolders(allFolders);
-    setBootstrap(data); setAssets(allAssets); setJobs(allJobs); setAuth('ready'); setConnectionError('');
+  const bootstrapReady = useRef(false);
+  const requestEpoch = useRef(0);
+  const bootstrapFlight = useRef<Promise<void> | null>(null);
+  const libraryFlight = useRef<Promise<void> | null>(null);
+  const jobsFlight = useRef<Promise<void> | null>(null);
+  const bootstrapFollowup = useRef<FollowupRefresh | null>(null);
+  const libraryFollowup = useRef<FollowupRefresh | null>(null);
+  const jobsFollowup = useRef<FollowupRefresh | null>(null);
+  const bootstrapRevision = useRef(0);
+  const libraryRevision = useRef(0);
+  const jobsRevision = useRef(0);
+  const refreshBootstrap = useCallback((afterMutation = false): Promise<void> => {
+    const epoch = requestEpoch.current;
+    if (afterMutation) bootstrapRevision.current += 1;
+    if (bootstrapFlight.current) return afterMutation
+      ? afterCurrentRefresh(bootstrapFlight.current, bootstrapFollowup, () => requestEpoch.current === epoch ? refreshBootstrap() : Promise.resolve())
+      : bootstrapFlight.current;
+    const revision = bootstrapRevision.current;
+    const pending = api<Bootstrap>('/bootstrap').then((data) => {
+      if (requestEpoch.current === epoch && bootstrapRevision.current === revision) { setBootstrap(data); bootstrapReady.current = true; }
+    }).finally(() => { if (bootstrapFlight.current === pending) bootstrapFlight.current = null; });
+    bootstrapFlight.current = pending;
+    return pending;
   }, []);
+  const refreshLibrary = useCallback((afterMutation = false): Promise<void> => {
+    const epoch = requestEpoch.current;
+    if (afterMutation) libraryRevision.current += 1;
+    if (libraryFlight.current) return afterMutation
+      ? afterCurrentRefresh(libraryFlight.current, libraryFollowup, () => requestEpoch.current === epoch ? refreshLibrary() : Promise.resolve())
+      : libraryFlight.current;
+    const revision = libraryRevision.current;
+    const current = () => requestEpoch.current === epoch && libraryRevision.current === revision;
+    const pending = Promise.allSettled([
+      api<Asset[]>('/assets').then((data) => { if (current()) setAssets(data); }),
+      api<Project[]>('/projects').then((data) => { if (current()) setProjects(data); }),
+      api<Folder[]>('/folders').then((data) => { if (current()) setFolders(data); }),
+    ]).then((results) => {
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+    }).finally(() => { if (libraryFlight.current === pending) libraryFlight.current = null; });
+    libraryFlight.current = pending;
+    return pending;
+  }, []);
+  const refreshJobs = useCallback((afterMutation = false): Promise<void> => {
+    const epoch = requestEpoch.current;
+    if (afterMutation) jobsRevision.current += 1;
+    if (jobsFlight.current) return afterMutation
+      ? afterCurrentRefresh(jobsFlight.current, jobsFollowup, () => requestEpoch.current === epoch ? refreshJobs() : Promise.resolve())
+      : jobsFlight.current;
+    const revision = jobsRevision.current;
+    // Every refresh uses this one request and publishes its result immediately.
+    // A slow bootstrap can neither delay nor overwrite a newer jobs response.
+    const pending = api<Job[]>('/jobs').then((data) => {
+      if (requestEpoch.current === epoch && jobsRevision.current === revision) setJobs(data);
+    }).finally(() => { if (jobsFlight.current === pending) jobsFlight.current = null; });
+    jobsFlight.current = pending;
+    return pending;
+  }, []);
+  const refresh = useCallback(async () => {
+    const epoch = requestEpoch.current;
+    const initial = !bootstrapReady.current;
+    // Explicit callers have just changed server state. A GET started before
+    // that operation is dirty: discard its snapshot and follow it with one
+    // fresh request. Polls still merge with whichever request is in flight.
+    const pendingBootstrap = refreshBootstrap(!initial);
+    // Once connected, mutations need fresh lists without waiting for expensive
+    // aggregate bootstrap statistics. Settings still update when that finishes.
+    if (!initial) void pendingBootstrap.catch(() => undefined);
+    await Promise.all([...(initial ? [pendingBootstrap] : []), refreshLibrary(!initial), refreshJobs(!initial)]);
+    if (requestEpoch.current === epoch) { setAuth('ready'); setConnectionError(''); }
+  }, [refreshBootstrap, refreshLibrary, refreshJobs]);
   const notify = useCallback((message: string, kind: 'success' | 'error' = 'success') => setToast({ message, kind, key: Date.now() }), []);
   useEffect(() => {
     const init = async () => {
@@ -66,15 +142,43 @@ export default function App() {
       catch (error) { setAuth(error instanceof ApiError && error.status === 401 ? 'required' : 'error'); setConnectionError(error instanceof ApiError && error.status === 401 ? '' : message(error)); }
     };
     void init();
-    const expired = () => setAuth('required'); window.addEventListener('session-expired', expired);
-    return () => window.removeEventListener('session-expired', expired);
+    const invalidate = () => { requestEpoch.current += 1; bootstrapReady.current = false; bootstrapFlight.current = null; libraryFlight.current = null; jobsFlight.current = null; bootstrapFollowup.current = null; libraryFollowup.current = null; jobsFollowup.current = null; };
+    const expired = () => { invalidate(); setAuth('required'); }; window.addEventListener('session-expired', expired);
+    return () => { window.removeEventListener('session-expired', expired); invalidate(); };
   }, [refresh]);
   useEffect(() => {
     if (auth !== 'ready') return;
-    const jobsTimer = window.setInterval(() => { void api<Job[]>('/jobs').then(setJobs).catch(() => undefined); }, 4000);
-    const dataTimer = window.setInterval(() => { void refresh().catch(() => undefined); }, 20000);
-    return () => { window.clearInterval(jobsTimer); window.clearInterval(dataTimer); };
-  }, [auth, refresh]);
+    let generation = 0;
+    let jobsTimer: number | undefined;
+    let dataTimer: number | undefined;
+    const active = (current: number) => generation === current && !document.hidden;
+    const pollJobs = async (current: number) => {
+      if (!active(current)) return;
+      try { await refreshJobs(); } catch { /* Retry after the next polling delay. */ }
+      if (active(current)) jobsTimer = window.setTimeout(() => void pollJobs(current), 4000);
+    };
+    const pollData = async (current: number) => {
+      // Queue controls need only lightweight job snapshots while local analysis
+      // is busy. Keep aggregate projections off this page's polling path.
+      if (!active(current) || route.page === 'jobs') return;
+      // Jobs have their own fast loop; the slower library loop never requests
+      // another jobs snapshot, and waits for its aggregate request to settle.
+      try { await Promise.all([refreshBootstrap(), refreshLibrary()]); } catch { /* Keep the last loaded library visible. */ }
+      if (active(current)) dataTimer = window.setTimeout(() => void pollData(current), 20000);
+    };
+    const stopTimers = () => { generation += 1; window.clearTimeout(jobsTimer); window.clearTimeout(dataTimer); };
+    const resume = () => {
+      stopTimers();
+      if (!document.hidden) { void pollJobs(generation); void pollData(generation); }
+    };
+    if (!document.hidden) {
+      const current = generation;
+      jobsTimer = window.setTimeout(() => void pollJobs(current), 4000);
+      if (route.page !== 'jobs') dataTimer = window.setTimeout(() => void pollData(current), 20000);
+    }
+    document.addEventListener('visibilitychange', resume);
+    return () => { stopTimers(); document.removeEventListener('visibilitychange', resume); };
+  }, [auth, route.page, refreshBootstrap, refreshLibrary, refreshJobs]);
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(null), toast.kind === 'error' ? 7000 : 4500); return () => window.clearTimeout(timer); }, [toast]);
   useEffect(() => { setMobileNav(false); }, [route.page]);
   if (auth === 'loading') return <div className="app-loading"><div className="brand-mark"><Clapperboard size={25} /></div><h1>SceneRecall</h1><Spinner label="正在打开本地资料库" /></div>;
@@ -83,5 +187,5 @@ export default function App() {
   const nav = [{ id: 'library', label: '我的资料库', icon: Film }, { id: 'search', label: '镜头检索', icon: Search }, { id: 'collections', label: '片段收藏', icon: Bookmark }, { id: 'jobs', label: '任务队列', icon: Workflow }, { id: 'trash', label: '回收站', icon: Trash2 }];
   const activeJobs = jobs.filter((job) => ['running', 'queued', 'pending'].includes(job.status)).length;
   const currentName = route.page === 'settings' ? '模型与设置' : route.page === 'asset' ? '作品详情' : nav.find((item) => item.id === route.page)?.label || '我的资料库';
-  return <AppContext.Provider value={{ bootstrap, assets, jobs, projects, folders, refresh, notify, openImport: (projectId) => { setImportProject(projectId); setShowImport(true); }, openJob: setJobAsset, openJobs: setJobAssets }}><div className="app-shell">{mobileNav && <div className="mobile-scrim" onClick={() => setMobileNav(false)} />}<aside className={`sidebar ${mobileNav ? 'open' : ''}`}><a className="brand" href="#/library"><div className="brand-mark"><Clapperboard size={24} strokeWidth={1.6} /></div><div><strong>SceneRecall</strong><span>你的影视记忆库</span></div></a><div className="sidebar-label">WORKSPACE</div><nav aria-label="主要导航">{nav.map(({ id, label, icon: Icon }) => <a className={route.page === id || (id === 'library' && route.page === 'asset') ? 'active' : ''} href={`#/${id}`} key={id}><Icon size={19} strokeWidth={1.6} /><span>{label}</span>{id === 'library' && <small>{assets.length}</small>}{id === 'jobs' && activeJobs > 0 && <small className="active-count">{activeJobs}</small>}</a>)}</nav><div className="sidebar-divider" /><a className={`sidebar-settings ${route.page === 'settings' ? 'active' : ''}`} href="#/settings"><Settings2 size={19} strokeWidth={1.6} /><span>模型与设置</span></a><div className="sidebar-bottom"><div className="local-card"><HardDrive size={19} /><div><strong>本地工作空间</strong><span><span className="online-dot" />资料保存在此电脑</span></div></div><div className="sidebar-footer"><span>SCENERECALL</span><span>v{bootstrap.version}</span></div></div></aside><div className="main-shell"><header className="topbar"><div><button className="icon-button menu-toggle" aria-label="打开导航" onClick={() => setMobileNav(!mobileNav)}><Menu size={21} /></button><span className="breadcrumb">工作空间 <ChevronRight size={14} /><strong>{currentName}</strong></span></div><div className="topbar-right"><span className="local-indicator"><span className="online-dot" />本地服务已连接</span><span className="topbar-separator" /><button className="icon-button" title="导入作品" aria-label="导入作品" onClick={() => setShowImport(true)}><Plus size={20} /></button><span className="user-avatar">我</span></div></header><main className={`main-content ${route.page === 'asset' ? 'detail-page' : ''}`}>{route.page === 'search' ? <SearchPage /> : route.page === 'jobs' ? <Jobs /> : route.page === 'collections' ? <Collection /> : route.page === 'settings' ? <Settings /> : route.page === 'trash' ? <Trash /> : route.page === 'asset' && route.id ? <AssetDetail key={route.id} id={route.id} initialTime={route.atMs} initialCue={route.cueId} initialChunk={route.chunkId} initialAudio={route.audioId} /> : <Library />}</main><footer className="main-footer"><span>每个片段，都有出处。</span><span>LOCAL FIRST. YOUR MEMORY, YOUR MODELS.</span></footer></div></div>{showImport && <ImportModal projectId={importProject} onClose={() => { setShowImport(false); setImportProject(undefined); }} />}{jobAssets && <JobModal assets={jobAssets} onClose={() => setJobAssets(null)} />}{jobAsset && <JobModal asset={jobAsset} onClose={() => setJobAsset(null)} />}{toast && <div className={`toast toast-${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'}>{toast.kind === 'success' ? <Check size={18} /> : <X size={18} />}<span>{toast.message}</span><button className="icon-button" onClick={() => setToast(null)} aria-label="关闭提示"><X size={15} /></button></div>}</AppContext.Provider>;
+  return <AppContext.Provider value={{ bootstrap, assets, jobs, projects, folders, refresh, refreshJobs, notify, openImport: (projectId) => { setImportProject(projectId); setShowImport(true); }, openJob: setJobAsset, openJobs: setJobAssets }}><div className="app-shell">{mobileNav && <div className="mobile-scrim" onClick={() => setMobileNav(false)} />}<aside className={`sidebar ${mobileNav ? 'open' : ''}`}><a className="brand" href="#/library"><div className="brand-mark"><Clapperboard size={24} strokeWidth={1.6} /></div><div><strong>SceneRecall</strong><span>你的影视记忆库</span></div></a><div className="sidebar-label">WORKSPACE</div><nav aria-label="主要导航">{nav.map(({ id, label, icon: Icon }) => <a className={route.page === id || (id === 'library' && route.page === 'asset') ? 'active' : ''} href={`#/${id}`} key={id}><Icon size={19} strokeWidth={1.6} /><span>{label}</span>{id === 'library' && <small>{assets.length}</small>}{id === 'jobs' && activeJobs > 0 && <small className="active-count">{activeJobs}</small>}</a>)}</nav><div className="sidebar-divider" /><a className={`sidebar-settings ${route.page === 'settings' ? 'active' : ''}`} href="#/settings"><Settings2 size={19} strokeWidth={1.6} /><span>模型与设置</span></a><div className="sidebar-bottom"><div className="local-card"><HardDrive size={19} /><div><strong>本地工作空间</strong><span><span className="online-dot" />资料保存在此电脑</span></div></div><div className="sidebar-footer"><span>SCENERECALL</span><span>v{bootstrap.version}</span></div></div></aside><div className="main-shell"><header className="topbar"><div><button className="icon-button menu-toggle" aria-label="打开导航" onClick={() => setMobileNav(!mobileNav)}><Menu size={21} /></button><span className="breadcrumb">工作空间 <ChevronRight size={14} /><strong>{currentName}</strong></span></div><div className="topbar-right"><span className="local-indicator"><span className="online-dot" />本地服务已连接</span><span className="topbar-separator" /><button className="icon-button" title="导入作品" aria-label="导入作品" onClick={() => setShowImport(true)}><Plus size={20} /></button><span className="user-avatar">我</span></div></header><main className={`main-content ${route.page === 'asset' ? 'detail-page' : ''}`}>{route.page === 'search' ? <SearchPage /> : route.page === 'jobs' ? <Jobs /> : route.page === 'collections' ? <Collection /> : route.page === 'settings' ? <Settings /> : route.page === 'trash' ? <Trash /> : route.page === 'asset' && route.id ? <AssetDetail key={route.id} id={route.id} initialTime={route.atMs} initialCue={route.cueId} initialChunk={route.chunkId} initialAudio={route.audioId} /> : <Library />}</main><footer className="main-footer"><span>每个片段，都有出处。</span><span>LOCAL FIRST. YOUR MEMORY, YOUR MODELS.</span></footer></div></div>{showImport && <ImportModal projectId={importProject} onClose={() => { setShowImport(false); setImportProject(undefined); }} />}{jobAssets && <JobModal assets={jobAssets} onClose={() => setJobAssets(null)} />}{jobAsset && <JobModal asset={jobAsset} onClose={() => setJobAsset(null)} />}{toast && <div className={`toast toast-${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'}>{toast.kind === 'success' ? <Check size={18} /> : <X size={18} />}<span>{toast.message}</span><button className="icon-button" onClick={() => setToast(null)} aria-label="关闭提示"><X size={15} /></button></div>}</AppContext.Provider>;
 }

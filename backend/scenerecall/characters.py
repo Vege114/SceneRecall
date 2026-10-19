@@ -584,8 +584,9 @@ class CharacterStore:
                 self.library, asset_id, [copy.deepcopy(record)], strict=True)[0]).model_dump()
             if result["asset_id"] != asset_id or result["end_ms"] > asset["duration_ms"]:
                 raise ValueError("角色证据不属于当前视频时间轴")
-            for frame_id in result["evidence_frame_ids"]:
-                self.library.frame_path(asset_id, frame_id)
+            if result["evidence_frame_ids"]:
+                # Validate every path against one operation's registry snapshot.
+                self.library.frame_paths(asset_id, result["evidence_frame_ids"])
             for entity in result["entities"]:
                 checked_id(entity["id"])
                 if not set(entity.get("evidence_frame_ids", [])).issubset(result["evidence_frame_ids"]):

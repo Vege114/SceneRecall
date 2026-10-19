@@ -40,6 +40,32 @@ def test_full_roster_before_topk_and_frame_local_identifiers():
     assert value["match_confidence"] is None and value["identity_match"]["distance"] == .05
 
 
+@pytest.mark.parametrize("regions", [[], [region(status="unknown")]])
+def test_no_visual_match_preserves_bangumi_roster_as_unverified_prior(regions):
+    context = {"profiles": [{"id": "c19", "name": "Bangumi role",
+                             "external_source": {"source": "bangumi"},
+                             "reference_policy": "Prior only; current video must establish presence."}],
+               "reference_frames": [{"id": "reference:prior", "path": "/prior.png", "reference_only": True}]}
+    original = deepcopy(context)
+    selected = identity_context(context, {"status": "completed", "regions": regions,
+                                         "selected_profiles": [], "references": []}, [{"id": "f1"}])
+    assert selected["profiles"] == original["profiles"]
+    assert selected["reference_frames"] == original["reference_frames"]
+    assert selected["retrieval"]["identity_status"] == "unverified_prior"
+    assert selected["retrieval"]["presence_verified"] is False
+    assert context == original
+    value = bind_identity_evidence([entity()], selected)[0]
+    assert value["character_id"] is None and value["association_status"] == "unknown"
+    assert value["name"] is None  # Preserving a roster must not establish presence.
+
+
+def test_candidate_retrieval_keeps_existing_bangumi_reference_policy():
+    context = {"profiles": [{"id": "c19", "name": "Bangumi role", "reference_policy": "Prior only"}]}
+    selected = identity_context(context, {"status": "completed", "regions": [region()],
+        "selected_profiles": [{"id": "c19", "name": "Raw catalog role"}]}, [{"id": "f1"}])
+    assert selected["profiles"] == context["profiles"]
+
+
 def test_confirmed_regions_require_current_visual_evidence():
     context = {"identity_regions": [region(status="confirmed")]}
     confirmed = bind_identity_evidence([entity()], context)[0]
