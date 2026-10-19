@@ -63,6 +63,22 @@ export interface LRASDPreviewResult {
   timings?: Record<string, number>; reason?: string; cache_hit?: boolean; clip_url?: string;
   model_version?: string; checkpoint_sha256?: string; preprocessing?: string; score_domain?: string;
 }
+export interface LRASDSceneReview extends LRASDPreviewResult {
+  scene_id: string; scene_start_ms: number; scene_end_ms: number;
+  start_ms: number; end_ms: number; review_status: 'candidate';
+  subtitle_ids: string[]; frame_ids: string[]; audio_record_ids: string[];
+}
+export interface LRASDSceneReviewRun {
+  run_id: string; job_id: string; created_at?: string; source?: 'full_scene_job';
+  status: 'running' | 'completed' | 'partial' | 'unavailable';
+  coverage: { mode: 'bounded_scene_sample'; max_windows: number; selected_windows: number;
+    selected_duration_ms: number; analysis_duration_ms: number; full_episode_scored: false };
+  degraded: string[]; reviews: LRASDSceneReview[];
+}
+export interface LRASDSceneReviewsResult {
+  status: 'not_started' | 'running' | 'completed' | 'partial' | 'unavailable';
+  runs: LRASDSceneReviewRun[];
+}
 export interface BangumiReferenceCacheResult {
   imported: number; existing: number; skipped: number;
   errors: { character_id: string; reason: string }[]; references?: CharacterReference[];

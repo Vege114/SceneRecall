@@ -205,6 +205,33 @@ class LrasdPreviewService:
             thread.start()
             return value
 
+    def run_for_job(self, asset_id, start_ms, end_ms, *, expected_settings, checkpoint):
+        """Wait for a continuous-media sample owned by a durable scene job.
+
+        GUI previews and queued samples share this instance and its busy guard.
+        On pause/cancel, drain the admitted worker before returning control.
+        """
+        checkpoint()
+        if self.audio.settings(asset_id) != expected_settings:
+            raise ValueError("视听身份配置已变化，请新建任务")
+        value = self.start(asset_id, start_ms, end_ms)
+        thread = None
+        try:
+            while value.get("status") == "running":
+                checkpoint()
+                with self._guard:
+                    current = self._running.get(asset_id)
+                    thread = current[1] if current and current[0] == value["job_id"] else None
+                if thread:
+                    thread.join(timeout=.25)
+                value = self.latest(asset_id)
+            checkpoint()
+            return value
+        except BaseException:
+            if thread is not None:
+                thread.join()
+            raise
+
     def _worker(self, python, module, directory, *, timeout):
         environment = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
                            OMP_NUM_THREADS="2")

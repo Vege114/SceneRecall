@@ -179,6 +179,11 @@ def register_audio_routes(app, library, characters=None, refresh=None) -> AudioI
     async def get_lrasd_preview(asset_id: str):
         return await asyncio.to_thread(previews.latest, asset_id)
 
+    @app.get("/api/assets/{asset_id}/audio/lrasd-scene-reviews")
+    async def get_lrasd_scene_reviews(asset_id: str):
+        from .scene_lrasd import list_reviews
+        return await asyncio.to_thread(list_reviews, library, asset_id)
+
     @app.get("/api/assets/{asset_id}/audio/lrasd-previews/{key}/tracks/{track_id}/thumbnail")
     async def lrasd_preview_thumbnail(asset_id: str, key: str, track_id: str):
         return FileResponse(previews.thumbnail(asset_id, key, track_id), media_type="image/png")

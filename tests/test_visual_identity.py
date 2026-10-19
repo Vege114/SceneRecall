@@ -82,6 +82,18 @@ def add_reference(gallery, identity, red=90):
     return gallery.add("asset_one", identity, picture(red), confirmed=True, single_character=True)
 
 
+def test_visual_frame_progress_counts_processed_frames_including_cached_empty_frames(visual):
+    library, _characters, _gallery = visual
+    frames = [frame(library, identifier=f"frame_{index}", at_ms=index * 40) for index in range(3)]
+    backend = FakeCCIP(boxes=[])
+    pipeline = VisualIdentityPipeline(library, backend)
+    first, cached = [], []
+    assert pipeline.run("asset_one", frames, {"enabled": True}, progress=lambda done, total: first.append((done, total)))["status"] == "completed"
+    assert pipeline.run("asset_one", frames, {"enabled": True}, progress=lambda done, total: cached.append((done, total)))["status"] == "completed"
+    assert first == cached == [(0, 3), (1, 3), (2, 3), (3, 3)]
+    assert backend.detection_calls == 3
+
+
 def test_first_appearance_independent_reference_and_no_fabricated_presence(visual):
     library, characters, gallery = visual
     identity = add_role(characters)
@@ -181,6 +193,76 @@ def test_unknown_quality_and_unconfirmed_samples_never_pollute_trusted_gallery(v
     result = VisualIdentityPipeline(library, FakeCCIP()).run("asset_one", [frame(library)], {"enabled": True})
     assert result["regions"][0]["match"]["status"] == "unknown"
     assert len(gallery.list("asset_one")["references"]) == 1
+
+
+def test_cached_bangumi_candidate_can_retrieve_but_never_confirm_identity(visual):
+    from scenerecall.identity_scene import bind_identity_evidence, identity_context
+    library, characters, gallery = visual
+    identity = add_role(characters)
+    other = add_role(characters, "Other")
+    # A downloaded image must exactly match stored Bangumi provenance. A plain
+    # unconfirmed upload remains excluded, as covered by the preceding test.
+    scope = characters.catalog("asset_one")["scope_id"]
+    registry = characters._read(scope)
+    url = "https://lain.bgm.tv/pic/crt/l/fixture.jpg"
+    registry["profiles"][identity]["external_source"] = {
+        "source": "bangumi", "subject_id": 1, "character_id": 1, "image_url": url,
+        "url": "https://bgm.tv/character/1", "fetched_at": "2026-10-18T00:00:00Z"}
+    atomic_json(library.root / "works" / scope / "characters.json", registry)
+    reference = gallery.add("asset_one", identity, picture(20), source_kind="external_cached", source_url=url)
+    add_reference(gallery, other, 220)
+    assert reference["status"] == "candidate"
+    assert not reference["quality"]["accepted"]  # No human single-character confirmation.
+    assert [row["character_id"] for row in gallery.trusted("asset_one")] == [other]
+    calibration = {"model_version": "synthetic-ccip-v1", "dataset_id": "synthetic", "evaluation_id": "fixture",
+                   "aggregation": "nearest-two-mean-v1", "max_distance": .1, "min_margin": .1}
+    pipeline = VisualIdentityPipeline(library, FakeCCIP())
+    current = frame(library, red=20)
+    result = pipeline.run("asset_one", [current], {"enabled": True, "calibration": calibration})
+    match = result["regions"][0]["match"]
+    assert match["source"] == "ccip_unverified_reference"
+    assert match["status"] == "candidate" and match["candidate_character_id"] == identity
+    assert match["character_id"] is None and match["calibration_id"] is None
+    assert result["references"][0]["reference_status"] == "candidate"
+    assert result["references"][0]["human_confirmed"] is False
+    assert result["references"][0]["reference_only"] is True
+    context = identity_context(characters.context("asset_one"), result, [current])
+    bound = bind_identity_evidence([{"id": "P1", "kind": "person", "name": "Unverified name",
+        "character_id": identity, "identity_region_id": result["regions"][0]["id"],
+        "evidence_frame_ids": [current["id"]]}], context)[0]
+    assert bound["character_id"] is None and bound["name"] is None
+    assert bound["association_status"] == "candidate"
+    decorated = characters.decorate_observations("asset_one", [{"evidence_frame_ids": [current["id"]],
+        "entities": [bound]}])[0]["entities"][0]
+    assert decorated["association_status"] == "candidate" and decorated["character_id"] is None
+    assert characters.catalog("asset_one")["profiles"][0]["appearance_count"] == 0
+    assert [row["character_id"] for row in gallery.trusted("asset_one")] == [other]
+    assert gallery.list("asset_one", identity)["references"][0]["status"] == "candidate"
+    resumed = pipeline.project_result("asset_one", result)
+    assert resumed["regions"][0]["match"]["status"] == "candidate"
+    assert resumed["references"][0]["human_confirmed"] is False
+    gallery.update("asset_one", identity, reference["id"], status="revoked", reason="Wrong Bangumi sample")
+    revoked = pipeline.project_result("asset_one", result)
+    assert revoked["regions"][0]["match"]["status"] == "unknown"
+    assert revoked["regions"][0]["match"]["candidate_character_id"] is None
+    assert revoked["references"] == [] and revoked["selected_profiles"] == []
+
+
+def test_unrelated_external_candidate_image_cannot_supply_bangumi_identity(visual):
+    library, characters, gallery = visual
+    identity = add_role(characters)
+    scope = characters.catalog("asset_one")["scope_id"]
+    registry = characters._read(scope)
+    registry["profiles"][identity]["external_source"] = {
+        "source": "bangumi", "subject_id": 1, "character_id": 1,
+        "image_url": "https://lain.bgm.tv/pic/crt/l/stored.jpg",
+        "url": "https://bgm.tv/character/1", "fetched_at": "2026-10-18T00:00:00Z"}
+    atomic_json(library.root / "works" / scope / "characters.json", registry)
+    gallery.add("asset_one", identity, picture(), source_kind="external_cached",
+                source_url="https://example.invalid/unrelated.jpg")
+    result = VisualIdentityPipeline(library, FakeCCIP()).run("asset_one", [frame(library)], {"enabled": True})
+    assert result["regions"][0]["match"]["status"] == "unknown"
+    assert gallery.trusted("asset_one") == []
 
 
 def test_reference_revocation_has_audit_and_invalidates_match_not_features(visual):

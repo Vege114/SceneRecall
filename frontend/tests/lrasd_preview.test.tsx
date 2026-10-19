@@ -14,7 +14,7 @@ const configuration: AudioConfiguration = {
 const defaultProps = { endpoint: '/assets/kaguya/audio', durationMs: 120000, initialStartMs: 10000, sourceAvailable: true, hasAudio: true, configuration, settingsDirty: false, disabled: false, profiles: [profile], onSeek: vi.fn(), onRunningChange: vi.fn() };
 
 function mockFetch(handler: (url: string, options?: RequestInit) => unknown) {
-  const fetch = vi.fn(async (url: string, options?: RequestInit) => new Response(JSON.stringify(await handler(url, options)), { status: 200 }));
+  const fetch = vi.fn(async (url: string, options?: RequestInit) => new Response(JSON.stringify(url.endsWith('/lrasd-scene-reviews') ? { status: 'not_started', runs: [] } : await handler(url, options)), { status: 200 }));
   vi.stubGlobal('fetch', fetch);
   return fetch;
 }
@@ -29,7 +29,7 @@ describe('LR-ASD short-preview workflow', () => {
     });
     const onRunningChange = vi.fn(); const onSeek = vi.fn();
     render(<LRASDPreview {...defaultProps} onRunningChange={onRunningChange} onSeek={onSeek} />);
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     expect(fetch.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
     const button = screen.getByRole('button', { name: '试跑 LR-ASD 短片段' }) as HTMLButtonElement;
     expect(button.disabled).toBe(false);
@@ -71,7 +71,7 @@ describe('LR-ASD short-preview workflow', () => {
   it('shows no-track and unavailable reasons without inventing successful identities', async () => {
     const fetch = mockFetch((_url, options) => options?.method === 'POST' ? { status: 'no_tracks', reason: '人物连续帧不足', tracks: [] } : { status: 'not_started' });
     render(<LRASDPreview {...defaultProps} />);
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: '试跑 LR-ASD 短片段' }));
     await screen.findByText('没有可评分的连续人物轨迹');
     expect(screen.getByText('人物连续帧不足')).toBeTruthy();

@@ -11,6 +11,39 @@ from .identity_scene import identity_context, project_audio_evidence
 
 
 class IdentityJobMixin:
+    async def prepare_scene_lrasd(self, job_id, chunks, cues, frames, shots):
+        from .scene_lrasd import VERSION, enabled, receipt_path, run_reviews
+
+        job = self.checkpoint(job_id)
+        settings = (job["config"].get("identity_settings") or {}).get("audio", {})
+        if not enabled(settings) or job["config"].get("lrasd_scene_sampling_version") != VERSION:
+            return
+        if settings != self.identity_settings(job["asset_id"])["audio"]:
+            raise ValueError("视听身份配置已变化，请新建任务")
+        previews = getattr(self, "lrasd_previews", None)
+        if previews is None:
+            from .audio_identity import AudioIdentityService
+            from .lrasd_preview import LrasdPreviewService
+            previews = self.lrasd_previews = LrasdPreviewService(AudioIdentityService(self.library, self.characters))
+        saved = read_json(self._identity_path(job), {})
+        records = saved.get("audio", {}).get("records", [])
+        started = time.monotonic()
+        try:
+            result = await finish_on_cancel(asyncio.to_thread(run_reviews, self.library, job, chunks, cues,
+                frames, shots, previews, audio_records=records, checkpoint=lambda: self.checkpoint(job_id)))
+        except BaseException:
+            path = receipt_path(self.library, job["asset_id"], job["run_id"])
+            receipt = read_json(path)
+            if receipt and receipt.get("status") == "running":
+                receipt.update(status="partial", degraded=["复核随正式任务中止，已保存的窗口结果可在继续时复用"])
+                atomic_json(path, receipt)
+            raise
+        self._scene_metric(job_id, "lrasd", elapsed=time.monotonic() - started,
+            cache=sum(bool(row.get("cache_hit")) for row in result["reviews"]),
+            degraded_reason="；".join(result.get("degraded", [])))
+        self.update(job_id, lrasd_status={"status": result["status"], "coverage": result["coverage"],
+                                         "degraded": result.get("degraded", [])})
+
     def identity_settings(self, asset_id):
         from .visual_identity import VisualIdentityPipeline
         from .audio_identity import AudioIdentityService
@@ -39,6 +72,26 @@ class IdentityJobMixin:
         from .visual_identity import VisualIdentityPipeline
         from .audio_identity import AudioIdentityService
 
+        visual_enabled = bool(settings["visual"].get("enabled"))
+        last_progress = -float("inf")
+        last_completed = -1
+
+        def visual_progress(completed, total):
+            nonlocal last_progress, last_completed
+            if not visual_enabled or completed == last_completed:
+                return
+            current = time.monotonic()
+            if completed not in {0, total} and current - last_progress < 1.5:
+                return
+            self._scene_progress(job_id, "visual_identity", completed=completed, total=total, status="running")
+            self.update(job_id, stage="visual_identity", completed=completed, total=total,
+                        progress=completed / max(total, 1),
+                        message=("本机人物检测与 CCIP 匹配：准备模型和角色参考图" if completed == 0 else
+                                 f"本机人物检测与 CCIP 匹配：已完成 {completed}/{total} 帧"))
+            last_progress, last_completed = current, completed
+
+        visual_progress(0, len(frames))
+
         async def measured(stage, call):
             started = time.monotonic()
             # Thread work is drained on cancellation; its checkpoints see the
@@ -47,11 +100,16 @@ class IdentityJobMixin:
             self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
                                cache=int(value.get("cache_hits", 0)), degraded_reason=value.get("degraded_reason")
                                or "；".join(value.get("degraded", [])))
+            if stage == "visual_identity" and visual_enabled:
+                if value.get("status") == "completed":
+                    visual_progress(len(frames), len(frames))
+                self._scene_progress(job_id, "visual_identity", status="completed")
             return value
 
         outcomes = await asyncio.gather(
             measured("visual_identity", lambda: VisualIdentityPipeline(self.library).run(
-                asset_id, frames, config=settings["visual"], checkpoint=lambda: self.checkpoint(job_id))),
+                asset_id, frames, config=settings["visual"], checkpoint=lambda: self.checkpoint(job_id),
+                progress=visual_progress if visual_enabled else None)),
             measured("audio_identity", lambda: AudioIdentityService(self.library, self.characters).run(
                 asset_id, config["start_ms"], config["end_ms"], checkpoint=lambda: self.checkpoint(job_id),
                 subtitles=cues, frames=frames, config_override=settings["audio"])), return_exceptions=True)
@@ -74,15 +132,26 @@ class IdentityJobMixin:
         saved = read_json(self._identity_path(job), {})
         visual = saved.get("visual")
         if visual:
+            current = {frame["id"] for frame in frames}
+            visual = {**visual, "regions": [row for row in visual.get("regions", []) if row["frame_id"] in current]}
             visual = VisualIdentityPipeline(self.library).project_result(job["asset_id"], visual)
         return identity_context(context, visual, frames,
                                 top_k=job["config"].get("identity_settings", {}).get("visual", {}).get("top_k", 5))
 
     def scene_audio_context(self, job_id, context, start, end):
         from .audio_identity import AudioIdentityService
+        from .scene_lrasd import context_reviews
         job = self.get(job_id)
         saved = read_json(self._identity_path(job), {})
         audio = saved.get("audio", {})
+        proposals = context_reviews(self.library, job["asset_id"], job["run_id"], start, end)
+        if proposals:
+            context = copy.deepcopy(context)
+            context["active_speaker_reviews"] = proposals
+            context["active_speaker_review_policy"] = (
+                "Sampled continuous-source ASD probabilities and CCIP identity proposals only. "
+                "Uncalibrated; never confirm identities, voice exemplars, complete dialogue attribution "
+                "or visible actions. Cite only supplied original frame/cue IDs.")
         if audio.get("status") not in {"completed", "partial"}:
             return context
         context = copy.deepcopy(context)

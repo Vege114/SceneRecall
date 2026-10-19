@@ -23,7 +23,7 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps, ImageStat
 
-from .characters import CharacterStore, checked_box, scope_id
+from .characters import CharacterStore, checked_box, external_sources, scope_id
 from .library import atomic_json, confined_path, digest, now, read_json, safe_id, uid
 
 
@@ -84,13 +84,20 @@ def _write_bytes(path: Path, content: bytes):
         temporary.unlink(missing_ok=True)
 
 
-def _allowed(library, asset_id):
+def _allowed(library, asset_id, *, catalog=None):
     """Read the complete permitted roster without an appearance/recency limit."""
     characters = CharacterStore(library)
     # Catalog performs the existing local roster upgrade and enforces current
     # membership/animation restrictions before any reference is consulted.
-    catalog = characters.catalog(asset_id)
+    catalog = characters.catalog(asset_id) if catalog is None else catalog
     return catalog, {row["id"]: row for row in catalog["profiles"]}
+
+
+def _bangumi_candidate(reference, profile):
+    return (reference["status"] == "candidate" and reference["source"]["kind"] == "external_cached"
+            and any(source.get("source") == "bangumi" and source.get("image_url")
+                    and source["image_url"] == reference["source"].get("url")
+                    for source in external_sources(profile)))
 
 
 class ReferenceGallery:
@@ -104,9 +111,9 @@ class ReferenceGallery:
         return read_json(self._directory(scope) / "gallery.json", {"schema_version": "1.0", "revision": 0,
                                                                   "scope_id": scope, "references": [], "audit": []})
 
-    def list(self, asset_id, character_id=None, *, trusted_only=False):
+    def list(self, asset_id, character_id=None, *, trusted_only=False, _catalog=None):
         with self.library.lock:
-            catalog, allowed = _allowed(self.library, asset_id)
+            catalog, allowed = _allowed(self.library, asset_id, catalog=_catalog)
             scope = catalog["scope_id"]
             registry = CharacterStore(self.library)._read(scope)
             if character_id is not None:
@@ -141,7 +148,12 @@ class ReferenceGallery:
     def trusted(self, asset_id):
         return self.list(asset_id, trusted_only=True)["references"]
 
-    def active_reference_ids(self, asset_id):
+    def matching(self, asset_id, *, _catalog=None):
+        """Confirmed exemplars plus stored Bangumi images as candidates only."""
+        active = self.active_reference_ids(asset_id, include_candidates=True)
+        return [row for row in self.list(asset_id, _catalog=_catalog)["references"] if row["id"] in active]
+
+    def active_reference_ids(self, asset_id, *, include_candidates=False):
         """Nonrecursive trust projection usable while catalog reads scenes."""
         asset = self.library.get_asset(asset_id)
         scope = scope_id(asset)
@@ -151,8 +163,10 @@ class ReferenceGallery:
                       if CharacterStore.profile_allowed(profile, policy)}
         result = set()
         for row in self._read(scope)["references"]:
-            if (row["status"] != "confirmed" or not row["quality"]["accepted"]
-                    or CharacterStore._resolve(registry, row["character_id"]) not in identities):
+            resolved = CharacterStore._resolve(registry, row["character_id"])
+            if (resolved not in identities
+                    or not (row["status"] == "confirmed" and row["quality"]["accepted"]
+                            or include_candidates and _bangumi_candidate(row, registry["profiles"][resolved]))):
                 continue
             if row["source"]["kind"] == "frame_crop":
                 try:
@@ -338,8 +352,9 @@ def _backend(model):
 def match_candidates(distances, references, *, top_k=5, calibration=None, model_version=None):
     """Search every permitted reference before choosing Top-K identities.
 
-    Distance is the mean of the two closest independently confirmed exemplars
-    (one when only one exists). Calibration must use this exact aggregation.
+    Distance is the mean of the two closest exemplars (one when only one
+    exists). Unconfirmed exemplars can suggest a candidate, never confirm it.
+    Calibration must use this exact aggregation with confirmed exemplars.
     """
     grouped = {}
     if len(distances) != len(references):
@@ -356,9 +371,12 @@ def match_candidates(distances, references, *, top_k=5, calibration=None, model_
                            "reference_ids": [reference_id for _, reference_id in chosen], "reference_count": len(values)})
     candidates.sort(key=lambda row: (row["distance"], row["character_id"]))
     best = candidates[0] if candidates else None
+    by_reference = {row["id"]: row for row in references}
+    trusted_best = bool(best) and all(by_reference[key].get("status", "confirmed") == "confirmed"
+                                      for key in best["reference_ids"])
     margin = candidates[1]["distance"] - best["distance"] if len(candidates) > 1 else None
     status = "candidate" if best else "unknown"
-    calibrated = (isinstance(calibration, dict) and calibration.get("model_version") == model_version
+    calibrated = (trusted_best and isinstance(calibration, dict) and calibration.get("model_version") == model_version
                   and calibration.get("aggregation") == "nearest-two-mean-v1"
                   and calibration.get("dataset_id") and calibration.get("evaluation_id"))
     if calibrated and best:
@@ -374,7 +392,8 @@ def match_candidates(distances, references, *, top_k=5, calibration=None, model_
     return {"status": status, "character_id": best["character_id"] if best and status == "confirmed" else None,
             "candidate_character_id": best["character_id"] if best and status == "candidate" else None,
             "distance": best["distance"] if best else None, "margin": margin,
-            "source": "ccip_calibrated" if calibrated else "ccip_uncalibrated", "model_version": model_version,
+            "source": ("ccip_unverified_reference" if best and not trusted_best else
+                       "ccip_calibrated" if calibrated else "ccip_uncalibrated"), "model_version": model_version,
             "calibration_id": calibration.get("evaluation_id") if calibrated else None,
             "candidates": candidates[:max(1, min(20, top_k))], "aggregation": "nearest-two-mean-v1"}
 
@@ -432,7 +451,7 @@ class VisualIdentityPipeline:
                                "feature": feature})
         return feature
 
-    def run(self, asset_id, frames, config=None, checkpoint=None):
+    def run(self, asset_id, frames, config=None, checkpoint=None, progress=None):
         config = config or {}
         checkpoint = checkpoint or (lambda: None)
         started = time.monotonic()
@@ -447,18 +466,29 @@ class VisualIdentityPipeline:
         metrics = result["metrics"]
         try:
             checkpoint()
+            if progress is not None:
+                progress(0, len(frames))
             load_start = time.monotonic()
             backend = self.backend or _backend(config.get("model", DEFAULT_MODEL))
             version = backend.model_version
             metrics["model_load_ms"] = round((time.monotonic() - load_start) * 1000)
             catalog, profiles = _allowed(self.library, asset_id)
-            proposed_references = self.gallery.trusted(asset_id)
+            proposed_references = self.gallery.matching(asset_id)
             references = []
             # Read every permitted character's exemplars; there is no recency or
             # first-16 truncation before nearest-neighbour selection.
             features = []
             for reference in proposed_references:
                 checkpoint()
+                if reference["status"] != "confirmed":
+                    # Downloading a Bangumi image does not confirm its identity.
+                    # Recheck the local pixels before candidate-only matching;
+                    # detector success never changes the gallery's trust state.
+                    content = Path(reference["path"]).read_bytes()
+                    if (hashlib.sha256(content).hexdigest() != reference["sha256"]
+                            or not image_quality(_image(content), single_character=True)["accepted"]):
+                        metrics["rejected_references"] += 1
+                        continue
                 # Human confirmation authorizes identity, not an exemption from
                 # the single-person input constraint of the CCIP model.
                 detection_key = digest([reference["sha256"], version, PREPROCESS_VERSION])
@@ -478,7 +508,7 @@ class VisualIdentityPipeline:
                 references.append(reference)
                 features.append(self._feature(reference["path"], version, backend, metrics))
             frame_registry = read_json(self.library.asset_dir(asset_id) / "frames" / "registry.json", {})
-            for frame in frames:
+            for frame_number, frame in enumerate(frames, 1):
                 checkpoint()
                 identifier = frame["id"]
                 path = self.library.frame_path(asset_id, identifier)
@@ -530,7 +560,8 @@ class VisualIdentityPipeline:
                     match = match_candidates([], [], model_version=version)
                     if quality["accepted"] and references:
                         feature = self._feature(crop_path, version, backend, metrics)
-                        match_key = digest([region_id, version, [(row["id"], row["version"], row["character_id"], row["sha256"])
+                        match_key = digest(["reference-trust-v1", region_id, version,
+                                            [(row["id"], row["version"], row["character_id"], row["sha256"], row["status"])
                                                                for row in references], config.get("calibration"),
                                             config.get("top_k", 5)])
                         match_path = self._directory(asset_id) / "matches" / f"{match_key}.json"
@@ -553,30 +584,35 @@ class VisualIdentityPipeline:
                         atomic_json(history_path, region)
                     atomic_json(self._directory(asset_id) / "regions" / f"{region_id}.json", region)
                     result["regions"].append(region)
+                if progress is not None:
+                    progress(frame_number, len(frames))
             result.update(status="completed", model_version=version, scope_id=catalog["scope_id"],
                           gallery_revision=self.gallery.list(asset_id)["revision"])
             result["regions"] = self._project(asset_id, result["regions"])
             ids = list(dict.fromkeys(value for region in result["regions"]
+                                    if region["match"].get("status") in {"candidate", "confirmed"}
                                     for value in [region["match"].get("character_id"),
                                                   *[row["character_id"] for row in region["match"].get("candidates", [])]]
                                     if value in profiles))
             result["selected_profiles"] = [profiles[value] for value in ids]
             result["references"] = [{"character_id": row["character_id"], "reference_id": row["id"],
-                                      "path": row["path"], "reference_only": True}
+                                      "path": row["path"], "reference_only": True,
+                                      "reference_status": row["status"], "human_confirmed": row["status"] == "confirmed"}
                                      for value in ids for row in references if row["character_id"] == value]
             if not references:
-                result["degraded_reason"] = "没有经过人工确认且通过质量检查的参考图；检测区域保留为未知人物"
+                result["degraded_reason"] = "没有可用的本地角色参考图；检测区域保留为未知人物，角色资料仍仅作未验证先验"
         except IdentityUnavailable as exc:
             result.update(status="unavailable", degraded_reason=str(exc))
         metrics["total_ms"] = round((time.monotonic() - started) * 1000)
         atomic_json(self._directory(asset_id) / "latest.json", result)
         return result
 
-    def _project(self, asset_id, regions):
+    def _project(self, asset_id, regions, *, _catalog=None):
         decisions = read_json(self._directory(asset_id) / "decisions.json", {"decisions": {}})["decisions"]
-        catalog, profiles = _allowed(self.library, asset_id)
+        catalog, profiles = _allowed(self.library, asset_id, catalog=_catalog)
         registry = CharacterStore(self.library)._read(catalog["scope_id"])
         trusted = self.gallery.active_reference_ids(asset_id)
+        matching = self.gallery.active_reference_ids(asset_id, include_candidates=True)
         result = copy.deepcopy(regions)
         for row in result:
             identifier = safe_id(row["id"])
@@ -589,7 +625,11 @@ class VisualIdentityPipeline:
                                       if key in {"status", "character_id", "candidate_character_id", "source", "reason", "version"}})
             elif row["match"].get("candidates"):
                 used = row["match"]["candidates"][0].get("reference_ids", [])
-                if not used or not set(used).issubset(trusted):
+                if (row["match"].get("source") == "ccip_unverified_reference"
+                        and used and set(used).issubset(matching)):
+                    row["match"].update(status="candidate", character_id=None,
+                                        candidate_character_id=row["match"]["candidates"][0]["character_id"])
+                elif not used or not set(used).issubset(trusted):
                     row["match"].update(status="unknown", character_id=None, candidate_character_id=None,
                                         reason="参考图已撤销或不再可信；身份待重新核对")
             had_identity = bool(row["match"].get("character_id") or row["match"].get("candidate_character_id"))
@@ -607,20 +647,32 @@ class VisualIdentityPipeline:
             row["crop_url"] = f"/api/assets/{asset_id}/identity/regions/{row['id']}/image"
         return result
 
-    def project_result(self, asset_id, result):
-        """Refresh saved prelude mappings without recomputing a single feature."""
+    def project_result(self, asset_id, result, *, frame_ids=None):
+        """Refresh current mappings, optionally before copying unrelated regions."""
+        if frame_ids is not None:
+            current = set(frame_ids)
+            result = {**result, "regions": [row for row in result.get("regions", []) if row["frame_id"] in current]}
         projected = copy.deepcopy(result)
         if projected.get("status") != "completed":
             return projected
-        projected["regions"] = self._project(asset_id, projected.get("regions", []))
-        _catalog, profiles = _allowed(self.library, asset_id)
+        catalog, profiles = _allowed(self.library, asset_id)
+        projected["regions"] = self._project(asset_id, projected.get("regions", []), _catalog=catalog)
         selected = list(dict.fromkeys(value for row in projected["regions"] for value in [
             row["match"].get("character_id"), row["match"].get("candidate_character_id"),
-            *[candidate["character_id"] for candidate in row["match"].get("candidates", [])]] if value in profiles))
+            *[candidate["character_id"] for candidate in row["match"].get("candidates", [])]]
+            if row["match"].get("status") in {"candidate", "confirmed"} and value in profiles))
         projected["selected_profiles"] = [profiles[value] for value in selected]
+        used_references = {identity for row in projected["regions"]
+                           if row["match"].get("status") in {"candidate", "confirmed"}
+                           for candidate in row["match"].get("candidates", [])
+                           for identity in candidate.get("reference_ids", [])}
+        # Confirmed exemplars remain available for every selected character.
+        # Candidate images need support from these regions, never another shot.
         projected["references"] = [{"character_id": row["character_id"], "reference_id": row["id"],
-                                    "path": row["path"], "reference_only": True}
-                                   for row in self.gallery.trusted(asset_id) if row["character_id"] in selected]
+                                    "path": row["path"], "reference_only": True,
+                                    "reference_status": row["status"], "human_confirmed": row["status"] == "confirmed"}
+                                   for row in self.gallery.matching(asset_id, _catalog=catalog) if row["character_id"] in selected
+                                   and (row["status"] == "confirmed" or row["id"] in used_references)]
         return projected
 
     def reviews(self, asset_id):
@@ -666,7 +718,9 @@ def decorate_identity_records(library, asset_id, records, *, strict=False):
     decisions = read_json(directory / "decisions.json", {"decisions": {}})["decisions"]
     if not decisions and not (directory / "regions").is_dir():
         return records
-    trusted = ReferenceGallery(library).active_reference_ids(asset_id)
+    gallery = ReferenceGallery(library)
+    trusted = gallery.active_reference_ids(asset_id)
+    matching = gallery.active_reference_ids(asset_id, include_candidates=True)
     result = copy.deepcopy(records)
     for record in result:
         for entity in record.get("entities", []):
@@ -680,7 +734,12 @@ def decorate_identity_records(library, asset_id, records, *, strict=False):
                 continue
             if not decision and region:
                 used = (region["match"].get("candidates") or [{}])[0].get("reference_ids", [])
-                if used and not set(used).issubset(trusted):
+                if (region["match"].get("source") == "ccip_unverified_reference"
+                        and used and set(used).issubset(matching)):
+                    decision = {"character_id": None, "status": "candidate", "source": "ccip_unverified_reference",
+                                "candidate_character_id": region["match"]["candidates"][0]["character_id"],
+                                "reason": "Bangumi 参考图只提供未验证角色候选，不能确认当前人物身份"}
+                elif used and not set(used).issubset(trusted):
                     decision = {"character_id": None, "status": "unknown", "source": "reference_revoked",
                                 "reason": "参考图已撤销或不再可信；身份待重新核对"}
             if decision:

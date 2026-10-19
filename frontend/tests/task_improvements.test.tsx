@@ -15,7 +15,7 @@ const model: Profile = { id: 'api', name: '测试连接', base_url: 'https://exa
 const second = { ...asset, id: 'episode-2', episode: 2, source_filename: 'revuestarlight.S01E02.mkv' };
 const plan = (assetId: string): KeyframePlan => ({ id: `plan-${assetId}`, job_id: `scan-${assetId}`, status: 'completed', frames: [], frame_count: 1 });
 function context(assets = [asset]): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/task-ui-tests', settings: { defaults: DEFAULTS, bindings: { preparation: model.id, vision: model.id, subtitle: model.id } }, provider_profiles: [model], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets, jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/task-ui-tests', settings: { defaults: DEFAULTS, bindings: { preparation: model.id, vision: model.id, subtitle: model.id } }, provider_profiles: [model], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets, jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function mount(ui: ReactNode, app = context()) { return render(<AppContext.Provider value={app}>{ui}</AppContext.Provider>); }
 function response(value: unknown, status = 200) { return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } }); }

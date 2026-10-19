@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, formatTime, message, post, subtitleLink } from '../api';
 import { type Asset, type CharacterLibrary, type CharacterProfile } from '../types';
 import { type AudioConfiguration, type AudioRecord, type AudioResult, type AudioSettings, type AudioTrack, type BangumiReferenceCacheResult, type IdentityRegion, type IdentityReview, identitySourceLabel, identityStatusLabel } from '../identityTypes';
@@ -148,9 +148,30 @@ export default function AudioIdentity({ asset, initialAudio, onSeek, onSaved }: 
         </article>; })}
       </div>
       {visualSettings && <form className="audio-settings" onSubmit={(event) => { event.preventDefault(); void saveVisual(false); }}><label className="check-line"><input type="checkbox" checked={visualSettings.enabled} disabled={!!busy} onChange={(event) => setVisualSettings({ ...visualSettings, enabled: event.target.checked })} />启用 imgutils 人物检测与 CCIP 匹配</label><div className="form-grid"><Field label="CCIP 模型"><select value={visualSettings.model} disabled={!!busy} onChange={(event) => setVisualSettings({ ...visualSettings, model: event.target.value })}>{['ccip-caformer-24-randaug-pruned', 'ccip-caformer-6-randaug-pruned_fp32', 'ccip-caformer-5_fp32'].map((model) => <option key={model}>{model}</option>)}</select></Field><Field label="身份候选 Top-K" hint="先搜索作品允许的完整角色库，再选候选。"><input type="number" min={1} max={20} required value={visualSettings.top_k} disabled={!!busy} onChange={(event) => setVisualSettings({ ...visualSettings, top_k: Number(event.target.value) })} /></Field></div><details className="identity-advanced"><summary>标注集校准记录与局部重识别</summary><Field label="视觉匹配校准记录（JSON）" hint="留空只生成候选；记录须包括模型、数据集、评估 ID 与校准阈值。"><textarea rows={5} value={calibration} onChange={(event) => setCalibration(event.target.value)} disabled={!!busy} /></Field><Field label="仅重识别这些证据帧 ID" hint="用空格或逗号分隔。只运行人物检测与匹配，不重跑整集剧情。"><textarea rows={2} value={frameIds} onChange={(event) => setFrameIds(event.target.value)} disabled={!!busy} /></Field><button type="button" className="button secondary" disabled={!!busy || !visualSettings.enabled || !frameIds.trim() || !asset.source_available} onClick={() => void saveVisual(true)}>保存并重识别所选人物帧</button></details><p className="helper">只使用预先安装的模型；缺少权重时保留明确降级原因。CCIP 距离与候选差距不等于身份置信度。</p><button type="submit" className="button secondary" disabled={!!busy}>保存视觉身份配置</button></form>}
-      {visual?.status && <p className="helper">人物匹配状态：{visual.status}</p>}{visual?.metrics && <div className="job-stage-metrics" aria-label="视觉身份阶段耗时">{Object.entries(visual.metrics).filter(([key]) => key.endsWith('_ms')).map(([key, value]) => <div key={key}><strong>{timingLabel(key)}</strong><span>{(value / 1000).toFixed(2)} 秒</span></div>)}{visual.metrics.feature_cache_hits != null && <div><strong>特征缓存复用</strong><span>{visual.metrics.feature_cache_hits} 次</span></div>}</div>}{visual?.degraded_reason && <Alert>视觉身份降级：{visual.degraded_reason}</Alert>}{!visual?.regions?.length ? <p className="helper">尚无独立人物区域。配置本机视觉匹配并执行画面分析后，可在这里核对 P1 / P2 与角色的映射。</p> : visual.regions.slice(0, recordLimit).map((region) => <RegionReview key={region.id} region={region} profiles={profiles} assetId={asset.id} onSeek={onSeek} onSaved={refreshVisual} />)}{(visual?.regions?.length || 0) > recordLimit && <button className="button secondary" onClick={() => setRecordLimit(recordLimit + 30)}>显示更多人物区域</button>}</section>
+      {visual?.status && <p className="helper">人物匹配状态：{visual.status}</p>}{visual?.metrics && <div className="job-stage-metrics" aria-label="视觉身份阶段耗时">{Object.entries(visual.metrics).filter(([key]) => key.endsWith('_ms')).map(([key, value]) => <div key={key}><strong>{timingLabel(key)}</strong><span>{(value / 1000).toFixed(2)} 秒</span></div>)}{visual.metrics.feature_cache_hits != null && <div><strong>特征缓存复用</strong><span>{visual.metrics.feature_cache_hits} 次</span></div>}</div>}{visual?.degraded_reason && <Alert>视觉身份降级：{visual.degraded_reason}</Alert>}{!visual?.regions?.length ? <p className="helper">尚无独立人物区域。配置本机视觉匹配并执行画面分析后，可在这里核对 P1 / P2 与角色的映射。</p> : <VisualRegionPages key={asset.id} regions={visual.regions} profiles={profiles} assetId={asset.id} onSeek={onSeek} onSaved={refreshVisual} />}</section>
     {referenceProfile && <CharacterReferences assetId={asset.id} profile={referenceProfile} onClose={() => setReferenceProfile(null)} onSaved={refreshProfiles} />}
   </div>;
+}
+
+function VisualRegionPages({ regions, profiles, assetId, onSeek, onSaved }: {
+  regions: IdentityRegion[]; profiles: CharacterProfile[]; assetId: string;
+  onSeek: (ms: number) => void; onSaved: () => Promise<void>;
+}) {
+  const pageSize = 24;
+  const [page, setPage] = useState(1);
+  const ordered = useMemo(() => [...regions].sort((left, right) => left.at_ms - right.at_ms
+    || left.frame_id.localeCompare(right.frame_id) || left.id.localeCompare(right.id)), [regions]);
+  const pages = Math.max(1, Math.ceil(ordered.length / pageSize));
+  const current = Math.min(page, pages);
+  useEffect(() => { if (page !== current) setPage(current); }, [page, current]);
+  const first = (current - 1) * pageSize;
+  return <>
+    <nav className="section-row" aria-label="人物区域分页">
+      <p className="helper" role="status">共 {ordered.length} 个人物区域 · 第 {current} / {pages} 页 · 显示 {first + 1}–{Math.min(first + pageSize, ordered.length)} · 按原片时间排序</p>
+      <div className="button-row"><button type="button" className="button small secondary" disabled={current <= 1} onClick={() => setPage(current - 1)}>上一页人物区域</button><button type="button" className="button small secondary" disabled={current >= pages} onClick={() => setPage(current + 1)}>下一页人物区域</button></div>
+    </nav>
+    {ordered.slice(first, first + pageSize).map((region) => <RegionReview key={region.id} region={region} profiles={profiles} assetId={assetId} onSeek={onSeek} onSaved={onSaved} />)}
+  </>;
 }
 
 function SpeakerRecord({ record, profiles, endpoint, onSeek, onSaved }: { record: AudioRecord; profiles: CharacterProfile[]; endpoint: string; onSeek: (ms: number) => void; onSaved: () => Promise<void> }) {

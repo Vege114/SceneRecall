@@ -17,7 +17,7 @@ const bootstrap: Bootstrap = { library_path: '/tmp/scenerecall-ui-tests', settin
 const noSubtitles = { duration_ms: 12000, tracks: [], recommended_stream_index: null, external_candidates: [], recommended_mode: 'auto', recommended_subtitle_path: null, reason: '未找到字幕', scan_complete: true };
 
 function appContext(overrides: Partial<AppContextValue> = {}): AppContextValue {
-  return { bootstrap, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn(), ...overrides };
+  return { bootstrap, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn(), ...overrides };
 }
 function renderApp(ui: ReactNode, context: AppContextValue = appContext()) {
   return render(<AppContext.Provider value={context}>{ui}</AppContext.Provider>);

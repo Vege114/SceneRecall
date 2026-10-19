@@ -8,6 +8,7 @@ export interface AppContextValue {
   folders?: Folder[];
   jobs: Job[];
   refresh: () => Promise<void>;
+  refreshJobs: (afterMutation?: boolean) => Promise<void>;
   notify: (message: string, kind?: 'success' | 'error') => void;
   openImport: (projectId?: string) => void;
   openJobs?: (assets: Asset[]) => void;

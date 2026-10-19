@@ -14,7 +14,7 @@ const model: Profile = { id: 'api', name: '测试 API', provider_type: 'openai_c
 const estimate: Estimate = { duration_ms: 12000, estimated_frames: 8, estimated_requests: 2, cost_estimate: null, warnings: [] };
 const mixed: ExecutionOptions = { transcript: 'serial', preparation: 'parallel', subtitle: 'serial', max_concurrency: 5 };
 function context(execution: ExecutionOptions | undefined = DEFAULT_EXECUTION): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/execution-ui-tests', settings: { defaults: { ...DEFAULTS, execution }, bindings: { preparation: model.id, vision: model.id, subtitle: model.id } }, provider_profiles: [model], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/execution-ui-tests', settings: { defaults: { ...DEFAULTS, execution }, bindings: { preparation: model.id, vision: model.id, subtitle: model.id } }, provider_profiles: [model], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function mount(ui: ReactNode, app = context()) { return render(<AppContext.Provider value={app}>{ui}</AppContext.Provider>); }
 function mockFetch(handler?: (url: string, options?: RequestInit) => unknown) {

@@ -10,7 +10,7 @@ const inputs: ImportInput[] = [1, 2].map((episode) => ({ item_id: `item-${episod
 const baseJob: Job = { id: 'import1', type: 'import', status: 'running', progress: 0.5, completed: 1, total: 2, created_at: '2026-10-18T00:00:00Z', items: [{ item_id: 'item-1', name: 'episode-1.mkv', status: 'completed', asset_id: 'asset-1' }, { item_id: 'item-2', name: 'episode-2.mkv', status: 'running', asset_id: 'asset-2' }] };
 
 function context(job: Job): AppContextValue {
-  return { bootstrap: { library_path: 'D:/import-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [], jobs: [job], refresh: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: 'D:/import-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: 'test' }, assets: [], jobs: [job], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function show(ui: ReactNode, job = baseJob) { return render(<AppContext.Provider value={context(job)}>{ui}</AppContext.Provider>); }
 function mockImport(job: Job) {

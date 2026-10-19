@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import math
 import os
@@ -18,6 +19,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -35,6 +37,11 @@ MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024
 MAX_CATALOG_BYTES = 4 * 1024 * 1024
 MAX_SCHEMA_BYTES = 256 * 1024
 STATUS_TIMEOUT_S = 10
+STATUS_CACHE_TTL_S = 30
+# Keys contain only a digest of executable identity and the sanitized child
+# environment. Never cache credential contents or raw CLI diagnostics.
+_STATUS_CACHE: dict[str, tuple[float, dict]] = {}
+_STATUS_INFLIGHT: dict[tuple[asyncio.AbstractEventLoop, str], asyncio.Task] = {}
 REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"})
 _MODEL_ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,299}"
 _REQUIRED_FLAGS = ("--ignore-user-config", "--ignore-rules", "--ephemeral", "--json", "--image")
@@ -266,44 +273,93 @@ async def _inspect(executable: str, directory: Path) -> dict:
     result = {"installed": True, "authenticated": False, "compatible": False,
               "auth_method": None, "version": None, "message": "请先在终端运行 codex login 并使用 ChatGPT 登录"}
     try:
-        # The status command is read-only; unlike exec, it has no tool session.
-        async with asyncio.timeout(STATUS_TIMEOUT_S):
-            code, out, _ = await _run([executable, "--version"], directory=directory,
-                                     timeout_s=STATUS_TIMEOUT_S)
-            match = re.search(rb"codex(?:-cli)?\s+(\d+)\.(\d+)\.(\d+)", out)
-            if code or not match:
-                result["message"] = "无法识别 Codex CLI 版本，请升级到 0.155.1 或更新版本"
-                return result
-            version = tuple(int(part) for part in match.groups())
-            result["version"] = ".".join(str(part) for part in version)
-            if version < MIN_VERSION:
-                result["message"] = "Codex CLI 版本过旧，请升级到 0.155.1 或更新版本"
-                return result
-            code, out, _ = await _run([executable, "exec", "--help"], directory=directory,
-                                     timeout_s=STATUS_TIMEOUT_S)
-            if code or not all(flag.encode() in out for flag in _REQUIRED_FLAGS):
-                result["message"] = "此 Codex CLI 缺少安全隔离参数，请升级到兼容版本"
-                return result
-            code, out, _ = await _run([executable, "features", "list"], directory=directory,
-                                     timeout_s=STATUS_TIMEOUT_S)
-            features = {line.split()[0].decode("utf-8", errors="replace") for line in out.splitlines() if line.split()}
-            if code or not set((*_DISABLED_FEATURES, "skip_host_skill_discovery")).issubset(features):
-                result["message"] = "此 Codex CLI 缺少所需工具隔离功能，请升级到兼容版本"
-                return result
-            result["compatible"] = True
-            code, out, err = await _run(
-                [executable, "login", "status", "-c", 'cli_auth_credentials_store="auto"'],
-                directory=directory, timeout_s=STATUS_TIMEOUT_S,
-            )
-            # Only report recognized states; raw diagnostics may contain secrets.
-            login = (out + b"\n" + err).decode("utf-8", errors="replace").lower()
-            if code == 0 and "logged in using chatgpt" in login:
-                result.update(authenticated=True, auth_method="chatgpt", message="Codex CLI 已通过 ChatGPT 登录")
-            elif "api key" in login or "api_key" in login:
-                result.update(auth_method="api_key", message="Codex CLI 当前使用 API Key，请运行 codex login 切换到 ChatGPT 登录")
+        # Four read-only commands have independent deadlines. An outer ten-second
+        # limit incorrectly charged all startup costs against one command budget.
+        stage = "version"
+        code, out, _ = await _run([executable, "--version"], directory=directory,
+                                 timeout_s=STATUS_TIMEOUT_S)
+        match = re.search(rb"codex(?:-cli)?\s+(\d+)\.(\d+)\.(\d+)", out)
+        if code or not match:
+            result["message"] = "无法识别 Codex CLI 版本，请升级到 0.155.1 或更新版本"
+            return result
+        version = tuple(int(part) for part in match.groups())
+        result["version"] = ".".join(str(part) for part in version)
+        if version < MIN_VERSION:
+            result["message"] = "Codex CLI 版本过旧，请升级到 0.155.1 或更新版本"
+            return result
+        stage = "exec_help"
+        code, out, _ = await _run([executable, "exec", "--help"], directory=directory,
+                                 timeout_s=STATUS_TIMEOUT_S)
+        if code or not all(flag.encode() in out for flag in _REQUIRED_FLAGS):
+            result["message"] = "此 Codex CLI 缺少安全隔离参数，请升级到兼容版本"
+            return result
+        stage = "features"
+        code, out, _ = await _run([executable, "features", "list"], directory=directory,
+                                 timeout_s=STATUS_TIMEOUT_S)
+        features = {line.split()[0].decode("utf-8", errors="replace") for line in out.splitlines() if line.split()}
+        if code or not set((*_DISABLED_FEATURES, "skip_host_skill_discovery")).issubset(features):
+            result["message"] = "此 Codex CLI 缺少所需工具隔离功能，请升级到兼容版本"
+            return result
+        result["compatible"] = True
+        stage = "login_status"
+        code, out, err = await _run(
+            [executable, "login", "status", "-c", 'cli_auth_credentials_store="auto"'],
+            directory=directory, timeout_s=STATUS_TIMEOUT_S,
+        )
+        # Only report recognized states; raw diagnostics may contain secrets.
+        login = (out + b"\n" + err).decode("utf-8", errors="replace").lower()
+        if code == 0 and "logged in using chatgpt" in login:
+            result.update(authenticated=True, auth_method="chatgpt", message="Codex CLI 已通过 ChatGPT 登录")
+        elif "api key" in login or "api_key" in login:
+            result.update(auth_method="api_key", message="Codex CLI 当前使用 API Key，请运行 codex login 切换到 ChatGPT 登录")
     except (CodexCLIError, TimeoutError):
         result["message"] = "无法检查 Codex CLI 状态，请确认终端中的 codex login status 可正常运行"
+        result["check_stage"] = stage
     return result
+
+
+def _inspection_key(executable: str) -> str:
+    try:
+        stat = Path(executable).stat()
+        identity = [str(Path(executable).resolve()), stat.st_size, stat.st_mtime_ns]
+    except OSError:
+        identity = [executable, None, None]
+    value = [identity, _runtime(), _environment(executable)]
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _invalidate_inspection(executable: str) -> None:
+    _STATUS_CACHE.pop(_inspection_key(executable), None)
+
+
+async def _checked_status(executable: str, *, refresh=False) -> dict:
+    """Coalesce concurrent checks, caching only successful subscription status."""
+    key = await asyncio.to_thread(_inspection_key, executable)
+    cached = _STATUS_CACHE.get(key)
+    if not refresh and cached and time.monotonic() - cached[0] < STATUS_CACHE_TTL_S:
+        return dict(cached[1])
+    owner = (asyncio.get_running_loop(), key)
+    task = _STATUS_INFLIGHT.get(owner)
+    if task is None:
+        async def inspect_owned():
+            try:
+                # This directory belongs to the shared check, never to a caller
+                # whose inference timeout/cancellation can remove it early.
+                with tempfile.TemporaryDirectory(prefix="scenerecall-codex-status-") as temporary:
+                    result = await _inspect(executable, Path(temporary))
+                if result["compatible"] and result["authenticated"]:
+                    _STATUS_CACHE[key] = (time.monotonic(), dict(result))
+                    for expired in list(_STATUS_CACHE)[:-32]:
+                        _STATUS_CACHE.pop(expired, None)
+                else:
+                    _STATUS_CACHE.pop(key, None)
+                return result
+            finally:
+                _STATUS_INFLIGHT.pop(owner, None)
+        task = asyncio.create_task(inspect_owned())
+        _STATUS_INFLIGHT[owner] = task
+    # A cancelled request must not cancel another request's shared auth check.
+    return dict(await asyncio.shield(task))
 
 
 async def status() -> dict:
@@ -320,8 +376,7 @@ async def status() -> dict:
                        "自定义安装可在启动服务前设置 SCENERECALL_CODEX_PATH 为 codex.exe 的完整路径。")
         return {"installed": False, "authenticated": False, "compatible": False, "auth_method": None,
                 "version": None, "message": message, **location}
-    with tempfile.TemporaryDirectory(prefix="scenerecall-codex-status-") as directory:
-        return {**await _inspect(executable, Path(directory)), **location}
+    return {**await _checked_status(executable, refresh=True), **location}
 
 
 def _cached_model_catalog() -> dict:
@@ -530,9 +585,10 @@ async def complete(instruction: str, user_content: Any, model: str, timeout_s: f
             # Includes installation/auth checks and execution in the same budget.
             async with asyncio.timeout(timeout_s):
                 prompt, images = _prepare_content(user_content, directory)
-                checked = await _inspect(executable, directory)
+                checked = await _checked_status(executable)
                 if not checked["compatible"] or not checked["authenticated"]:
-                    raise CodexCLIError(checked["message"])
+                    stage = checked.get("check_stage")
+                    raise CodexCLIError(checked["message"], code=f"preflight_{stage}" if stage else "preflight")
                 instructions = directory / "instructions.txt"
                 instructions.write_text(
                     "You are SceneRecall's structured inference engine. Return only the requested JSON. "
@@ -563,6 +619,9 @@ async def complete(instruction: str, user_content: Any, model: str, timeout_s: f
                 code, _, _ = await _run(args, directory=directory, timeout_s=timeout_s,
                                         stdin=prompt.encode("utf-8"), on_line=events.accept)
                 if code or events.failed:
+                    # Includes revoked/expired authentication. A subsequent
+                    # request must recheck instead of trusting the short cache.
+                    _invalidate_inspection(executable)
                     raise CodexCLIError("Codex CLI 推理失败，请检查模型访问权限、订阅额度及网络连接")
                 if not events.completed or not events.content.strip():
                     raise CodexCLIError("Codex CLI 未返回完整回答")

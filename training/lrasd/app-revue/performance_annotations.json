@@ -1,0 +1,1801 @@
+{
+  "schema_version": "scenerecall-performance-annotations-v1",
+  "timeline_events": [
+    {
+      "id": "native-runtime-launch-160253",
+      "kind": "restart",
+      "label": "Native runtime launch 160253",
+      "job_ids": [],
+      "start_utc": "2026-10-18T08:02:53+00:00",
+      "end_utc": null,
+      "time_certainty": "approximate_launcher_filename",
+      "source": {
+        "kind": "log",
+        "path": "D:\\SceneRecall\\.cache\\runtime\\native-8765-20261018-160253-591d9294.log",
+        "selector": "filename local launch stamp; Started server process; Application startup complete"
+      },
+      "notes": "Filename is a launcher stamp in Asia/Shanghai, not an exact service-ready or previous-stop timestamp. No downtime duration inferred."
+    },
+    {
+      "id": "native-runtime-launch-164802",
+      "kind": "restart",
+      "label": "Native runtime launch 164802",
+      "job_ids": [],
+      "start_utc": "2026-10-18T08:48:02+00:00",
+      "end_utc": null,
+      "time_certainty": "approximate_launcher_filename",
+      "source": {
+        "kind": "log",
+        "path": "D:\\SceneRecall\\.cache\\runtime\\native-8765-20261018-164802-305ca7e2.log",
+        "selector": "filename local launch stamp; Started server process; Application startup complete"
+      },
+      "notes": "Filename is a launcher stamp in Asia/Shanghai, not an exact service-ready or previous-stop timestamp. No downtime duration inferred."
+    },
+    {
+      "id": "native-runtime-launch-170453",
+      "kind": "restart",
+      "label": "Native runtime launch 170453",
+      "job_ids": [],
+      "start_utc": "2026-10-18T09:04:53+00:00",
+      "end_utc": null,
+      "time_certainty": "approximate_launcher_filename",
+      "source": {
+        "kind": "log",
+        "path": "D:\\SceneRecall\\.cache\\runtime\\native-8765-20261018-170453-ffb9e4ad.log",
+        "selector": "filename local launch stamp; Started server process; Application startup complete"
+      },
+      "notes": "Filename is a launcher stamp in Asia/Shanghai, not an exact service-ready or previous-stop timestamp. No downtime duration inferred."
+    },
+    {
+      "id": "native-runtime-launch-174904",
+      "kind": "restart",
+      "label": "Native runtime launch 174904",
+      "job_ids": [],
+      "start_utc": "2026-10-18T09:49:04+00:00",
+      "end_utc": null,
+      "time_certainty": "approximate_launcher_filename",
+      "source": {
+        "kind": "log",
+        "path": "D:\\SceneRecall\\.cache\\runtime\\native-8765-20261018-174904-c23c7bd7.log",
+        "selector": "filename local launch stamp; Started server process; Application startup complete"
+      },
+      "notes": "Filename is a launcher stamp in Asia/Shanghai, not an exact service-ready or previous-stop timestamp. No downtime duration inferred."
+    },
+    {
+      "id": "native-runtime-launch-175621",
+      "kind": "restart",
+      "label": "Native runtime launch 175621",
+      "job_ids": [],
+      "start_utc": "2026-10-18T09:56:21+00:00",
+      "end_utc": null,
+      "time_certainty": "approximate_launcher_filename",
+      "source": {
+        "kind": "log",
+        "path": "D:\\SceneRecall\\.cache\\runtime\\native-8765-20261018-175621-b0ed593a.log",
+        "selector": "filename local launch stamp; Started server process; Application startup complete"
+      },
+      "notes": "Filename is a launcher stamp in Asia/Shanghai, not an exact service-ready or previous-stop timestamp. No downtime duration inferred."
+    },
+    {
+      "id": "native-runtime-launch-181746",
+      "kind": "restart",
+      "label": "Native runtime launch 181746",
+      "job_ids": [],
+      "start_utc": "2026-10-18T10:17:47.777731+00:00",
+      "end_utc": null,
+      "time_certainty": "recorded_process_creation",
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecall\\.cache\\runtime\\native-8765-09703ee84de252f4.json",
+        "selector": "/server_created; /server_pid"
+      },
+      "notes": "Recorded OS creation time of server PID41216. Service-ready time and previous runtime stop remain unknown."
+    },
+    {
+      "id": "strict-schema-repair",
+      "kind": "repair",
+      "label": "Strict preparation schema and protocol kind repair",
+      "job_ids": [
+        "job_da9fda9cf49243589c95"
+      ],
+      "start_utc": null,
+      "end_utc": null,
+      "time_certainty": "unknown",
+      "source": {
+        "kind": "operator_observation",
+        "selector": "Parent task instruction; current providers.py _preparation_output_schema and _vision_output_schema"
+      },
+      "related_time_evidence": {
+        "operator_selected_new_runtime_cutoff_utc": "2026-10-18T09:56:00+00:00",
+        "source": {
+          "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\preparation-drain-audit.json",
+          "selector": "/new_runtime_cutoff_utc"
+        }
+      },
+      "notes": "Repair is attested, but cutoff is an audit grouping threshold, not an exact deployment timestamp. Failure counters cannot assign all invalid_output to this cause."
+    },
+    {
+      "id": "live-timeout-300",
+      "kind": "repair",
+      "label": "Live Codex connection timeout is 300 seconds",
+      "job_ids": [],
+      "start_utc": null,
+      "end_utc": null,
+      "time_certainty": "observed_state_change_time_unknown",
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecallLibrary\\private\\profiles.json",
+        "selector": "/profiles/*/timeout_s (only timeout value read for report)"
+      },
+      "observed_value_s": 300.0,
+      "source_last_write_utc": "2026-10-18T10:31:39.857801+00:00",
+      "notes": "Current stored profile is300s. Source mtime may include other edits, so it is not asserted as timeout-change time. Frozen job snapshot remains90s, while ProviderManager._profile intentionally keeps live timeout operational."
+    },
+    {
+      "id": "gui-asset-details-backlog",
+      "kind": "repair",
+      "label": "Asset details polling accumulated slow requests",
+      "job_ids": [],
+      "start_utc": null,
+      "end_utc": null,
+      "time_certainty": "unknown",
+      "source": {
+        "kind": "operator_observation",
+        "selector": "Parent task instruction and frontend review in current task"
+      },
+      "notes": "Operator attests overlapping detail requests and a frontend single-flight fix. No durable request start/end trace is available here; no backlog duration or request count is fabricated."
+    },
+    {
+      "id": "user-scope-reduced-to-episode-one",
+      "kind": "scope_change",
+      "label": "用户将完成目标缩小为第一集",
+      "start_utc": null,
+      "end_utc": null,
+      "time_certainty": "unknown",
+      "job_ids": [
+        "job_da9fda9cf49243589c95",
+        "job_1044557041b94dbd9325",
+        "job_4e1123092bd4443cb67d"
+      ],
+      "source": {
+        "kind": "user_instruction",
+        "selector": "Latest user scope reduction relayed by root; no exact instruction timestamp asserted"
+      },
+      "notes": "第一集是唯一完成目标。第二、三集按用户要求停止；GUI取消状态以独立采集的job快照为准，不把范围缩减当作失败。"
+    },
+    {
+      "id": "deep-context-text-budget-overflow",
+      "kind": "local_preflight_failure",
+      "label": "深入理解在44/223父分批后遇到上下文限额",
+      "start_utc": null,
+      "end_utc": null,
+      "time_certainty": "failure_time_unknown_discovery_recorded",
+      "discovered_at_utc": "2026-10-18T12:10:50+00:00",
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\deep-context-failure-audit.json"
+      },
+      "notes": "20:10:50为发现时刻，非真实失败时刻。135584字节超过128000；71个区域均属当前12帧，11角色。该失败0请求，44个已付成功回执保留。"
+    },
+    {
+      "id": "graceful-stop-before-context-split-repair",
+      "kind": "stop",
+      "label": "为上下文修复正常停止服务",
+      "start_utc": null,
+      "end_utc": null,
+      "time_certainty": "operator_elapsed_only",
+      "elapsed_seconds": 6,
+      "server_pid": 68220,
+      "forced": false,
+      "source": {
+        "kind": "operator_observation",
+        "selector": "Root task instruction; manager normal stop server68220 in6s"
+      },
+      "notes": "仅记录正常退出耗时约6秒；没有force。起止时刻未提供，不从发现时刻推算。"
+    },
+    {
+      "id": "deep-parent112-cli-timeout-224207",
+      "kind": "request_timeout",
+      "label": "深入理解在112/223父分批后遇到300秒CLI超时",
+      "job_ids": [
+        "job_da9fda9cf49243589c95"
+      ],
+      "start_utc": "2026-10-18T14:41:06.512708+00:00",
+      "end_utc": null,
+      "time_certainty": "recorded_job_failure_in_readonly_audit",
+      "failed_at_local": "2026-10-18T22:41:06.512708+08:00",
+      "initial_operator_reported_at_local": "2026-10-18T22:42:07+08:00",
+      "status": "failed",
+      "stage": "deep_analysis",
+      "error_code": "timeout",
+      "configured_cli_timeout_seconds": 300,
+      "original_parent_progress": {
+        "completed": 112,
+        "total": 223
+      },
+      "context_progress": {
+        "completed": 33,
+        "total": 48
+      },
+      "job_request_count": 453,
+      "request_delta_for_this_failure": 1,
+      "inflight_count": 0,
+      "frozen_input": {
+        "key": "c15cb384b3111383768f0dc3",
+        "mtime_utc": "2026-10-18T14:35:38.096555+00:00",
+        "mtime_boundary": "Frozen-input publication time from timeout audit; not the CLI request start time.",
+        "frames": 5,
+        "range_ms": [
+          1112320,
+          1119493
+        ],
+        "profiles": 7,
+        "regions": 4
+      },
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\timeout-112-audit.json",
+        "selector": "Recorded job failure time, frozen-unit metadata and post-failure process snapshot; read-only audit, no new requests or old receipt/model rehash"
+      },
+      "audit_observed_at_utc": "2026-10-18T14:43:14.742565+00:00",
+      "failed_unit": [
+        "scene_b6a9a5ac3d08bc405419d0ed",
+        15
+      ],
+      "expected_receipt_key": "78a94c65b16daa543987c5fb",
+      "successful_receipt_at_failure_check": false,
+      "saved_part15_at_failure_check": false,
+      "input_mtime_to_job_failure_seconds": 328.416,
+      "timing_boundary": "328.416s input-to-terminal-failure includes local work. The initial300s CLI timeout consumed one request; the single successful retry consumed one request with30922ms provider-owned elapsed. Neither interval is pure neural inference or total recovery time.",
+      "exited_cli_pid": null,
+      "exited_cli_created_at_utc": null,
+      "post_failure_process_check": {
+        "observed_at_utc": "2026-10-18T14:42:42.642741+00:00",
+        "server_pid": 81416,
+        "server_alive": true,
+        "recursive_cli_descendants": 0,
+        "inflight_count": 0,
+        "normal_cli_call_active": false
+      },
+      "recovery": {
+        "status": "receipt_verified_success",
+        "succeeded": true,
+        "source": {
+          "kind": "json",
+          "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\monitor_recovery_history.json",
+          "selector": "entries: same job/run/frozen_input_key, attempt1, gui_resume_verified_waiting_for_result"
+        },
+        "intent_recorded_at_utc": "2026-10-18T14:43:34.044490+00:00",
+        "attempt": 1,
+        "frozen_input_key": "c15cb384b3111383768f0dc3",
+        "gui_resume_verified_at_utc": "2026-10-18T14:44:42.826606+00:00",
+        "operator_action_reported": "Root confirmed no active CLI/inflight before ep1-only GUI retry; retained1000 request cap and original model/task settings. Disabled submit button was not clicked again; dialog closed and GUI showed running.",
+        "original_request_cap": 1000,
+        "model_settings_changed": false,
+        "post_submit_readonly_observation": {
+          "observed_at_utc": "2026-10-18T14:43:56+00:00",
+          "source": "Root read-only observation relayed in annotation task",
+          "status": "running",
+          "original_parent_progress": {
+            "completed": 112,
+            "total": 223
+          },
+          "context_progress": {
+            "completed": 33,
+            "total": 48
+          },
+          "job_request_count": 453,
+          "error": null
+        },
+        "result_receipt_verified": true,
+        "result_status": "missing_unit_successful_receipt_and_part15_durable",
+        "confirmed_retry_started_at_utc": null,
+        "confirmed_success_at_utc": "2026-10-18T14:45:21.556879+00:00",
+        "result_part_verified": true,
+        "success_time_boundary": "Durable part15 publication mtime, not exact request end.",
+        "receipt_mtime_utc": "2026-10-18T14:45:11.947206+00:00",
+        "part_mtime_utc": "2026-10-18T14:45:21.556879+00:00",
+        "provider_owned_request_elapsed_ms": 30922,
+        "successful_retry_request_count": 1,
+        "frozen_input_mtime_and_size_unchanged": true,
+        "frozen_input_metadata": {
+          "mtime_utc": "2026-10-18T14:35:38.096555+00:00",
+          "bytes": 55378
+        },
+        "input_rehashed": false,
+        "metadata_verified_at_utc": "2026-10-18T14:47:34.528032+00:00",
+        "whole_episode_complete": false,
+        "result_evidence_source": {
+          "kind": "json",
+          "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\timeout-112-audit.json",
+          "selector": "recovery_observation"
+        },
+        "post_result_watch_observation": {
+          "observed_at_utc": "2026-10-18T14:46:09+00:00",
+          "status": "running",
+          "original_parent_progress": {
+            "completed": 113,
+            "total": 223
+          },
+          "context_progress": {
+            "completed": 33,
+            "total": 48
+          },
+          "job_request_count": 454,
+          "error": null
+        }
+      },
+      "notes": "Recorded terminal failure at22:41:06.512708 was followed by one ep1-only GUI retry with original1000 request cap and model settings. The expected successful receipt persisted14:45:11.947206Z, then part15 at14:45:21.556879Z. The original frozen input metadata is unchanged without rehash. Provider-owned successful elapsed is30.922s/request_count1; the earlier300s timeout is a separate consumed request. Watcher14:46:09Z confirmed113/223, ctx33/48,454requests,noerror. This confirms the missing unit recovered, not whole-episode completion.",
+      "attempt_accounting": [
+        {
+          "event": "initial_cli_timeout_300s",
+          "request_count": 1,
+          "successful_receipt": false,
+          "configured_timeout_s": 300,
+          "actual_elapsed_ms": null
+        },
+        {
+          "event": "single_gui_retry_success",
+          "request_count": 1,
+          "successful_receipt": true,
+          "provider_owned_elapsed_ms": 30922
+        }
+      ],
+      "total_failed_and_successful_attempt_requests": 2
+    },
+    {
+      "id": "deep-parent125-cli-timeout-observed231038",
+      "kind": "request_timeout",
+      "label": "深入理解在125/223父分批后再次遇到CLI超时",
+      "job_ids": [
+        "job_da9fda9cf49243589c95"
+      ],
+      "start_utc": "2026-10-18T15:09:37.744198+00:00",
+      "end_utc": null,
+      "time_certainty": "recorded_job_failure_in_readonly_audit",
+      "failed_at_local": "2026-10-18T23:09:37.744198+08:00",
+      "observed_at_utc": "2026-10-18T15:10:38+00:00",
+      "observed_at_local": "2026-10-18T23:10:38+08:00",
+      "status": "failed",
+      "stage": "deep_analysis",
+      "error_code": "timeout",
+      "configured_cli_timeout_seconds": 300,
+      "original_parent_progress": {
+        "completed": 125,
+        "total": 223
+      },
+      "context_progress": {
+        "completed": 33,
+        "total": 48
+      },
+      "job_request_count": 467,
+      "request_delta_for_this_failure": 1,
+      "inflight_count": 0,
+      "frozen_input": {
+        "key": "6d6dcfd3101d4785c7ad1ea1",
+        "reported_key_prefix": "6d6dc",
+        "mtime_utc": "2026-10-18T15:04:12.182338+00:00",
+        "mtime_boundary": "Frozen-input publication from timeout125 audit; not the CLI request start time.",
+        "range_ms": [
+          1159450,
+          1160659
+        ],
+        "core_frames": 12,
+        "profiles": 7,
+        "regions": 12,
+        "context_serialization": {
+          "utf8_bytes": 31003,
+          "budget_utf8_bytes": 128000,
+          "size_preflight_passes": true
+        }
+      },
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\timeout-125-audit.json",
+        "selector": "Recorded terminal failure, distinct frozen unit, context preflight and process/inflight metadata; bounded read-only audit"
+      },
+      "audit_observed_at_utc": "2026-10-18T15:11:30.242595+00:00",
+      "failed_unit": [
+        "scene_37cdb8c7121b5d906eccc1ef",
+        7
+      ],
+      "expected_receipt_key": "7efe5966ebb5ba10af667762",
+      "successful_receipt_at_failure_check": false,
+      "saved_part7_at_failure_check": false,
+      "split_plan_at_failure_check": false,
+      "exited_cli_pid": null,
+      "exited_cli_created_at_utc": null,
+      "post_failure_process_check": {
+        "observed_at_utc": "2026-10-18T15:11:30.242595+00:00",
+        "server_pid": 81416,
+        "server_alive": true,
+        "owned_cli_descendants": 0,
+        "inflight_count": 0,
+        "normal_cli_call_active": false
+      },
+      "independent_of_recovered_event_id": "deep-parent112-cli-timeout-224207",
+      "recovery": {
+        "status": "receipt_verified_success",
+        "succeeded": true,
+        "operator_action_reported": "Root submitted ep1 article Retry then Continue task with original1000 request cap and model settings; disabled submitting button was not clicked again. New unit7 has one recovery intent; root owns history status updates.",
+        "attempt": 1,
+        "original_request_cap": 1000,
+        "model_settings_changed": false,
+        "result_receipt_verified": true,
+        "result_part_verified": true,
+        "confirmed_retry_started_at_utc": null,
+        "confirmed_success_at_utc": "2026-10-18T15:13:52.075044+00:00",
+        "result_status": "missing_unit_successful_receipt_and_part7_durable",
+        "success_time_boundary": "Durable part7 publication mtime, not exact request end.",
+        "receipt_mtime_utc": "2026-10-18T15:13:39.460480+00:00",
+        "part_mtime_utc": "2026-10-18T15:13:52.075044+00:00",
+        "provider_owned_request_elapsed_ms": 32828,
+        "successful_retry_request_count": 1,
+        "metadata_verified_at_utc": "2026-10-18T15:17:38.725473+00:00",
+        "frozen_input_evidence": {
+          "frozen_input_key": "6d6dcfd3101d4785c7ad1ea1",
+          "mtime_utc": "2026-10-18T15:04:12.182338+00:00",
+          "mtime_unchanged": true,
+          "size_after_success_bytes": 78196,
+          "size_before_retry_bytes": null,
+          "size_unchanged_from_pre_retry": null,
+          "input_rehashed": false,
+          "limitation": "Pre-retry file-size baseline was not recorded; same key and original mtime are verified, current size78196B. Do not claim size or content-hash equality."
+        },
+        "post_result_watch_observation": {
+          "observed_at_utc": "2026-10-18T15:16:06+00:00",
+          "source": "Root watcher observation relayed in recovery task",
+          "status": "running",
+          "stage": "deep_analysis",
+          "deep_progress": {
+            "completed": 127,
+            "total": 223,
+            "status": "running"
+          },
+          "context_progress": {
+            "completed": 33,
+            "total": 48,
+            "status": "running"
+          },
+          "job_request_count": 469,
+          "error": null,
+          "error_code": null
+        },
+        "whole_episode_complete": false,
+        "proof_recovery_screenshot": "gui-timeout125-recovered.png",
+        "result_evidence_source": {
+          "kind": "json",
+          "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\timeout-125-audit.json",
+          "selector": "recovery_observation"
+        }
+      },
+      "timing_boundary": "The live provider CLI timeout is300s; frozen-input age and failure/heartbeat timestamps span additional local work and waiting. They are not pure model execution time. The exited CLI's exact PID and start time remain unknown.",
+      "notes": "Independent125/223 timeout recovered after one GUI retry with original1000 request cap and model settings. Expected receipt7efe5966ebb5ba10af667762 persisted15:13:39.460480Z; part7 persisted15:13:52.075044Z. Successful provider-owned request elapsed32.828s/request_count1, separate from the earlier300s timeout/request1. Watcher15:16:06Z confirmed127/223,ctx33/48,469requests,noerror and subsequent work. Same frozen key and original mtime confirmed; current input78196B, pre-retry size baseline unknown, no hash performed. This confirms unit recovery, not completion of episode1.",
+      "attempt_accounting": [
+        {
+          "event": "initial_cli_timeout_300s",
+          "request_count": 1,
+          "successful_receipt": false,
+          "configured_timeout_s": 300,
+          "actual_elapsed_ms": null
+        },
+        {
+          "event": "single_gui_retry_success",
+          "request_count": 1,
+          "successful_receipt": true,
+          "provider_owned_elapsed_ms": 32828
+        }
+      ],
+      "total_failed_and_successful_attempt_requests": 2
+    },
+    {
+      "id": "deep-parent205-cli-timeout-observed012013",
+      "kind": "request_timeout",
+      "label": "深入理解在205/223父分批后遇到独立CLI超时",
+      "job_ids": [
+        "job_da9fda9cf49243589c95"
+      ],
+      "start_utc": "2026-10-18T17:18:47.484805+00:00",
+      "end_utc": null,
+      "time_certainty": "recorded_job_failure_in_readonly_audit",
+      "failed_at_local": "2026-10-19T01:18:47.484805+08:00",
+      "observed_at_utc": "2026-10-18T17:20:13.675749+00:00",
+      "status": "failed",
+      "stage": "deep_analysis",
+      "error_code": "timeout",
+      "configured_cli_timeout_seconds_per_round": 300,
+      "monitoring_grace_seconds": 90,
+      "monitoring_grace_boundary": "Observation grace only, not an extension of the provider request timeout or permission for an overlapping retry.",
+      "original_parent_progress": {
+        "completed": 205,
+        "total": 223
+      },
+      "context_progress": {
+        "completed": 42,
+        "total": 48
+      },
+      "scene_progress": {
+        "completed": 78,
+        "total": 88
+      },
+      "job_request_count": 559,
+      "request_delta_for_this_failure": 2,
+      "attempt_accounting": {
+        "accounted_requests_for_failed_unit": 2,
+        "exact_cli_exec_count": null,
+        "exact_validation_round_count": null,
+        "explanation": "The failed unit accumulated2 counted requests. Specific invalid-output/exec/preflight sequence is unknown; do not call these two timeouts or reduce the count to one.",
+        "successful_gui_retry_counted_requests": 1,
+        "successful_gui_retry_provider_owned_elapsed_ms": 38859,
+        "total_failed_chain_and_successful_retry_counted_requests": 3
+      },
+      "inflight_count": 0,
+      "failed_unit": [
+        "scene_e1fbb5022418b9ba2fab1919",
+        2
+      ],
+      "expected_receipt_key": "99d6fb7d06636aea577ad6b9",
+      "successful_receipt_at_failure_check": false,
+      "saved_part2_at_failure_check": false,
+      "frozen_input": {
+        "key": "ddc72cfe4be0352fceee9177",
+        "mtime_utc": "2026-10-18T17:12:40.031675+00:00",
+        "mtime_boundary": "Frozen-input publication metadata from bounded audit; not the CLI request start time.",
+        "core_frames": 12,
+        "range_ms": [
+          1407197,
+          1409491
+        ],
+        "profiles": 9,
+        "regions": 9,
+        "context_serialization": {
+          "utf8_bytes": 28562,
+          "budget_utf8_bytes": 128000,
+          "size_preflight_passes": true
+        }
+      },
+      "post_failure_process_check": {
+        "observed_at_utc": "2026-10-18T17:21:02.462566+00:00",
+        "observed_at_local": "2026-10-19T01:21:02.462566+08:00",
+        "server_pid": 81416,
+        "server_alive": true,
+        "owned_descendant_count": 0,
+        "inflight_count": 0
+      },
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\timeout-205-audit.json",
+        "selector": "initial_failed_observation,request_accounting,timeout_comparison,frozen_input_metadata_baseline,recovery_observation"
+      },
+      "independent_of_recovered_event_ids": [
+        "deep-parent112-cli-timeout-224207",
+        "deep-parent125-cli-timeout-observed231038"
+      ],
+      "recovery": {
+        "status": "receipt_verified_success",
+        "succeeded": true,
+        "attempt": 1,
+        "operator_action_reported": "Root recorded one intent then clicked Continue task once in ep1-only retry dialog; original model, plan and1000 request cap retained. Dialog closed and GUI running verified; no successful result yet.",
+        "original_request_cap": 1000,
+        "model_settings_changed": false,
+        "result_receipt_verified": true,
+        "result_part_verified": true,
+        "confirmed_retry_started_at_utc": null,
+        "confirmed_success_at_utc": "2026-10-18T17:23:22.575191+00:00",
+        "proof_screenshot": "gui-timeout205-recovered.png",
+        "post_submit_watch_observation": {
+          "observed_at_utc": "2026-10-18T17:22:09.309981+00:00",
+          "source": "Root read-only watcher observation relayed in report task",
+          "status": "running",
+          "original_parent_progress": {
+            "completed": 205,
+            "total": 223
+          },
+          "context_completed": 42,
+          "job_request_count": 559,
+          "receipt_file_count": 684,
+          "saved_part_count": 205,
+          "error": null
+        },
+        "whole_episode_complete": false,
+        "success_time_boundary": "Durable part2 publication mtime; not exact request end.",
+        "receipt_mtime_utc": "2026-10-18T17:23:14.019898+00:00",
+        "part_mtime_utc": "2026-10-18T17:23:22.575191+00:00",
+        "provider_owned_request_elapsed_ms": 38859,
+        "successful_retry_request_count": 1,
+        "gui_resume_verified_at_utc": "2026-10-18T17:22:09.309981+00:00",
+        "frozen_input_evidence": {
+          "frozen_input_key": "ddc72cfe4be0352fceee9177",
+          "mtime_utc": "2026-10-18T17:12:40.031675+00:00",
+          "mtime_unchanged": true,
+          "size_after_success_bytes": 80765,
+          "size_before_retry_bytes": null,
+          "size_unchanged_from_pre_retry": null,
+          "input_rehashed": false,
+          "limitation": "Pre-GUI file-size baseline was not recorded; same key and original mtime verified, current80765B. No size or content-hash parity claim."
+        },
+        "post_result_audit_observation": {
+          "observed_at_utc": "2026-10-18T17:23:45.961923+00:00",
+          "status": "running",
+          "original_parent_progress": {
+            "completed": 206,
+            "total": 223,
+            "status": "running"
+          },
+          "context_progress": {
+            "completed": 42,
+            "total": 48,
+            "status": "running"
+          },
+          "scene_progress": {
+            "completed": 78,
+            "total": 88
+          },
+          "job_request_count": 560,
+          "error": null,
+          "error_code": null
+        },
+        "post_result_watch_observation": {
+          "observed_at_utc": "2026-10-18T17:23:51+00:00",
+          "source": "Root watcher and GUI confirmation relayed in annotation task",
+          "status": "running",
+          "original_parent_progress": {
+            "completed": 206,
+            "total": 223
+          },
+          "context_completed": 42,
+          "job_request_count": 560,
+          "error": null,
+          "gui_next_interval": "1409.5-1411.9s, rounded GUI display"
+        },
+        "result_evidence_source": {
+          "kind": "json",
+          "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\timeout-205-audit.json",
+          "selector": "recovery_observation"
+        }
+      },
+      "timing_boundary": "367.453s is frozen-input creation to recorded terminal job failure, including local work and possible multiple validation rounds; it is not a measured duration of one CLI process or provider-owned request timer.300s applies per complete() round;90s is monitor grace only. Successful retry38859ms is the provider-owned request method timer, not pure neural inference.",
+      "notes": "Independent205/223 timeout recovered after one ep1-only GUI retry with original model/plan/request1000 settings. The failed chain charged2 requests; its exact validation/physical CLI sequence is unknown, so this is not described as two timeouts. Successful retry charged1request/provider-owned38859ms, with receipt17:23:14.019898Z and part2 durable17:23:22.575191Z. Audit17:23:45Z, root watcher17:23:51Z and GUI confirmed206/223,ctx42/48,560requests,noerror. Original frozen key/mtime retained; current80765B, pre-GUI size unknown.367.453s is input-to-terminal wall span, not a request timer. Episode1 remains running.",
+      "audit_observed_at_utc": "2026-10-18T17:21:02.462566+00:00",
+      "input_creation_to_failed_state_ms": 367453,
+      "failed_cli_pid": null,
+      "failed_cli_creation_time": null,
+      "request_accounting_evidence": {
+        "before_terminal_count": 557,
+        "after_terminal_count": 559,
+        "delta": 2,
+        "baseline_evidence_source": "Root-reported watcher snapshots17:14/17:16/17:18 at557 with same inflight; terminal559 independently read at17:21:02Z.",
+        "confirmed": "Two counted requests were charged to the failed unit; do not summarize this as one request. _codex_chat accumulates returned calls and adds the terminal CodexCLIError.request_count.",
+        "automatic_retry_behavior": "Validator/JSON failure can start another complete() round, up to validation_attempts3. A CodexCLIError including timeout exits immediately; timeouts are not automatically retried in that method.",
+        "possible_sequences": [
+          "One returned response fails validator/JSON parsing(count1), then another execution times out(count1).",
+          "Two returned responses fail validation(count2), then a later round times out before execution(count0)."
+        ],
+        "exact_sequence_proven": false,
+        "exact_cli_process_count_proven": false,
+        "validation_failure_reason_persisted_in_safe_records": false,
+        "independent_source_review": "/root/audit_annotations_coverage confirmed the ambiguity; no provider reasoning/output logs were read."
+      },
+      "total_failed_and_successful_attempt_requests": 3
+    },
+    {
+      "id": "episode-one-target-completed",
+      "kind": "completion",
+      "label": "第一集本次处理目标全部完成",
+      "job_ids": [
+        "job_da9fda9cf49243589c95"
+      ],
+      "start_utc": "2026-10-18T17:47:52.013447+00:00",
+      "end_utc": null,
+      "time_certainty": "recorded_job_completion",
+      "source": {
+        "kind": "sqlite",
+        "path": "D:\\SceneRecallLibrary\\runtime\\jobs.sqlite",
+        "selector": "jobs[id=job_da9fda9cf49243589c95].data"
+      },
+      "status": "completed",
+      "scenes": {
+        "completed": 88,
+        "total": 88
+      },
+      "stage_progress": {
+        "transcript": {
+          "completed": 8,
+          "total": 8,
+          "status": "completed"
+        },
+        "preparation": {
+          "completed": 145,
+          "total": 145,
+          "status": "completed"
+        },
+        "deep_analysis": {
+          "completed": 223,
+          "total": 223,
+          "status": "completed"
+        },
+        "context_refresh": {
+          "completed": 48,
+          "total": 48,
+          "status": "completed"
+        }
+      },
+      "job_request_count": 583,
+      "inflight_count": 0,
+      "error": null,
+      "error_code": null,
+      "observed_by_root_watcher_at_utc": "2026-10-18T17:48:13.281370+00:00",
+      "collector_capture_finished_utc": "2026-10-18T17:48:47.515122+00:00",
+      "excluded_episodes": {
+        "2": "cancelled",
+        "3": "cancelled"
+      },
+      "notes": "完成时刻取终局job.updated_at，不将后续watcher或报告构建时刻当作完成时刻。第一集为唯一目标，第二/三集历史取消不作为失败；ASD抽样仍为partial、音频身份仍unavailable，流程完成不代表这些能力全片可用。"
+    }
+  ],
+  "timeline_event_template": {
+    "id": "unique-event-id",
+    "kind": "pause|resume|repair|restart|retry|queue|optimization",
+    "label": "Human-readable event",
+    "job_ids": [],
+    "start_utc": null,
+    "end_utc": null,
+    "time_certainty": "unknown|observation_bounds|recorded",
+    "source": {
+      "kind": "operator_observation",
+      "path": null,
+      "selector": null
+    },
+    "notes": "Add only source-backed timestamps. Unknown endpoints remain null."
+  },
+  "optimization_evidence": [
+    {
+      "id": "current-frame-identity-projection",
+      "status": "implemented_and_regression_tested",
+      "scope": "Saved first-episode visual prelude; 5031 regions; no app initialization, models or library writes",
+      "measurement_kind": "one bounded read-only probe, not a statistically repeated benchmark",
+      "measured_at_utc": null,
+      "baseline_projection_seconds": 3.028821,
+      "optimized_samples": [
+        {
+          "frames": 6,
+          "regions": 6,
+          "projection_seconds": 0.217982,
+          "final_context_canonical_equal": true
+        },
+        {
+          "frames": 24,
+          "regions": 27,
+          "projection_seconds": 0.254812,
+          "final_context_canonical_equal": true
+        },
+        {
+          "frames": 24,
+          "regions": 58,
+          "projection_seconds": 0.255756,
+          "final_context_canonical_equal": true
+        }
+      ],
+      "effect": "Filter saved regions before deepcopy and identity projection; UI default remains complete.",
+      "limitations": [
+        "These are function-projection timings, not end-to-end provider request timings.",
+        "Actual Bangumi gallery had at most one active reference per character; multiple candidate refs intentionally use current-region support.",
+        "No exact optimization deployment timestamp is claimed."
+      ],
+      "source": {
+        "kind": "agent_readonly_probe",
+        "selector": "Current task tool result: 5031-region full projection versus three frame-filtered groups"
+      },
+      "code_paths": [
+        "backend/scenerecall/identity_jobs.py:scene_identity_context",
+        "backend/scenerecall/visual_identity.py:project_result"
+      ],
+      "correctness_test_path": "tests/test_visual_frame_projection.py"
+    },
+    {
+      "id": "full-history-scheduler-polling",
+      "status": "diagnosed_deferred",
+      "scope": "Seven jobs totaling 605321 UTF-8 bytes; a completed import occupied 586537 bytes",
+      "measurement_kind": "40 read-only JobQueue.list calls with SQLite mode=ro",
+      "measured_at_utc": null,
+      "mean_list_ms": 5.472585,
+      "configured_running_sleep_ms": 20,
+      "estimated_single_core_fraction": 0.214842,
+      "effect": "Potential later optimization: reduce full-history polling or query active jobs only.",
+      "limitations": [
+        "Core fraction is a loop-cost estimate, not a runtime CPU attribution.",
+        "No evidence proved this was limiting the active GPU worker; no interruption was recommended.",
+        "No exact diagnosis/deployment timestamp is claimed."
+      ],
+      "source": {
+        "kind": "agent_readonly_probe",
+        "selector": "Current task tool result: 40 JobQueue.list-equivalent read-only calls"
+      },
+      "code_paths": [
+        "backend/scenerecall/pipeline.py:pipeline_loop",
+        "backend/scenerecall/jobs.py:list"
+      ]
+    },
+    {
+      "id": "cpu-gpu-visual-smoke-comparison",
+      "status": "existing_reproducible_evidence",
+      "source": {
+        "kind": "json",
+        "path": "gpu-smoke-v1.json",
+        "selector": "/workers and /comparison"
+      },
+      "limitations": [
+        "Single existing image and a small repeated sample; do not extrapolate total episode duration directly."
+      ]
+    },
+    {
+      "id": "preparation-splits-and-protocol-kind",
+      "status": "inspect_final_stage_metrics_and_operator_timeline",
+      "effect": "Use persisted timeout/invalid_output/fallback counters and split codes to explain preparation stalls.",
+      "limitations": [
+        "An invalid_output counter alone does not identify its root cause or full repair duration.",
+        "Successful paid receipts are preserved; do not equate aggregate split receipts with new paid calls.",
+        "Protocol changes and runtime restarts need separate operator evidence for exact timestamps."
+      ],
+      "source": {
+        "kind": "sqlite_and_json",
+        "selector": "stage_metrics, scene-splits, scene-receipts"
+      }
+    },
+    {
+      "id": "separate-revision-validation-from-prompt-context",
+      "status": "source_review_only_not_implemented",
+      "effect": "未来可将纯修订校验与完整prompt上下文构建分离，减少重复catalog、SceneStore.list、gallery和代表帧IO。",
+      "source": {
+        "kind": "source_review",
+        "selector": "scene_jobs._check_scene_dependencies/_scene_context/_deepen_scene/_scene_call; jobs.character_context; characters.context/catalog; ReferenceGallery.trusted/list/_allowed"
+      },
+      "source_count_estimate": {
+        "catalogs_from_three_scene_context_calls_per_uncached_part": 6,
+        "catalogs_after_removing_two_validation_only_full_context_builds": 2,
+        "excluded": "identity projection catalog and scene-level validation; these counts are source-derived, not measured seconds"
+      },
+      "preserve": [
+        "Current organization-derived scope_id/revision/membership_revision; legacy snapshot compatibility.",
+        "Bangumi normalize_dossier_names + seed_registry lazy local upgrades before comparing revisions; preserve human edits, redirects, tombstones, external bindings and multi-subject behavior.",
+        "Current policy is derived from asset archive and applied during observation; character_snapshot has no separate cast_policy hash.",
+        "Actual prompt construction and identity refresh must recheck gallery revocation/source scope and accepted/confirmed filters; do not cache prompt references across parts.",
+        "Keep all range/prompt/subtitle/prior-memory/annotation/deepen dependency checks, locked paid-success commit checks, frozen hash/receipt ordering and offload drain."
+      ],
+      "limitations": [
+        "No implementation or timing benchmark for this proposal.",
+        "Do not assign all outside-timer delay to these catalog calls.",
+        "Require parity and same-content fresh-request timing before claiming a speedup."
+      ]
+    },
+    {
+      "id": "identity-panel-loading",
+      "status": "source_review_only_not_implemented",
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\final-gui-verification.json",
+        "selector": "formal_lrasd_gui_recheck"
+      },
+      "code_source": {
+        "kind": "source",
+        "path": "D:\\SceneRecall\\frontend\\src\\components\\AudioIdentity.tsx",
+        "selector": "six GET Promise.allSettled and loading state"
+      },
+      "proposal": "Independent section loading and request timeout/retry indicators, including formal LRASD display; exact blocking GET not identified.",
+      "health_observation": {
+        "status_code": 200,
+        "elapsed_ms": 114
+      },
+      "implemented": false
+    }
+  ],
+  "report_guardrails": [
+    "Final HTML only requires episode1 to be completed. Episodes2/3 are user-excluded historical expenditure, never required successes or scope failures.",
+    "Formal ASD windows are sampled continuous-source windows; distinguish scored, no_tracks and unavailable.",
+    "Unconfigured diarization/embedding availability is separate from the LR-ASD sampled reviews.",
+    "No cumulative parallel duration should be presented as end-to-end wall time."
+  ],
+  "deep_serial_io_evidence": {
+    "captured_at_utc": "2026-10-18T10:53:34.093818+00:00",
+    "job_id": "job_da9fda9cf49243589c95",
+    "scene_id": "scene_8ee440c83d999b5b30f22c93",
+    "source_directory": "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce",
+    "completed_scene_deep_files": 0,
+    "scene_cursor_completed": 1,
+    "scene_cursor_deep_completed": 0,
+    "index_accumulated_ms": 23140,
+    "parts": [
+      {
+        "part": 0,
+        "frames": 12,
+        "input_file": "8fbc7189d8f2893088b08814.json",
+        "input_last_write_utc": "2026-10-18T10:49:01.884386+00:00",
+        "receipt_file": "fe8b8dfe60facd1577891649.json",
+        "receipt_last_write_utc": "2026-10-18T10:50:06.607480+00:00",
+        "provider_elapsed_ms": 22610,
+        "part_last_write_utc": "2026-10-18T10:50:13.767881+00:00",
+        "input_to_receipt_write_s": 64.723,
+        "receipt_to_part_write_s": 7.16
+      },
+      {
+        "part": 1,
+        "frames": 12,
+        "input_file": "458591810c4c09f1d965f070.json",
+        "input_last_write_utc": "2026-10-18T10:50:35.993562+00:00",
+        "receipt_file": "0e940fc683ea7089c128f9e2.json",
+        "receipt_last_write_utc": "2026-10-18T10:51:37.311633+00:00",
+        "provider_elapsed_ms": 21422,
+        "part_last_write_utc": "2026-10-18T10:51:44.042616+00:00",
+        "input_to_receipt_write_s": 61.318,
+        "receipt_to_part_write_s": 6.731
+      },
+      {
+        "part": 2,
+        "frames": 12,
+        "input_file": "7d20fdcea99ffdb891162b27.json",
+        "input_last_write_utc": "2026-10-18T10:52:07.318576+00:00",
+        "receipt_file": "37cf4a2610609a3d0dfe3f61.json",
+        "receipt_last_write_utc": "2026-10-18T10:53:09.398972+00:00",
+        "provider_elapsed_ms": 21438,
+        "part_last_write_utc": "2026-10-18T10:53:16.960728+00:00",
+        "input_to_receipt_write_s": 62.08,
+        "receipt_to_part_write_s": 7.562
+      }
+    ],
+    "conclusions": [
+      "Receipt-to-receipt gaps90.704s and92.087s greatly exceed recorded provider elapsed21-23s.",
+      "No complete deep scene had been published between these parts; repeated complete publish/index is excluded as the cause of these specific gaps.",
+      "Freeze-to-receipt includes about40s outside the provider timer. Source orders identity refresh, dependency checks and reservation before timer start.",
+      "Part persistence follows an additional SceneContext validation and apply_observation; observed post-receipt write gaps6.7-7.6s.",
+      "Part-write to next freeze is22.2-23.3s and includes next-context construction."
+    ],
+    "suspected_hot_paths": [
+      "scene_jobs._deepen_scene:context_with_parts->_scene_context",
+      "scene_jobs._scene_call:refresh_scene_request_identity + _check_scene_dependencies before perform.started",
+      "scene_jobs._deepen_scene:locked _scene_context + characters.apply_observation after receipt",
+      "characters.context/catalog:repeated SceneStore.list/decorate_identity_records; per-frame registry reads in apply_observation"
+    ],
+    "limitations": [
+      "Source ordering identifies candidate work, not measured attribution to individual functions. No stress test or live profile was performed.",
+      "File mtimes are persistence observations; publication/fsync lag is unknown.",
+      "These first three parts predate any subsequent local IO optimization; no deployment timestamp is invented."
+    ]
+  },
+  "post_restart_observations": {
+    "source": {
+      "kind": "agent_readonly_observation",
+      "selector": "build_diagnostic_probe messages; existing receipt/input/part mtimes and bounded health checks; no new model inference"
+    },
+    "scene_id": "scene_1adbf3cafc64fe482f343c5a",
+    "parts": [
+      {
+        "part": 0,
+        "frames": 12,
+        "input_last_write_utc": "2026-10-18T11:07:30.870248+00:00",
+        "receipt_last_write_utc": "2026-10-18T11:08:42.586641+00:00",
+        "provider_owned_request_elapsed_ms": 33672,
+        "part_last_write_utc": "2026-10-18T11:08:50.938707+00:00",
+        "freeze_to_receipt_minus_request_s": 38.044,
+        "receipt_to_part_write_s": 8.352
+      },
+      {
+        "part": 1,
+        "frames": 12,
+        "input_last_write_utc": "2026-10-18T11:09:04.450619+00:00",
+        "receipt_last_write_utc": "2026-10-18T11:10:19.876753+00:00",
+        "provider_owned_request_elapsed_ms": 29657,
+        "part_last_write_utc": "2026-10-18T11:10:29.256176+00:00",
+        "freeze_to_receipt_minus_request_s": 45.769,
+        "receipt_to_part_write_s": 9.379
+      },
+      {
+        "part": 2,
+        "frames": 12,
+        "input_last_write_utc": "2026-10-18T11:10:44.276348+00:00",
+        "receipt_last_write_utc": "2026-10-18T11:12:23.256532+00:00",
+        "provider_owned_request_elapsed_ms": 57281,
+        "part_last_write_utc": "2026-10-18T11:12:32.608282+00:00",
+        "freeze_to_receipt_minus_request_s": 41.699,
+        "receipt_to_part_write_s": 9.352
+      }
+    ],
+    "receipt_cadence_s": [
+      98.317,
+      123.352
+    ],
+    "cadence_minus_next_request_s": [
+      68.66,
+      66.071
+    ],
+    "next_part_context_before_freeze_s": [
+      13.512,
+      15.02
+    ],
+    "index_accumulated_ms": 59546,
+    "index_prior_accumulated_ms": 23140,
+    "scene_index_increment_samples_ms_approx": [
+      23720,
+      12690
+    ],
+    "health_success_samples_s": [
+      0.12,
+      0.14,
+      0.237
+    ],
+    "health_or_js_head_timeout_s": 3,
+    "limitations": [
+      "Provider-owned request elapsed may include CLI preflight, image encoding and validation; it is not pure neural inference time.",
+      "Cadence minus request timing is outside that timer boundary; do not mechanically attribute all of it to CPU or one function.",
+      "The new consecutive parts share one scene but differ in content from the original baseline scene; no end-to-end throughput improvement is claimed.",
+      "The final old 10-frame part persisted during graceful shutdown (93.55s after receipt), so it is excluded from post-restart throughput comparison.",
+      "Fast health successes and separate3s timeouts coexist; this does not prove all UI/API paths are responsive."
+    ]
+  },
+  "timing_boundary_definition": {
+    "provider_owned_request_elapsed": "_scene_call.perform starts immediately before invoke_profile and stops after the provider-owned method returns; may include CLI preflight, image encoding, response validation and retries. Not pure neural inference.",
+    "outside_timer_difference": "A persistence interval minus provider-owned elapsed leaves local work/waiting outside that timer boundary; publication/fsync lag and scope differences remain.",
+    "gui_refresh_source_review": [
+      "Jobs refresh calls App.context.refresh, which also awaits assets/projects/folders/jobs library lists; bootstrap is backgrounded separately.",
+      "GET jobs list/get are sync threaded SQLite reads without Library.lock; stale jobs cannot directly prove the jobs route holds the library lock.",
+      "bootstrap library.records, per-asset SceneStore.list and catalog/organization projection can hold shared RLock or contend for worker/GIL resources.",
+      "Main async job update/reservation/account can indirectly wait for that shared lock; remaining synchronous scene-level index/dependency work can block the loop."
+    ]
+  },
+  "completion_scope": {
+    "target_episodes": [
+      1
+    ],
+    "excluded_episodes": [
+      2,
+      3
+    ],
+    "reason": "用户只要求跑完第一集；第二、三集不再继续，其已发生开销保留为范围外历史，不作为本次失败。",
+    "changed_at_utc": null,
+    "recorded_at_utc": "2026-10-18T11:29:52.250565+00:00",
+    "source": {
+      "kind": "user_instruction",
+      "selector": "Latest user scope reduction relayed by root; no exact instruction timestamp asserted"
+    }
+  },
+  "context_limit_failure": {
+    "source": {
+      "kind": "json",
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\deep-context-failure-audit.json"
+    },
+    "discovered_at_utc": "2026-10-18T12:10:50+00:00",
+    "discovery_time_source": "Root operator observation20:10:50 Asia/Shanghai; not the actual failure time",
+    "failure_at_utc": null,
+    "job_id": "job_da9fda9cf49243589c95",
+    "original_parent_progress": "44/223",
+    "unit": [
+      "scene_0b71792e53fb06e49f759026",
+      11
+    ],
+    "serializer_utf8_bytes": 135584,
+    "budget_utf8_bytes": 128000,
+    "current_frames": 12,
+    "current_regions": 71,
+    "profiles": 11,
+    "identity_regions_value_bytes": 121106,
+    "profiles_value_bytes": 12631,
+    "all_regions_current": true,
+    "request_count_for_failed_unit": 0,
+    "preserved_successful_paid_deep_receipts": 44,
+    "notes": [
+      "Current-frame projection did not leak other frames; dense region/candidate data exceeded the text budget.",
+      "Candidate/reference/dossier data must be preserved by zero-paid recursive frame splitting, not dropped or promoted.",
+      "Paid-success receipt reuse remains before split refresh; internal children do not redefine the original223 parent-unit progress."
+    ]
+  },
+  "context_limit_recovery": {
+    "source": {
+      "kind": "json",
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\deep-context-recovery-audit.json"
+    },
+    "observed_at_utc": "2026-10-18T12:31:52.873153+00:00",
+    "observation_kind": "bounded_actual_successful_recovery_audit",
+    "deployed": true,
+    "original_blocked_parent_recovered": true,
+    "whole_episode_complete": false,
+    "validation_groups": [
+      {
+        "kind": "targeted_regression",
+        "passed": 19
+      },
+      {
+        "kind": "independent_review_regression",
+        "passed": 25
+      }
+    ],
+    "original_parent": {
+      "unit": [
+        "scene_0b71792e53fb06e49f759026",
+        11
+      ],
+      "serializer_utf8_bytes": 135584,
+      "budget_utf8_bytes": 128000,
+      "core_frames": 12,
+      "regions": 71,
+      "candidate_entries": 310,
+      "profiles": 11,
+      "aggregate_request_count": 0,
+      "aggregate_elapsed_ms": 0,
+      "aggregate_successful": true,
+      "part11_durable": true
+    },
+    "actual_successful_children": [
+      {
+        "child_number": 0,
+        "range_ms": [
+          303720,
+          307182
+        ],
+        "core_frames": 6,
+        "regions": 36,
+        "candidate_entries": 150,
+        "profiles": 11,
+        "candidate_profiles_missing_dossier": 0,
+        "serializer_utf8_bytes": 74709,
+        "request_count": 1,
+        "provider_owned_request_elapsed_ms": 96172,
+        "receipt_key": "3c0c9092697d7e8fcafda8d2"
+      },
+      {
+        "child_number": 1,
+        "range_ms": [
+          307182,
+          308725
+        ],
+        "core_frames": 6,
+        "regions": 35,
+        "candidate_entries": 160,
+        "profiles": 10,
+        "candidate_profiles_missing_dossier": 0,
+        "serializer_utf8_bytes": 74262,
+        "request_count": 1,
+        "provider_owned_request_elapsed_ms": 74953,
+        "receipt_key": "96f5640fda28707726dd4fde"
+      }
+    ],
+    "preservation": {
+      "all_12_core_frames_in_original_order": true,
+      "all_71_region_objects_in_original_order": true,
+      "all_310_candidate_objects_exact": true,
+      "all_11_original_dossiers_across_children": true,
+      "all_8_original_reference_objects_across_children": true,
+      "all_original_region_images_across_children": true,
+      "candidate_dossier_mapping_missing": 0,
+      "retained_dossiers_exact_by_id": true,
+      "parent_data_equals_join_of_successful_children": true,
+      "old44_success_receipts_preserved": true,
+      "old44_preservation_boundary": "Prior bounded pass verified all44 hashes unchanged; final recovery audit checked existence only without rehash."
+    },
+    "attempt_accounting": [
+      {
+        "event": "original_parent_context_preflight_failure",
+        "request_count": 0,
+        "successful_receipt": false
+      },
+      {
+        "event": "first_child0_cli_timeout",
+        "timeout_seconds": 300,
+        "request_count": 1,
+        "successful_receipt": false
+      },
+      {
+        "event": "gui_retry_child0_success",
+        "request_count": 1,
+        "successful_receipt": true,
+        "provider_owned_request_elapsed_ms": 96172
+      },
+      {
+        "event": "child1_success",
+        "request_count": 1,
+        "successful_receipt": true,
+        "provider_owned_request_elapsed_ms": 74953
+      },
+      {
+        "event": "parent_split_aggregate_success",
+        "request_count": 0,
+        "successful_receipt": true,
+        "elapsed_ms": 0
+      }
+    ],
+    "observed_job": {
+      "job_id": "job_da9fda9cf49243589c95",
+      "status": "running",
+      "original_parent_units_completed": 46,
+      "original_parent_units_total": 223,
+      "request_count": 357,
+      "error": null,
+      "error_code": null,
+      "excluded_episode_statuses": {
+        "2": "cancelled",
+        "3": "cancelled"
+      }
+    },
+    "runtime_operator_evidence": {
+      "server_pid": 81416,
+      "launcher_log_identifier": "201641",
+      "chrome_port": 5413,
+      "exact_ready_at_utc": null,
+      "time_boundary": "Launcher filename201641 is approximate local launch evidence only, not an exact ready or recovery timestamp.",
+      "source": "Root operator observation supplied with bounded recovery audit task"
+    },
+    "notes": [
+      "Automatic zero-request context splitting is deployed and the original blocked parent succeeded, after one real300s CLI timeout and a subsequent GUI retry; this was not immediate recovery.",
+      "Actual child1 current-frame identity refresh retains10 relevant unchanged dossiers, not11; its160 candidates all have their original dossiers. Across both children all11 original dossiers and all8 original reference objects remain.",
+      "Child1 reference refresh replaces one reference and adds crop images; no claim is made that both children have identical lists. Candidate and region objects remain exact, without identity promotion.",
+      "The19 targeted and25 independent regression groups are recorded separately without claiming a disjoint44-test total.",
+      "Successful child elapsed values are provider-owned request timings, not pure neural inference or total recovery wall time. The failed timeout is a separate real request.",
+      "46/223 is an observation of original planned parent-unit progress. Episode1 was still running, so the report remains partial; episodes2/3 were cancelled by the user's scope reduction, not failures."
+    ]
+  },
+  "latest_stall_observation": {
+    "source": {
+      "kind": "json",
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\latest-stall-audit.json"
+    },
+    "observed_from_utc": "2026-10-18T12:42:20.144714+00:00",
+    "observed_through_utc": "2026-10-18T12:43:40.017196+00:00",
+    "diagnosis": "有真实落盘与后续阶段请求推进，本轮有限观察未证明停滞或死锁。",
+    "job_id": "job_da9fda9cf49243589c95",
+    "server_pid": 81416,
+    "status": "running",
+    "original_parent_progress": {
+      "completed": 51,
+      "total": 223
+    },
+    "context_progress": {
+      "completed": 6,
+      "total": 48
+    },
+    "request_count": 364,
+    "current_error": null,
+    "historical_deep_timeout_count": 1,
+    "sequence": [
+      {
+        "kind": "successful_deep_receipt_mtime",
+        "at_local": "2026-10-18T20:42:06.647914+08:00",
+        "request_count": 1,
+        "provider_owned_request_elapsed_ms": 54922
+      },
+      {
+        "kind": "saved_part_mtime",
+        "at_local": "2026-10-18T20:42:14.584459+08:00"
+      },
+      {
+        "kind": "full_scene_result_mtime",
+        "at_local": "2026-10-18T20:42:23.443987+08:00"
+      },
+      {
+        "kind": "next_context_refresh_input_mtime",
+        "at_local": "2026-10-18T20:42:46.343234+08:00"
+      },
+      {
+        "kind": "new_context_refresh_cli_process_creation",
+        "at_local": "2026-10-18T20:42:58.379822+08:00",
+        "pid": 75536
+      }
+    ],
+    "receipt_to_next_cli_seconds": 51.731908,
+    "interval_definition": "Successful deep receipt publication mtime to subsequent context_refresh CLI process creation; includes local commit/transition and launch work, not a directly profiled function duration.",
+    "health_observations": [
+      {
+        "observed_at_utc": "2026-10-18T12:42:34.800047+00:00",
+        "outcome": "timeout",
+        "observed_timeout_ms": 5098
+      },
+      {
+        "observed_at_utc": "2026-10-18T12:43:40.017196+00:00",
+        "status_code": 200,
+        "elapsed_ms": 111
+      }
+    ],
+    "limitations": [
+      "文件mtime是落盘观察，不是步骤开始或结束的完整追踪。51.7秒不能全归给保存场景、索引或某个具体函数。",
+      "本轮没有采集profiler或线程栈；源码热点只能作为调查方向，不是本轮实测归因。",
+      "新输入和inflight只表示活动；本次确认推进同时具有成功回执、part与完整场景结果落盘证据。",
+      "此前1次timeout属于历史诊断，当前job error/error_code为空；一次health超时后有111ms的200成功，不等于持续卡死。",
+      "这是一次有界观察，不保证后续不会停滞；第一集仍未全部完成，报告保持partial。"
+    ]
+  },
+  "progress_semantics": {
+    "deep_analysis": "原计划父分批进度；内部零付费上下文拆分可产生多个子请求。",
+    "requests": "模型请求尝试另列；成功child回执与零请求parent aggregate分别计数。",
+    "published_scenes": "场景发布数与父分批进度不同。"
+  },
+  "latest_monitor_read_observation": {
+    "checked_utc": "2026-10-18T12:55:42.405825+00:00",
+    "kind": "transient_monitor_read_unavailable",
+    "first_check": {
+      "utc": "2026-10-18T12:55:04.473183+00:00",
+      "classification": "unavailable",
+      "read_error": "OperationalError",
+      "prior_baseline_preserved": true
+    },
+    "independent_read": {
+      "elapsed_s": 0.001,
+      "status": "running",
+      "stage": "deep_analysis",
+      "deep_completed": 57,
+      "deep_total": 223,
+      "request_count": 374,
+      "error": null
+    },
+    "repeat_watch": {
+      "classification": "healthy",
+      "deep_completed": 57,
+      "context_completed": 10,
+      "request_count": 374,
+      "new_receipts": 3,
+      "new_parts": 3,
+      "error": null
+    },
+    "diagnostic_limits": {
+      "cim": "sandbox access denied",
+      "health": "WinError10013 socket access denied; not a service failure or measured timeout"
+    },
+    "conclusion": "RO availability recovered; actual job advanced from54 to57. Exact cause of first OperationalError unproven. No retry, restart, model call or Library mutation."
+  },
+  "monitor_access_recovery_observation": {
+    "kind": "monitor_read_access_recovery",
+    "sandbox_failure_utc": "2026-10-18T13:04:40.685997+00:00",
+    "sandbox_repeat": {
+      "error": "SQLITE_CANTOPEN",
+      "code": 14,
+      "elapsed_s": 0.0017,
+      "reason": "unable to open database file"
+    },
+    "approved_readonly_check": {
+      "utc": "2026-10-18T13:05:11.850287+00:00",
+      "classification": "healthy",
+      "deep_completed": 62,
+      "deep_total": 223,
+      "context_completed": 14,
+      "request_count": 383,
+      "error": null
+    },
+    "independent_read": {
+      "utc": "2026-10-18T13:05:14.202+00:00",
+      "elapsed_s": 0.0013,
+      "status": "running",
+      "deep_completed": 62,
+      "error": null
+    },
+    "conclusion": "Different read execution contexts gave different availability results. No application stall established; do not assert a SQLite lock or permanent permission cause.",
+    "monitor_repair": "Preserve SQLite native errorcode/errorname; current heartbeat now includes approved readonly diagnostic fallback for sandbox access failures.",
+    "verification": "12 existing offline tests passed using a fresh workspace basetemp; no Library mutation, restart, retry or model call."
+  },
+  "completion_observation": {
+    "status": "completed",
+    "completed_at_utc": "2026-10-18T17:47:52.013447+00:00",
+    "root_watcher_at_utc": "2026-10-18T17:48:13.281370+00:00",
+    "target_episodes": [
+      1
+    ],
+    "excluded_episodes": [
+      2,
+      3
+    ],
+    "whole_target_complete": true,
+    "job_id": "job_da9fda9cf49243589c95",
+    "request_count": 583,
+    "scene_count": 88,
+    "deep_parent_units": 223,
+    "context_units": 48,
+    "asd_status": "partial",
+    "asd_scored_windows": 2,
+    "asd_no_tracks_windows": 1,
+    "audio_identity_status": "unavailable",
+    "no_end_to_end_speedup_claim": true,
+    "source": {
+      "kind": "sqlite",
+      "path": "D:\\SceneRecallLibrary\\runtime\\jobs.sqlite",
+      "selector": "jobs[id=job_da9fda9cf49243589c95].data"
+    }
+  },
+  "final_output_validation": {
+    "source": {
+      "kind": "json",
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\final-completion-audit.json"
+    },
+    "published_scenes": {
+      "count": 88,
+      "active_scene_count": 88,
+      "coverage_ms": [
+        0,
+        1446784
+      ],
+      "sum_scene_duration_ms": 1446784,
+      "gaps": [],
+      "overlaps": [],
+      "identity_errors": [],
+      "content_kinds": {
+        "narrative": 81,
+        "credits": 7
+      },
+      "actual_understanding_levels": {
+        "initial": 56,
+        "deep": 32
+      },
+      "cursor": {
+        "completed": 88,
+        "deep_completed": 223,
+        "refresh_completed": 48
+      },
+      "index_dirty": false,
+      "revision_file_paths": [
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_1a3bc30c8eafd57fb0dd1f5e.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_8ee440c83d999b5b30f22c93.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_869883b5187bfad04d196efc.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_417112abe65f6a0b4cd55f17.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_1adbf3cafc64fe482f343c5a.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_370addf8f66b755e539eb0f2.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_3f795b376de5aa3de5ac6c6e.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_b05ae74810881b92896e5121.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_95b6d18bf02a8654e94bf889.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_f71303e4fba2cc6ffee93e40.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_c3dda4d3eecdc8403a5f70b3.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_7c5131301619b30ba6b9d741.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_dd1bdc6afb8dbb164329fd0c.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_8881f93040e52f798fc66101.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_28956e1e6cc4c2d15c95d108.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_b0ed37eb0c28ba38c9130b83.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_0b71792e53fb06e49f759026.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_02f930ecfc0c4eabd0d9f51f.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_70a4aace20cdc51b8f0d0470.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_60b5d1b11fc140be6fed6567.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_814efa85f4f430f8e7f089cb.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_6972d2ff90222870cc94bd89.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_43b52f075c8c1df1f542b659.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_8e3c795ee212e508fc499df5.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_0c6a8a32b3c38d3090189bc9.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_a408d1abfc17fe9e0926512d.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_63e72e7aa1d5d4dbd4b7cc24.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_15ca55e6d74d01a8ca050560.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_52ecbf05de20a81bee0d71fe.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_6b3c370ea448921df4e952e8.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_d6edcf66dd34ba4cd726d5a8.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_81f0e3ed6abcd297566d067d.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_e2ac0ac68dd099fafdf1174b.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_386b5dd3248f6c36099128f9.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_58995bc1f9fb162702f46934.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_79d1bbc404675273529bfd5b.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_984941550f43079835b70a55.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_3088f3383480e64b726eb62a.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_f714c3032c83ae482ad86862.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_659ceb0112f1106d432d9e19.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_92f5f6a13676939454171b14.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_067463af6b4ca55e0887ce94.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_fa6ee5f79d85d89b39c03641.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_3af1b6afd1d5ce8e2abbb5d1.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_241fcc86a2a7465ba65472ae.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_b7fa95a69a58fc18449c293a.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_868cfcf9477419d4a12acd95.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_cd15f786120e3acef0f852f4.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_548c50773585f7bc2d2dc402.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_57eaa571bca63410b267a281.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_d35c4a3e19a6f6b7356f4ecc.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_8cc845a1bc67e3d8576990fb.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_9e6e3682041a4eb7cec16d0d.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_ff34b10ac26c499258d10375.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_2ad9136b619d29290b9f0827.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_1d11d5fc9077c0ab3b57d8c2.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_b6a9a5ac3d08bc405419d0ed.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_a223cd1442d7113ba83db610.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_6440c2a85f3d3489e246ac0a.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_37cdb8c7121b5d906eccc1ef.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_d20bff1bb5ecd63627559fae.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_3bc184c4c5eb60f80cd6674c.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_8f1ec2be27ec1714d54c5937.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_2eb71637a4c0f01ad0709169.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_c4ae1f80cdd947a338058357.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_ab1c505b3e29a7f2a113910b.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_7059edaf8791a2d9690a32aa.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_d329a4aaf3b221cfccc6e24c.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_f9c8e832c6f83dbb72e2a0af.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_b528706d05f932ae3fa62043.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_9838db7631f58ce769a5b4ae.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_c69a3b030f2ad1befdddfa60.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_50b1ab079863bacaccaff9ba.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_967d421e1f3242f64c8ea6f3.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_c313d62ccd7b23d60acf5aee.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_3c8dd3725697e3d0958a79a2.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_57ba999f4972473bda40a061.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_2293e324df21bbf8df727dd7.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_e1fbb5022418b9ba2fab1919.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_9051f96b298eb26557591cfd.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_672463fa3a57128e472702cf.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_bc7dce41c72c81b54c87f029.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_a82a9c80a1e10d4c8dff43c9.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_39a375fbf11ac9d171adebce.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scenes\\scene_ddf1959b82bca78ea37d5dcb.deep.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_33ec2979b07144d104b787f2.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_ecb65bec49ed6dac136f8c84.json",
+        "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce_context\\scenes\\scene_af98c6d9e61cea37a09f7896.json"
+      ]
+    },
+    "deep_parts": {
+      "expected_parent_parts": 223,
+      "actual_saved_parent_part_files": 223,
+      "saved_deep_scene_results": 32,
+      "core_frames_per_original_parent_batch": 12,
+      "identity_or_frame_errors": [],
+      "limitation": "223 counts original parent inference units, including durable zero-request aggregates where adaptive child splits were used; it is not a count of223separate LLM payments."
+    },
+    "actual_prompt_provenance": {
+      "previous_independent_audit": "D:\\SceneRecall\\training\\lrasd\\app-revue\\deep-prompt-audit.json",
+      "previous_all_checks_passed": true,
+      "first_proof_revalidated_from_frozen_args_and_successful_receipt": true,
+      "successful_actual_calls_with_formal_asd": [
+        {
+          "unit": [
+            "scene_0b71792e53fb06e49f759026",
+            0
+          ],
+          "input_file": "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scene-inputs\\5a57cdfdfc8f34e82e752f40.json",
+          "range_ms": [
+            238822,
+            244911
+          ],
+          "receipt_file": "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scene-receipts\\bdd7efc7fdd3400a0a8356f2.json",
+          "receipt_id": "bdd7efc7fdd3400a0a8356f2",
+          "job_id": "job_da9fda9cf49243589c95",
+          "stage": "deep_analysis",
+          "request_count": 1,
+          "elapsed_ms": 43531,
+          "formal_asd_scene_id": "scene_0b71792e53fb06e49f759026",
+          "formal_window_ms": [
+            238840,
+            240840
+          ],
+          "active_speaker_reviews": 1,
+          "candidate_entries": 15,
+          "unique_candidate_characters": 8,
+          "all_candidate_profiles_present": true,
+          "all_candidate_dossiers_have_bangumi_source_and_full_description": true,
+          "candidate_reference_count": 8,
+          "all_candidate_refs_have_prior_bangumi_gallery_metadata": true,
+          "attached_reference_images": 8,
+          "dossier_profiles": 10,
+          "image_or_model_rehash": false,
+          "candidate_profile_ids_missing_from_this_call": []
+        },
+        {
+          "unit": [
+            "scene_3bc184c4c5eb60f80cd6674c",
+            9
+          ],
+          "input_file": "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scene-inputs\\327b4d45fbba269a88022c09.json",
+          "range_ms": [
+            1200574,
+            1207998
+          ],
+          "receipt_file": "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scene-receipts\\4bb49fe4e8d8aab8e9c905bc.json",
+          "receipt_id": "4bb49fe4e8d8aab8e9c905bc",
+          "job_id": "job_da9fda9cf49243589c95",
+          "stage": "deep_analysis",
+          "request_count": 1,
+          "elapsed_ms": 26781,
+          "formal_asd_scene_id": "scene_3bc184c4c5eb60f80cd6674c",
+          "formal_window_ms": [
+            1206760,
+            1208760
+          ],
+          "active_speaker_reviews": 1,
+          "candidate_entries": 5,
+          "unique_candidate_characters": 5,
+          "all_candidate_profiles_present": true,
+          "all_candidate_dossiers_have_bangumi_source_and_full_description": true,
+          "candidate_reference_count": 5,
+          "all_candidate_refs_have_prior_bangumi_gallery_metadata": true,
+          "attached_reference_images": 8,
+          "dossier_profiles": 9,
+          "image_or_model_rehash": false,
+          "candidate_profile_ids_missing_from_this_call": []
+        },
+        {
+          "unit": [
+            "scene_3bc184c4c5eb60f80cd6674c",
+            10
+          ],
+          "input_file": "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scene-inputs\\60b7f0b6885c43310930399e.json",
+          "range_ms": [
+            1207998,
+            1216090
+          ],
+          "receipt_file": "D:\\SceneRecallLibrary\\assets\\asset_49d289a62d9740babce8\\analyses\\run_04f682d0146e469298ce\\scene-receipts\\1aaea8e05bf6662826578650.json",
+          "receipt_id": "1aaea8e05bf6662826578650",
+          "job_id": "job_da9fda9cf49243589c95",
+          "stage": "deep_analysis",
+          "request_count": 1,
+          "elapsed_ms": 25875,
+          "formal_asd_scene_id": "scene_3bc184c4c5eb60f80cd6674c",
+          "formal_window_ms": [
+            1206760,
+            1208760
+          ],
+          "active_speaker_reviews": 1,
+          "candidate_entries": 5,
+          "unique_candidate_characters": 5,
+          "all_candidate_profiles_present": false,
+          "all_candidate_dossiers_have_bangumi_source_and_full_description": false,
+          "candidate_reference_count": 5,
+          "all_candidate_refs_have_prior_bangumi_gallery_metadata": true,
+          "attached_reference_images": 6,
+          "dossier_profiles": 6,
+          "image_or_model_rehash": false,
+          "candidate_profile_ids_missing_from_this_call": [
+            "character_bgm_edada74179f4949e88bca1f9"
+          ]
+        }
+      ],
+      "distinct_scored_formal_windows_proven_in_successful_calls": 2,
+      "scope": "Targeted frozen inputs/receipts for the two scored formal windows; no all-receipt rehash or all-input scan.",
+      "role_separation": {
+        "bangumi_biographies": "Original names/aliases/description fields are serialized as LLM dossier context; description content is not a CCIP feature or LR-ASD input.",
+        "bangumi_reference_images": "Previously cached external images feed CCIP visual candidate matching. Selected attached reference images also provide bounded visual prompt context.",
+        "lrasd": "Continuous audio/person-track frames produce speaking scores. CCIP then proposes character candidates; LR-ASD alone does not identify a character.",
+        "trust": "Candidates remain unconfirmed; no trusted identity or voiceprint assignment follows merely from these samples."
+      },
+      "per_call_dossier_projection_limitation": {
+        "calls_with_missing_full_candidate_dossiers": [
+          {
+            "unit": [
+              "scene_3bc184c4c5eb60f80cd6674c",
+              10
+            ],
+            "missing_candidate_profile_ids": [
+              "character_bgm_edada74179f4949e88bca1f9"
+            ]
+          }
+        ],
+        "note": "Both scored formal windows are proven in successful real calls. The1206760–1208760window crosses two parent calls: part9 includes all5candidate Bangumi dossiers; part10 retains the ASD candidates but its current-frame dossier projection omits some candidate profiles. Do not claim every call contained every dossier."
+      }
+    },
+    "checks": {
+      "expected_job_asset_run_ids": true,
+      "job_and_run_metadata_completed_and_match": true,
+      "all88_published_scene_files_active_and_identity_valid": true,
+      "scene_ranges_cover_exact_full_requested_interval": true,
+      "all223_expected_parent_parts_present_and_frames_match": true,
+      "all_stages_finished": true,
+      "no_inflight_calls": true,
+      "previous_successful_deep_asd_receipt_still_valid": true,
+      "formal_asd_expected_baseline_sha_in_all_windows": true,
+      "cancelled_episodes_retained_at8_and7_requests": true
+    },
+    "all_completion_checks_passed": true,
+    "accuracy_limitations": [
+      "Completion and invocation evidence do not establish semantic correctness or calibrated score quality.",
+      "The full audio diarization/voiceprint path previously degraded because complete local model assets were absent; do not claim full speaker diarization.",
+      "No assertion of exhaustive full-episode face or speaking-character attribution is made."
+    ]
+  },
+  "final_count_validation": {
+    "source": {
+      "kind": "json",
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\final-scope-validation.json"
+    },
+    "checks": [
+      {
+        "episode": 1,
+        "status": "completed",
+        "request_count": 583,
+        "stage_request_sum": 583,
+        "successful_provider_receipts": 566,
+        "zero_call_aggregate_receipts": 142,
+        "all_receipt_files": 708,
+        "requests_without_success_receipt": 17,
+        "request_gap_interpretation": "Unsuccessful or incomplete counted attempts; not a count of timeouts or known monetary charge.",
+        "analysis_lifecycle_s": 33050.692662,
+        "asid_status": "partial",
+        "lrasd_scored_full_episode": false
+      },
+      {
+        "episode": 2,
+        "status": "cancelled",
+        "historical_requests": 8,
+        "completion_target": false
+      },
+      {
+        "episode": 3,
+        "status": "cancelled",
+        "historical_requests": 7,
+        "completion_target": false
+      }
+    ],
+    "monetary_cost": null,
+    "limitation": "17counted requests without success receipts are not17timeouts or a known monetary charge."
+  },
+  "final_gui_verification": {
+    "source": {
+      "kind": "json",
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\final-gui-verification.json"
+    },
+    "observation": {
+      "checked_at_utc": "2026-10-18T17:52:47.730466+00:00",
+      "job_id": "job_da9fda9cf49243589c95",
+      "run_id": "run_04f682d0146e469298ce",
+      "asset_id": "asset_49d289a62d9740babce8",
+      "jobs_gui": {
+        "status": "completed",
+        "scene_completed": 88,
+        "scene_total": 88,
+        "deep_completed": 223,
+        "deep_total": 223,
+        "context_completed": 48,
+        "context_total": 48,
+        "request_count": 583,
+        "proof": "gui-ep1-completed.png"
+      },
+      "asset_gui": {
+        "picture_records": 88,
+        "subtitle_records": 717,
+        "analysis_versions": 1,
+        "bangumi_profiles": 14,
+        "readiness": "ready",
+        "proof": "gui-ep1-scenes-final.png"
+      },
+      "formal_lrasd_gui_recheck": {
+        "status": "configuration_loading",
+        "observation": "AudioIdentity tab remained at loading; no retry/config/model action taken. Final formal output and actual deep consumption are verified by independent saved receipt/input audits, not by this incomplete panel load.",
+        "service_health": {
+          "at_utc": "2026-10-18T17:51:11+00:00",
+          "status_code": 200,
+          "elapsed_ms": 114
+        },
+        "source_explanation": "AudioIdentity load waits for six GET requests to settle; api fetch has no timeout; exact blocking GET unknown."
+      },
+      "html_browser_preview": {
+        "status": "blocked_by_browser_policy",
+        "reason": "file protocol not allowed; no alternate protocol or browser surface used to bypass restriction",
+        "checks_instead": "Offline JavaScript/DOM validation and static inspection; not equivalent to browser visual verification"
+      },
+      "paid_calls_or_job_mutations_in_final_verification": 0,
+      "ep2_ep3": "cancelled, preserved, outside completion scope"
+    },
+    "real_browser_html_visual_qa_performed": false,
+    "static_renderer_visual_qa_performed": false,
+    "offline_dom_and_static_css_qa_source": {
+      "kind": "json",
+      "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\performance_report_qa.json"
+    }
+  },
+  "upstream_preparation": {
+    "source": {
+      "kind": "operator_observation",
+      "selector": "Root final scope instruction; existing GUI/import history, no additional production queries"
+    },
+    "shared_import_batch": {
+      "imported": 12,
+      "total": 12,
+      "record_stamp_local": "2026-10-18T15:00:00+08:00",
+      "stamp_is_operation_boundary": false,
+      "operation_wall_ms": null,
+      "allocate_to_episode1": false
+    },
+    "subtitle_preparation": {
+      "gui_final_subtitle_records": 717,
+      "source": {
+        "kind": "json",
+        "path": "D:\\SceneRecall\\training\\lrasd\\app-revue\\final-gui-verification.json",
+        "selector": "asset_gui.subtitle_records"
+      },
+      "operation_wall_ms": null
+    },
+    "bangumi_preparation": {
+      "gui_final_profiles": 14,
+      "operation_wall_ms": null,
+      "role_separation": {
+        "bangumi_biographies": "Original names/aliases/description fields are serialized as LLM dossier context; description content is not a CCIP feature or LR-ASD input.",
+        "bangumi_reference_images": "Previously cached external images feed CCIP visual candidate matching. Selected attached reference images also provide bounded visual prompt context.",
+        "lrasd": "Continuous audio/person-track frames produce speaking scores. CCIP then proposes character candidates; LR-ASD alone does not identify a character.",
+        "trust": "Candidates remain unconfirmed; no trusted identity or voiceprint assignment follows merely from these samples."
+      }
+    },
+    "full_chain_including_import_wall_ms": null,
+    "limitation": "Analysis job created-to-completed is not the full import/subtitle/character-preparation pipeline lifecycle; shared import time is not allocated across episodes."
+  }
+}

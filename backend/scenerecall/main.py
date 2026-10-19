@@ -247,6 +247,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     register_visual_identity_routes(app, library, search)
     app.state.audio_identity = register_audio_routes(app, library, characters,
         refresh=lambda asset_id: search.sync_asset(library.records(asset_id), asset_id=asset_id))
+    queue.lrasd_previews = app.state.audio_identity.lrasd_previews
 
     @app.get("/api/assets")
     def assets():

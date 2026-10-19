@@ -9,6 +9,7 @@
 .venv-visual/
 .venv-windows/
 .venv-visual-windows/
+.venv-visual-gpu-windows/
 .venv-lrasd-windows/
 .cache/
 __pycache__/
