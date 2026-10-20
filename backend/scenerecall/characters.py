@@ -479,9 +479,11 @@ class CharacterStore:
                 observations = [row for row in self.library.observations(asset["id"])
                                 if not any(start <= row["start_ms"] and row["end_ms"] <= end
                                            for start, end in deep_coverage)]
+                from .retrieval_store import RetrievalStore
+                retrieval = RetrievalStore(self.library).records(asset["id"])
                 from .visual_identity import decorate_identity_records
                 active_records = decorate_identity_records(self.library, asset["id"], sorted(
-                    observations + scenes, key=lambda row: (row["start_ms"], row["end_ms"], row["id"])))
+                    observations + scenes + retrieval, key=lambda row: (row["start_ms"], row["end_ms"], row["id"])))
                 for record in active_records:
                     for entity in record.get("entities", []):
                         resolved = self.library.organization.resolve_reference(
@@ -587,6 +589,7 @@ class CharacterStore:
             if result["evidence_frame_ids"]:
                 # Validate every path against one operation's registry snapshot.
                 self.library.frame_paths(asset_id, result["evidence_frame_ids"])
+            from .identity_bindings import uses_policy
             for entity in result["entities"]:
                 checked_id(entity["id"])
                 if not set(entity.get("evidence_frame_ids", [])).issubset(result["evidence_frame_ids"]):
@@ -607,6 +610,12 @@ class CharacterStore:
                             type(confidence) not in {int, float} or not math.isfinite(confidence)
                             or not 0.65 <= confidence <= 1):
                         raise ValueError("角色匹配可信度不足，请保留为待确认人物")
+            if uses_policy(result):
+                # An observation decision must never silently enrich the
+                # reference biography/appearance used for future recognition.
+                result["character_scope_id"] = scope
+                result["character_revision"] = registry["revision"]
+                return result
             for entity in result["entities"]:
                 if entity.get("identity_status", entity.get("association_status")) in {"candidate", "unknown"}:
                     entity["character_id"] = None

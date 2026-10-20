@@ -83,5 +83,5 @@ export interface BangumiReferenceCacheResult {
   imported: number; existing: number; skipped: number;
   errors: { character_id: string; reason: string }[]; references?: CharacterReference[];
 }
-export const identityStatusLabel = (status?: string) => ({ confirmed: '已确认', candidate: '候选 · 待确认', unknown: '未知', revoked: '已撤销', proposed: '提议 · 未入可信库' }[status || ''] || '未知');
-export const identitySourceLabel = (source?: string) => ({ manual: '人工确认', human: '人工确认', ccip: 'CCIP 图像匹配', voice: '声音匹配', voice_bank: '可信声音库匹配', unmatched: '尚未匹配', ecapa: 'ECAPA 声音匹配', upload: '人工上传', external_cached: '已缓存外部图', frame_crop: '原片裁剪', original_clip: '原片声音片段', external_licensed: '有权使用的外部声音' }[source || ''] || source || '未记录来源');
+export const identityStatusLabel = (status?: string) => ({ auto_bound: '自动证据绑定', human_confirmed: '人工确认', confirmed: '已确认', candidate: '候选 · 待确认', unknown: '未知', revoked: '已撤销', proposed: '提议 · 未入可信库' }[status || ''] || '未知');
+export const identitySourceLabel = (source?: string) => ({ 'identity-binding-v2': '当前画面证据自动绑定', ccip_calibrated: '经校准的图像匹配', ccip_uncalibrated: '未校准的图像候选', manual: '人工确认', human: '人工确认', ccip: 'CCIP 图像匹配', voice: '声音匹配', voice_bank: '可信声音库匹配', unmatched: '尚未匹配', ecapa: 'ECAPA 声音匹配', upload: '人工上传', external_cached: '已缓存外部图', frame_crop: '原片裁剪', original_clip: '原片声音片段', external_licensed: '有权使用的外部声音' }[source || ''] || source || '未记录来源');

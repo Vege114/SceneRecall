@@ -289,7 +289,8 @@ class _Selector:
                 for frame in retained]
 
 
-def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, progress=None) -> dict:
+def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, progress=None,
+                   *, sample_collector=None) -> dict:
     from scenedetect import FrameTimecode
     from scenedetect.detectors import ContentDetector
 
@@ -315,6 +316,8 @@ def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, prog
         nonlocal selector, shot_start
         if stop <= shot_start:
             return
+        if sample_collector is not None:
+            sample_collector.finish_shot(shot_start, stop)
         frames = selector.finish(Fraction(stop, 1000))
         if frames:
             shot_id = f"shot_{shot_start:012d}_{stop:012d}"
@@ -329,6 +332,8 @@ def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, prog
         number, frame = item
         if number in cuts:
             finish_shot(max(start_ms, min(end_ms, frame["at_ms"])))
+        if sample_collector is not None:
+            sample_collector.observe(frame)
         selector.add(frame)
 
     decoded = _decode(source, start_ms, end_ms, metadata, checkpoint)

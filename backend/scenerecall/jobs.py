@@ -20,6 +20,7 @@ from .scene_jobs import CODEX_CORE_FRAMES, CORE_FRAMES, SceneJobMixin
 from .execution import ReservationBusy, bounded_map, execution_width, finish_on_cancel
 from .pipeline import EpisodePipelineMixin
 from .identity_jobs import IdentityJobMixin
+from .retrieval_jobs import RetrievalJobMixin
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -82,7 +83,7 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
     return result
 
 
-class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
+class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
     def __init__(self, library: Library, providers, search):
         from .characters import CharacterStore
 
@@ -174,6 +175,8 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
             raise ValueError("分析时间超出视频范围")
         bindings = settings.get("bindings", {})
         strategy = request.analysis_strategy or ("scene-chunks-v1" if bindings.get("preparation") else "content-keyframes-v1")
+        if strategy == "retrieval-first-v1":
+            return self.validate_retrieval(request, settings, asset, end)
         if "vision" in request.stages and strategy == "scene-chunks-v1":
             from .scenes import SceneStore
             overlap = [row for row in SceneStore(self.library).list(request.asset_id)
@@ -252,6 +255,12 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
     def estimate(self, request: AnalysisInput, settings: dict) -> dict:
         _, config = self.validate(request, settings)
         duration = config["end_ms"] - request.start_ms
+        if config.get("analysis_strategy") == "retrieval-first-v1":
+            return {"duration_ms": duration, "estimated_frames": None,
+                    "estimated_requests": 0 if request.retrieval_mode == "core" else None,
+                    "cost_estimate": None, "stage_estimates": {}, "currency": "USD",
+                    "warnings": ["检索策略需扫描后确定帧数；尚无本机吞吐测量，不承诺整集处理耗时。",
+                                 "核心试验不调用视觉语言模型；完整流程还包括局部记录和身份决策。"]}
         plan = None
         if "vision" in request.stages:
             if not request.keyframe_plan_id:
@@ -354,7 +363,8 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
             config = job["config"]
             if job.get("stale_organization"):
                 raise ValueError("视频归属已经改变，请创建新的分析任务；已完成资料保留")
-            if job["type"] == "analysis" and "vision" in config.get("stages", []):
+            if (job["type"] == "analysis" and "vision" in config.get("stages", [])
+                    and config.get("analysis_strategy") != "retrieval-first-v1"):
                 self.character_context(job["asset_id"], config.get("character_snapshot"))
             if (job["type"] == "analysis" and "subtitle" in config.get("stages", [])
                     and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
@@ -589,8 +599,13 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
                 await asyncio.to_thread(create_proxy, path, self.library.asset_dir(job["asset_id"]) / "proxy" / "playback.mp4")
             self.checkpoint(job_id)
             failures = self.get(job_id)["failures"]
+            retrieval = self.get(job_id).get("retrieval")
+            if job["config"].get("analysis_strategy") == "retrieval-first-v1" and (
+                    not retrieval or retrieval.get("status") not in {"core_ready", "completed"}):
+                raise ValueError("检索任务的必需能力尚未完成")
             self.update(job_id, status="partial" if failures else "completed", progress=1,
-                        message=f"完成，{len(failures)} 个单元失败，可重试" if failures else "处理完成")
+                        message=f"完成，{len(failures)} 个单元失败，可重试" if failures else
+                        "核心检索实验完成；默认完整流程尚未完成" if retrieval and retrieval.get("status") == "core_ready" else "处理完成")
         except StopJob:
             stopped = self.get(job_id)
             if stopped["status"] in {"pausing", "paused"}:
@@ -645,7 +660,9 @@ class JobQueue(IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQu
 
     async def analyze(self, job_id: str):
         config = self.get(job_id)["config"]
-        if config.get("analysis_strategy") == "scene-chunks-v1" and "vision" in config["stages"]:
+        if config.get("analysis_strategy") == "retrieval-first-v1":
+            await self.analyze_retrieval(job_id)
+        elif config.get("analysis_strategy") == "scene-chunks-v1" and "vision" in config["stages"]:
             await self.analyze_scenes(job_id)
         else:
             await self.analyze_legacy(job_id)

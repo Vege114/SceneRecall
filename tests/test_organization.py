@@ -436,6 +436,7 @@ def test_same_bangumi_identity_move_reuses_destination_decisions_without_duplica
     archive = bangumi_archive()
     selection = {"mode": "bangumi", "subject_id": 100}
     profiles.apply_asset(source_asset["id"], selection, archive)
+    source_asset = library.get_asset(source_asset["id"])
     profiles.apply_project(target_asset["project_id"], selection, archive)
     store = CharacterStore(library)
     source_role = next(profile for profile in store.catalog(source_asset["id"])["profiles"]

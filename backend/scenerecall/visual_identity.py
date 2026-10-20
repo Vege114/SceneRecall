@@ -193,6 +193,8 @@ class ReferenceGallery:
         encoded = _png(picture)
         with self.library.lock:
             catalog, allowed = _allowed(self.library, asset_id)
+            character_id = CharacterStore._resolve(CharacterStore(self.library)._read(catalog["scope_id"]),
+                                                   character_id, strict=True)
             if character_id not in allowed:
                 raise FileNotFoundError("角色不在当前作品的名单中")
             scope = catalog["scope_id"]
@@ -589,10 +591,14 @@ class VisualIdentityPipeline:
                                                      calibration=config.get("calibration"), model_version=version)
                             metrics["matching_ms"] += round((time.monotonic() - step_start) * 1000)
                             atomic_json(match_path, match)
+                    from .identity_bindings import POLICY_VERSION, stamp_match
+                    match = stamp_match(match, references, config)
                     region = {"id": region_id, "entity_id": region_id, "local_id": f"P{index + 1}",
                               "frame_id": identifier, "at_ms": at_ms, "box": normalized_box, "quality": quality,
                               "crop_path": str(crop_path), "match": match, "model_version": version,
                               "preprocessing": PREPROCESS_VERSION}
+                    if config.get("identity_policy") == POLICY_VERSION:
+                        region.update(source_fingerprint=asset["fingerprint"], identity_policy=POLICY_VERSION)
                     # Per-region raw snapshots survive later review and partial
                     # recovery; the display manifest is only a projection.
                     history_path = self._directory(asset_id) / "region-history" / region_id / f"{digest(region)}.json"
@@ -652,6 +658,8 @@ class VisualIdentityPipeline:
             for key in ("character_id", "candidate_character_id"):
                 if row["match"].get(key):
                     row["match"][key] = CharacterStore._resolve(registry, row["match"][key])
+            for candidate in row["match"].get("candidates", []):
+                candidate["character_id"] = CharacterStore._resolve(registry, candidate.get("character_id"))
             identity = row["match"].get("character_id")
             candidate = row["match"].get("candidate_character_id")
             if (identity and identity not in profiles or candidate and candidate not in profiles
@@ -704,7 +712,10 @@ class VisualIdentityPipeline:
         if status not in {"confirmed", "candidate", "unknown"} or not str(reason).strip():
             raise ValueError("人物身份修改须填写状态和原因")
         with self.library.lock:
-            _catalog, profiles = _allowed(self.library, asset_id)
+            catalog, profiles = _allowed(self.library, asset_id)
+            if character_id is not None:
+                character_id = CharacterStore._resolve(CharacterStore(self.library)._read(catalog["scope_id"]),
+                                                       character_id, strict=True)
             region = read_json(self._directory(asset_id) / "regions" / f"{safe_id(region_id)}.json")
             if region is None:
                 raise FileNotFoundError("人物区域不存在")
@@ -730,15 +741,21 @@ def decorate_identity_records(library, asset_id, records, *, strict=False):
     Nearby timestamps, similar descriptions, or being the only person cannot
     establish a binding. Event actor/target IDs remain local and unchanged.
     """
+    from .identity_bindings import BindingResolver, uses_policy
     directory = library.asset_dir(asset_id) / "identity" / "visual"
     decisions = read_json(directory / "decisions.json", {"decisions": {}})["decisions"]
-    if not decisions and not (directory / "regions").is_dir():
+    if not decisions and not (directory / "regions").is_dir() and not any(uses_policy(row) for row in records):
         return records
     gallery = ReferenceGallery(library)
     trusted = gallery.active_reference_ids(asset_id)
     matching = gallery.active_reference_ids(asset_id, include_candidates=True)
     result = copy.deepcopy(records)
-    for record in result:
+    resolver = None
+    for index, record in enumerate(result):
+        if uses_policy(record):
+            resolver = resolver or BindingResolver(library, asset_id)
+            result[index] = resolver.resolve(record)
+            continue
         for entity in record.get("entities", []):
             identity = entity.get("identity_region_id", entity.get("id"))
             decision = decisions.get(identity)

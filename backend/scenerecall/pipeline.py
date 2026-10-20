@@ -144,8 +144,16 @@ class EpisodePipelineMixin:
                     if job.get("asset_id") not in busy_assets:
                         launch(job, "dialogue")
                         slots -= 1
+                if not any(kind == "retrieval" for _task, kind in running.values()):
+                    for job in queued:
+                        if (job["type"] == "analysis"
+                                and job["config"].get("analysis_strategy") == "retrieval-first-v1"
+                                and job.get("asset_id") not in busy_assets):
+                            launch(job, "retrieval")
+                            break
                 if not any(kind == "main" for _task, kind in running.values()):
                     ordered = [job for job in jobs if job["type"] != "keyframe_scan"
+                               and job["config"].get("analysis_strategy") != "retrieval-first-v1"
                                and job["status"] in {"queued", "running", "pausing", "cancelling"}]
                     for job in ordered[:1]:
                         if job["id"] in running or job["status"] != "queued":

@@ -272,4 +272,5 @@ class AnimeProfileStore:
             # The existing roll-forward journal publishes the cast before the
             # catalog, and recovers both after a crash.
             organization._commit(catalog, {scope: seeded})
+            organization.share_anime_cast()
             return copy.deepcopy(profile)

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "experiment_version": 1,
+  "split": "development_smoke",
+  "purpose": "首次真实本地图像检索闭环；不是最终30+10查询验收集",
+  "clips": [
+    {
+      "id": "kaguya-city-90s",
+      "source_library": "D:/SceneRecallLibrary",
+      "asset_id": "asset_666d87eb4e274e1fa9b7",
+      "start_ms": 181306,
+      "end_ms": 271306,
+      "queries": [
+        {"query": "建筑外面的红色金属楼梯", "target_start_ms": 181306, "target_end_ms": 185500, "type": "background"},
+        {"query": "街角的红色自动售货机", "target_start_ms": 186000, "target_end_ms": 190500, "type": "object"},
+        {"query": "紫色短发的女生在室外看手机", "target_start_ms": 192000, "target_end_ms": 211306, "type": "person_object"},
+        {"query": "手机屏幕显示音乐播放界面", "target_start_ms": 206000, "target_end_ms": 210000, "type": "object"},
+        {"query": "街边大屏幕里有一个银发角色", "target_start_ms": 195000, "target_end_ms": 200500, "type": "screen"},
+        {"query": "两个学生在夜晚的街道上", "target_start_ms": 191000, "target_end_ms": 200500, "type": "multiple_people"},
+        {"query": "一只绿色恐龙驾驶着飞机", "no_answer": true, "type": "negative"},
+        {"query": "有人正在使用能停止时间的秒表", "no_answer": true, "type": "negative_setting_event"}
+      ]
+    }
+  ]
+}

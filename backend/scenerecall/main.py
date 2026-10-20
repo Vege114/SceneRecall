@@ -23,7 +23,8 @@ from .jobs import JobQueue
 from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
 from .models import (
     AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput, ConcurrencyInput,
-    CharacterMergeInput, CharacterReanalysisInput, DeepenInput, ExecutionOptions, SearchInput, SubtitleExtractInput, SubtitleProbeInput,
+    CharacterMergeInput, CharacterReanalysisInput, DeepenInput, ExecutionOptions, RetrievalIdentityInput,
+    SearchInput, SubtitleExtractInput, SubtitleProbeInput,
 )
 from .native_picker import FilePickerBusy, FilePickerInput, FilePickerUnavailable, RestoreLocalInput, local_file, pick_local_files
 from .providers import ProviderManager
@@ -46,6 +47,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     with getattr(providers, "_lock", nullcontext()):
         recover_concurrency(library.root / "private")
     search = SearchEngine(library.root / "indexes", providers)
+    from .visual_encoder import VisualEncoder
+    search.visual_encoder = VisualEncoder(library.root / "private")
     queue = JobQueue(library, providers, search)
     session_token = token or secrets.token_urlsafe(32)
     allowed_ports = allowed_ports or {8765, 5173}
@@ -58,6 +61,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             await queue.start()
         yield
         await queue.stop()
+        await search.visual_encoder.close()
 
     app = FastAPI(title="SceneRecall", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.library, app.state.providers, app.state.search, app.state.jobs = library, providers, search, queue
@@ -140,6 +144,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     "stages": job["config"].get("stages", []),
                     "analysis_strategy": job["config"].get("analysis_strategy", "content-keyframes-v1")}
                    if job["type"] == "analysis" else {}),
+                **({key: job["config"].get(key) for key in (
+                    "retrieval_mode", "retrieval_contract_version", "retrieval_operation")}
+                   if job["config"].get("analysis_strategy") == "retrieval-first-v1" else {}),
                 "budget": {"max_requests": job["config"].get("max_requests", 1000), "max_cost": job["config"].get("max_cost")}}
 
     def asset_view(asset):
@@ -175,7 +182,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 "stats": {"assets": len(assets), "records": len(library.records()),
                           "favorites": len(library.collections())},
                 "tools": {"ffmpeg": bool(shutil.which("ffmpeg")), "ffprobe": bool(shutil.which("ffprobe"))},
-                "version": __version__}
+                "visual_encoder": search.visual_encoder.settings(), "version": __version__}
 
     @app.get("/api/settings")
     def get_settings():
@@ -248,6 +255,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     app.state.audio_identity = register_audio_routes(app, library, characters,
         refresh=lambda asset_id: search.sync_asset(library.records(asset_id), asset_id=asset_id))
     queue.lrasd_previews = app.state.audio_identity.lrasd_previews
+    from .work_entity_api import register_work_entity_routes
+    work_entities = register_work_entity_routes(app, library,
+        refresh=lambda asset_id: asyncio.to_thread(search.sync_asset, library.records(asset_id), asset_id=asset_id))
+    search.concept_lookup = lambda query, filters: work_entities.search_occurrences(
+        query, filters, eligible_records=search.filtered_records(filters))
 
     @app.get("/api/assets")
     def assets():
@@ -299,6 +311,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                          **{k: projection[r["id"]][k] for k in ("summary", "entities", "review_status", "note", "favorite") if r["id"] in projection},
                          "asset_id": asset_id} for r in library.observations(asset_id) if r["id"] in projection]
         return {"asset": asset, "observations": [enrich(r) for r in observations], "subtitles": library.subtitles(asset_id),
+                "retrieval_windows": [enrich(r) for r in projection.values() if r.get("evidence_type") == "retrieval_window"],
                 "scenes": [enrich(r) for r in projection.values() if r.get("kind") == "scene"],
                 "annotations": library.annotations(asset_id), "runs": library.runs(asset_id)}
 
@@ -441,6 +454,20 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             asset, config = queue.validate(payload, settings())
             return public_job(queue.add("analysis", config, asset["id"]))
 
+    @app.post("/api/assets/{asset_id}/retrieval/identity")
+    async def retrieval_identity(asset_id: str, payload: RetrievalIdentityInput):
+        with library.lock:
+            active = [job for job in queue.list() if job.get("asset_id") == asset_id
+                      and job["status"] in {"queued", "running", "pausing", "cancelling"}]
+            existing = next((job for job in active
+                             if job["config"].get("retrieval_operation") == "identity_only"), None)
+            if existing is not None:
+                return public_job(existing)
+            if active:
+                raise ValueError("本集已有任务正在处理，请等待或暂停后补充人物匹配")
+            asset, config = queue.validate_retrieval_identity(asset_id, settings())
+            return public_job(queue.add("analysis", config, asset["id"]))
+
     @app.get("/api/jobs")
     def jobs():
         return [public_job(j) for j in queue.list()]
@@ -457,7 +484,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     async def query(payload: SearchInput):
         bindings = settings()["bindings"]
         result = await search.search(payload.query, filters=payload.filters, limit=payload.limit,
-                                    **{k + "_profile_id": bindings.get(k) for k in ("embedding", "query", "decision", "answer")})
+                                    **{k + "_profile_id": bindings.get(k) if k == "embedding" or payload.enhancements else None
+                                       for k in ("embedding", "query", "decision", "answer")})
         actual_records = {r["id"]: r for r in await asyncio.to_thread(library.records)}
         results = []
         changed = False
@@ -465,11 +493,62 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             # Never let generated or stale result IDs turn into source citations.
             if record["id"] in actual_records:
                 canonical = actual_records[record["id"]]
+                member_ids = record.get("member_ids", [])
+                merged_valid = False
+                if len(member_ids) > 1 and len(member_ids) == len(set(member_ids)) and all(mid in actual_records for mid in member_ids):
+                    from .search import merge_visual_candidates
+                    members = [record["id"], *(mid for mid in member_ids if mid != record["id"])]
+                    if set(members) == set(member_ids):
+                        sources = [{**actual_records[mid], "hit_frame_id": record.get("hit_frame_id")}
+                                   for mid in members]
+                        recomputed = merge_visual_candidates(sources)
+                        if len(recomputed) == 1 and set(recomputed[0].get("member_ids", [])) == set(member_ids):
+                            canonical = recomputed[0]
+                            merged_valid = True
                 changed |= canonical["text"] != record.get("text")
-                ranking = {k: record[k] for k in ("score", "match_type", "match_reason", "evidence_ids") if k in record}
+                ranking = {k: record[k] for k in ("score", "match_type", "match_reason", "evidence_ids",
+                    "hit_frame_id", "seek_ms", "member_ids", "retrieval_branches") if k in record}
+                if not merged_valid:
+                    ranking.pop("member_ids", None)
+                if "evidence_ids" in ranking:
+                    current_evidence = set(canonical.get("evidence_frame_ids", []))
+                    ranking["evidence_ids"] = [fid for fid in ranking["evidence_ids"] if fid in current_evidence]
+                if record.get("match_basis") == "setting_concept_appearance":
+                    current_concepts = {binding["concept_id"] for binding in canonical.get("concept_bindings", [])
+                                        if binding.get("status") == "confirmed"}
+                    matched = [cid for cid in record.get("matched_concept_ids", []) if cid in current_concepts]
+                    if matched:
+                        ranking.update(matched_concept_ids=matched, match_basis="setting_concept_appearance",
+                                       event_verified=False, match_type="partial")
+                    else:
+                        ranking["retrieval_branches"] = [branch for branch in ranking.get("retrieval_branches", [])
+                                                         if branch != "concept"]
+                        ranking.update(match_type="partial", match_reason="作品绑定已更新，当前记录仅作为待核对候选")
+                        changed = True
+                if ranking.get("hit_frame_id") not in canonical.get("evidence_frame_ids", []):
+                    ranking.pop("hit_frame_id", None)
+                    ranking.pop("seek_ms", None)
+                elif "hit_frame_id" in ranking:
+                    frame = next((f for f in canonical.get("ordered_frames", []) if f["id"] == ranking["hit_frame_id"]), None)
+                    if frame is not None:
+                        ranking["seek_ms"] = frame["at_ms"]
+                        ranking["seek_basis"] = "visual_frame"
+                    ranking["thumbnail"] = ranking["hit_frame_id"]
+                if canonical.get("evidence_type") == "retrieval_window":
+                    from .retrieval_events import event_seek
+                    timing = event_seek(payload.query, canonical)
+                    if timing is not None:
+                        ranking.update(timing)
+                        if not ranking.get("hit_frame_id"):
+                            ranking["thumbnail"] = timing["event_evidence"]["evidence_frame_ids"][0]
                 if canonical.get("context_stale") and ranking.get("match_type") == "full":
                     ranking.update(match_type="partial", match_reason="前序理解已更新，当前片段的上下文待刷新")
                     changed = True
+                from .search import unverified_character_names
+                uncertain_names = unverified_character_names(payload.query, canonical)
+                if uncertain_names:
+                    ranking.update(match_type="partial", unverified_character_names=uncertain_names,
+                                   match_reason="匹配到候选角色，画面人物的实名尚未确认")
                 results.append(enrich({**canonical, **ranking}))
             elif record.get("source_ids") and all(rid in actual_records for rid in record["source_ids"]):
                 sources = [actual_records[rid] for rid in record["source_ids"]]
@@ -484,7 +563,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         if changed:
             result["explanation"] = None
             result.setdefault("degraded", []).append("资料已有新修正，已显示最新原文；请重建索引更新排序")
-        return {**result, "results": results}
+        response = {**result, "results": results}
+        if payload.visual_verification:
+            from .retrieval_verification import verify_candidates
+            response = await verify_candidates(library, providers, bindings.get("vision"), payload.query, response)
+        return response
 
     @app.get("/api/index/status")
     def index_status():

@@ -373,6 +373,8 @@ class WorkflowQueueMixin:
     def add_batch(self, request, settings):
         payload = request.model_dump()
         for item, request_item in zip(payload["items"], request.items, strict=True):
+            if item.get("analysis_strategy") != "retrieval-first-v1":
+                item.pop("retrieval_mode", None)
             # The default serial schedule adds no new behavior to older requests.
             # Keep their durable idempotency fingerprints valid after upgrading.
             from .models import ExecutionOptions

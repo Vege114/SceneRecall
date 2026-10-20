@@ -89,7 +89,8 @@ class OrganizationStore:
         for relative in transaction["writes"]:
             parts = Path(relative).parts
             if relative not in {"organization/catalog.json", "private/media-locations.json"} and not (
-                    len(parts) == 3 and parts[0] == "works" and parts[2] == "characters.json"):
+                    parts[0] == "works" and (len(parts) == 3 and parts[2] == "characters.json"
+                    or len(parts) == 4 and parts[2:] == ("reference-images", "gallery.json"))):
                 raise ValueError("组织迁移事务包含非法路径")
             confined_path(self.library.root, relative)
         staging = None
@@ -130,10 +131,25 @@ class OrganizationStore:
             self.recover()
             return read_json(self.path)
 
-    def _commit(self, catalog, registries=None):
+    def _commit(self, catalog, registries=None, *, extra_writes=None):
         self.validate(catalog, check_assets=False)
+        extra_writes = copy.deepcopy(extra_writes or {})
+        # A project move imports stable identities. Carry their references in
+        # the same journal, including deferred moves used by project deletion.
+        from .shared_cast import copy_gallery
+        from .visual_identity import ReferenceGallery
+        gallery = ReferenceGallery(self.library)
+        for scope, registry in (registries or {}).items():
+            relative = f"works/{safe_id(scope)}/reference-images/gallery.json"
+            current = extra_writes.get(relative, gallery._read(scope))
+            for source_scope, mapping in registry.get("imports", {}).items():
+                if source_scope != scope:
+                    current = copy_gallery(self.library, source_scope, scope, mapping, current)
+            if current != gallery._read(scope):
+                extra_writes[relative] = current
         writes = {f"works/{safe_id(scope)}/characters.json": registry
                   for scope, registry in (registries or {}).items()}
+        writes.update(extra_writes)
         writes["organization/catalog.json"] = catalog
         atomic_json(self.journal, {"schema_version": SCHEMA, "id": uid("organization_tx"), "writes": writes})
         self.recover()
@@ -238,8 +254,20 @@ class OrganizationStore:
                                  if key not in previous or previous[key] != value}
                     for phase in ("before", "after"):
                         patch[phase].update(copy.deepcopy(additions))
-            if changed:
-                self._commit(catalog)
+            from .shared_cast import prepare_shared_cast
+            registries, writes, migrated = prepare_shared_cast(self.library, catalog)
+            if changed or migrated:
+                self._commit(catalog, registries, extra_writes=writes)
+
+    def share_anime_cast(self):
+        """Share exact, explicitly bound work casts offline without model calls."""
+        from .shared_cast import prepare_shared_cast
+        with self.library.lock:
+            catalog = copy.deepcopy(self._read())
+            registries, writes, migrated = prepare_shared_cast(self.library, catalog)
+            if migrated:
+                self._commit(catalog, registries, extra_writes=writes)
+            return {"asset_ids": migrated, "migrated_count": len(migrated), "scope_ids": sorted(registries)}
 
     def _add_asset(self, catalog, asset):
         from .characters import normalized
@@ -291,6 +319,8 @@ class OrganizationStore:
             if asset["id"] not in catalog["assets"]:
                 self._add_asset(catalog, asset)
                 self._commit(catalog)
+                self.share_anime_cast()
+                catalog = self._read()
             membership = catalog["assets"][asset["id"]]
             if membership.get("trash_id") and not include_deleted:
                 raise FileNotFoundError("视频已在回收站，请先恢复")
@@ -603,6 +633,7 @@ class OrganizationStore:
                 return catalog, registries
             if ids or delete_project_id is not None:
                 self._commit(catalog, registries)
+                self.share_anime_cast()
                 for job in affected_jobs:
                     if job["status"] in {"queued", "paused", "failed", "partial"}:
                         queue.update(job["id"], status="paused", stale_organization=True,

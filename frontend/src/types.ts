@@ -112,7 +112,7 @@ export function taskModelLabel(profile?: Profile, selection?: TaskModelOverride)
 }
 export interface Defaults {
   execution?: ExecutionOptions;
-  analysis_strategy?: 'scene-chunks-v1' | 'content-keyframes-v1';
+  analysis_strategy?: 'scene-chunks-v1' | 'content-keyframes-v1' | 'retrieval-first-v1';
   window_ms: number;
   frames_per_window: number;
   subtitle_fps: number;
@@ -133,6 +133,7 @@ export interface ConcurrencySettingsResult {
   provider_profiles: Profile[];
 }
 export interface Bootstrap {
+  visual_encoder?: { available: boolean; model?: string; reason?: string; message?: string };
   library_path: string;
   settings: Settings;
   provider_profiles: Profile[];
@@ -215,6 +216,10 @@ export interface Entity {
   character_id?: string;
   character_name?: string;
   candidate_character_id?: string | null;
+  candidate_character_name?: string | null;
+  candidate_character_aliases?: string[];
+  binding_status?: string;
+  identity_binding?: { status?: string; source?: string; reason?: string; [key: string]: unknown };
   association_status?: 'confirmed' | 'candidate' | 'unknown';
   association_source?: string;
 }
@@ -252,7 +257,36 @@ export interface CharacterLibrary {
   profiles: CharacterProfile[];
   assets: Asset[];
 }
-export interface Observation {
+export interface RetrievalEvidence {
+  evidence_type?: 'retrieval_window';
+  hit_frame_id?: string;
+  seek_ms?: number;
+  seek_basis?: 'visual_frame' | 'local_event';
+  event_evidence?: { record_id: string; action: string; start_ms: number; end_ms: number; evidence_frame_ids: string[] };
+  ordered_frames?: { id: string; at_ms: number; pts?: number; time_base?: string | [number, number]; thumbnail_url?: string }[];
+  member_ids?: string[];
+}
+export interface RetrievalProgress {
+  status: string;
+  contract_version?: number;
+  capabilities?: Record<string, 'pending' | 'running' | 'completed' | 'not_requested' | 'disabled' | 'failed'>;
+  identity?: { status: string; reason?: string | null; region_count?: number; metrics?: Record<string, number> };
+  coverage?: { start_ms: number; end_ms: number; total_units: number; published_units: number; processed_units: number };
+  first_searchable_at?: string | null;
+  default_completed_at?: string | null;
+}
+export interface RetrievalWindow extends RetrievalEvidence {
+  id: string;
+  start_ms: number;
+  end_ms: number;
+  summary?: string;
+  entities?: Entity[];
+  events?: Observation['events'];
+  uncertainties?: string[];
+  evidence_frame_ids?: string[];
+  run_id?: string;
+}
+export interface Observation extends RetrievalEvidence {
   id: string;
   window_id: string;
   shot_id: string;
@@ -335,8 +369,12 @@ export interface AssetDetail {
   subtitles: Subtitle[];
   annotations: Annotation[];
   runs: Run[];
+  retrieval_windows?: RetrievalWindow[];
+  retrieval?: RetrievalProgress;
 }
 export interface Job {
+  retrieval?: RetrievalProgress;
+  retrieval_mode?: 'core' | 'complete';
   execution?: ExecutionOptions;
   stages?: ('vision' | 'subtitle')[];
   task_models?: Partial<Record<TaskModelRole, { provider_type: ProviderType; profile_id: string; model: string; reasoning_effort?: string | null }>>;
@@ -369,7 +407,8 @@ export interface JobPayload extends Omit<Defaults, 'window_ms' | 'frames_per_win
   model_overrides?: TaskModelOverrides;
   keyframe_plan_id?: string;
   sampling_strategy?: string;
-  analysis_strategy?: 'scene-chunks-v1';
+  analysis_strategy?: 'scene-chunks-v1' | 'retrieval-first-v1';
+  retrieval_mode?: 'core' | 'complete';
   asset_id: string;
   stages: ('vision' | 'subtitle')[];
   start_ms: number;
@@ -391,7 +430,8 @@ export interface Estimate {
   cost_estimate_max?: number | null;
   warnings: string[];
 }
-export interface SearchResult extends SceneEvidence {
+export interface SearchResult extends SceneEvidence, RetrievalEvidence {
+  entities?: Entity[];
   id: string;
   asset_id: string;
   work_id: string;
@@ -428,6 +468,7 @@ export interface SearchResponse {
   results: SearchResult[];
   degraded: string[];
   explanation?: string;
+  verification?: { status: string; request_count?: number | null; candidate_count?: number; deadline_ms?: number; reason?: string };
 }
 export const CAPABILITIES: { key: Capability; name: string; description: string; data: string }[] = [
   { key: 'preparation', name: '分块与简要索引', description: '先整理台词，再结合全部关键帧建立场景与剧情索引', data: '发送台词与编号预览拼图；可与画面理解共用连接' },
@@ -444,6 +485,8 @@ export const KIND_LABELS: Record<AssetKind, string> = { movie: '电影', animati
 export function keyframeReason(reason?: string): string { return ({ stable_pose: '稳定姿态', representative_pose: '代表姿态', content_change: '画面内容变化', shot_representative: '镜头代表帧' } as Record<string, string>)[reason || ''] || '内容代表帧'; }
 
 export function stageLabel(stage?: string): string {
+  const retrieval: Record<string, string> = { retrieval_sampling: '检索画面采样', sampling: '检索画面采样', visual_index: '直接视觉索引', subtitle_index: '字幕索引', local_records: '局部事件记录', final_publish: '发布检索索引' };
+  if (stage && retrieval[stage]) return retrieval[stage];
   return ({ visual_identity: '人物检测与匹配', identity: '身份复核', audio: '音频识别', audio_extraction: '音频提取', diarization: '说话人分段', voice_matching: '声音匹配', audio_sync: '音画复核', transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', import: '校验视频与提取字幕', import_profile: '同步作品档案', import_index: '建立搜索索引', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
 }
 

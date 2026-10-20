@@ -2,6 +2,42 @@
 
 主应用使用 `.venv-windows`（Python 3.12）。视觉与 LR-ASD 各自运行于独立 Windows 环境；不要把 Linux 的 `.venv/bin/python` 设为原生应用的解释器。以下命令在项目根目录的 PowerShell 中执行，依赖安装需要联网，模型推理继续使用已授权的本地权重。
 
+## 直接图文检索独立环境（2026-10-20）
+
+本次目标机器实际报告 **NVIDIA GeForce RTX 4070 Laptop GPU、8188 MiB 显存、驱动 610.62**；torch 设备总内存为 8,585,216,000 字节。这是设备容量，运行时可用显存会受桌面及共享 GPU 工作影响，不能按标称容量假设每次都可独占。正式选择记录 `pytorch-cuda / cuda:0 / float16`；CPU 只在配置中显式选择，不自动降级。
+
+新 `.venv-retrieval-windows` 与 `.venv-visual-windows`（imgutils／CCIP）、`.venv-lrasd-windows` 分开，避免 NumPy／框架依赖冲突：
+
+```powershell
+uv venv --python 3.12 .venv-retrieval-windows
+uv pip install --python .venv-retrieval-windows\Scripts\python.exe --torch-backend cu128 -r scripts\requirements-retrieval-windows.txt
+uv pip check --python .venv-retrieval-windows\Scripts\python.exe
+.\.venv-retrieval-windows\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CUDA unavailable')"
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+```
+
+`requirements-retrieval-windows.txt` 保存本次独立环境的完整依赖 freeze，包括 torch 2.8.0+cu128、torchvision 0.23.0+cu128、Transformers 4.57.1、OpenCLIP 3.2.0、NumPy 2.5.4。安装成功只证明依赖可用，不证明动画质量或吞吐。首次安装／权重下载单独计时；正常 worker／模型加载仍须计入新任务处理墙钟。
+
+已实跑的 SigLIP 2 snapshot 为 `google/siglip2-base-patch16-256@3f9f96cb90da5dbc758b01813f2f6f1aee24c1ab`。模型文件位于项目忽略目录 `.cache/retrieval-models`，不是正式库迁移。下面是本机实验配置格式；可保存为隔离实验的 `encoder.json`，不需要改正式库：
+
+```json
+{
+  "encoder_id": "siglip2-base-p16-256",
+  "model_dir": "D:/SceneRecall/.cache/retrieval-models/siglip2-base-patch16-256/3f9f96cb90da5dbc758b01813f2f6f1aee24c1ab",
+  "revision": "3f9f96cb90da5dbc758b01813f2f6f1aee24c1ab",
+  "python": "D:/SceneRecall/.venv-retrieval-windows/Scripts/python.exe",
+  "device": "cuda",
+  "batch_size": 16,
+  "timeout_s": 180
+}
+```
+
+`scripts/benchmark_retrieval.py` 将该配置复制到自己创建的隔离 runtime；实际应用读取所选资料库的 `private/retrieval-encoder.json`。缺配置、权重或 CUDA 时返回不可用，不隐式下载／安装。`python` 可省略并由 `SCENERECALL_RETRIEVAL_PYTHON` 显式指定。`revision` 必须固定 SHA，不能写 `main`；实现还校验实际权重、预处理、tokenizer 和依赖身份。
+
+第二个且唯一的对照为 `openclip-multilingual-b32`，对应 `laion/CLIP-ViT-B-32-xlm-roberta-base-laion5B-s13B-b90k`，实跑 snapshot 为 `506d40eb551f4801a1c27fc20a31c7b8f590deda`；配置还需要本地 `text_model_dir`（XLM-R 配置与 tokenizer）。已完成一次同片 90 秒 core smoke；两种模型开发召回打平，暂保留分配显存更低的 SigLIP 2，不宣称最终选型通过。两者官方来源／许可及完整实验命令见 [RETRIEVAL_FIRST.md](RETRIEVAL_FIRST.md)，追加实测和加载方差限制见 [VALIDATION.md](VALIDATION.md#检索优先实验与工程验证2026-10-20)。
+
+常驻 worker 的 `inference_ms / item_count / effective_batch_size` 是最近一次请求的元数据，不是整段累计值；查询后顶层 metadata 还可能对应文本编码。整段采用外层墙钟、任务阶段和索引 `frames / encoded_frames / batches / cache_hits` 计数。PyTorch `peak_allocated_bytes` 也不是全系统显存占用。当前真实记录仅证明一次 90 秒 core 可运行；不代表完整模式或整集实时验收。
+
 ## 视觉与逐帧人物检测
 
 ```powershell

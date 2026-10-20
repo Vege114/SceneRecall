@@ -89,7 +89,8 @@ class ConcurrencyInput(Contract):
 class AnalysisInput(TaskModelSelection):
     asset_id: str
     execution: ExecutionOptions = Field(default_factory=ExecutionOptions)
-    analysis_strategy: Literal["scene-chunks-v1", "content-keyframes-v1"] | None = None
+    analysis_strategy: Literal["scene-chunks-v1", "content-keyframes-v1", "retrieval-first-v1"] | None = None
+    retrieval_mode: Literal["core", "complete"] = "complete"
     keyframe_plan_id: str | None = None
     stages: list[Literal["vision", "subtitle"]] = Field(default_factory=lambda: ["vision"])
     start_ms: int = Field(default=0, ge=0)
@@ -119,6 +120,10 @@ class DeepenInput(TaskModelSelection):
     max_cost: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
+class RetrievalIdentityInput(Contract):
+    """An incremental local identity job accepts no model or story options."""
+
+
 class AnnotationInput(Contract):
     record_id: str
     summary: str | None = Field(default=None, max_length=20000)
@@ -133,6 +138,8 @@ class SearchInput(Contract):
     query: str = Field(min_length=1, max_length=4000)
     filters: dict = Field(default_factory=dict)
     limit: int = Field(default=10, ge=1, le=50)
+    enhancements: bool = False
+    visual_verification: bool = False
 
 
 class CharacterEditInput(Contract):

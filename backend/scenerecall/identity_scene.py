@@ -98,6 +98,17 @@ def bind_identity_evidence(entities, context):
             raise ValueError("身份区域不属于该人物的当前画面证据")
         match = copy.deepcopy(region.get("match", {})) if region else {}
         status = match.get("status", "unknown")
+        from .identity_bindings import POLICY_VERSION
+        if context.get("identity_policy") == POLICY_VERSION:
+            # Current observations are bound by the v2 resolver after provider
+            # validation. A legacy "confirmed" region alone cannot bypass it.
+            for key in entity.get("identity_support_region_ids", []):
+                support = regions.get(key)
+                if support is None or support["frame_id"] not in entity["evidence_frame_ids"]:
+                    raise ValueError("身份支持区域不属于该人物的当前画面证据")
+            candidate = match.get("character_id") or match.get("candidate_character_id")
+            status = "candidate" if candidate else "unknown"
+            match.update(status=status, character_id=None, candidate_character_id=candidate)
         entity.update(identity_region_id=region.get("id", region.get("entity_id")) if region else None,
                       association_status=status, association_source=match.get("source", "unresolved_region"),
                       candidate_character_id=match.get("candidate_character_id"), identity_match=match,

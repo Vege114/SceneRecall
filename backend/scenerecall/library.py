@@ -669,10 +669,12 @@ class Library:
 
     def annotations(self, asset_id: str) -> list[dict]:
         from .scenes import SceneStore
+        from .retrieval_store import RetrievalStore
         annotations = sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")], key=lambda a: a["updated_at"])
         if not annotations:
             return []
-        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id) + SceneStore(self).list(asset_id)}
+        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)
+                   + SceneStore(self).list(asset_id) + RetrievalStore(self).records(asset_id)}
         for annotation in annotations:
             record = records.get(annotation["record_id"])
             annotation["needs_reassociation"] = record is None or bool(annotation.get("character_name") and annotation.get("base_run_id") != record.get("run_id"))
@@ -680,8 +682,10 @@ class Library:
 
     def annotate(self, asset_id: str, payload: dict) -> dict:
         from .scenes import SceneStore
+        from .retrieval_store import RetrievalStore
         self.get_asset(asset_id)
-        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id) + SceneStore(self).list(asset_id)}
+        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)
+                   + SceneStore(self).list(asset_id) + RetrievalStore(self).records(asset_id)}
         if payload["record_id"] not in records:
             historical = next((r for r in self.collections() if r["asset_id"] == asset_id and r["record_id"] == payload["record_id"]), None)
             if not historical or set(payload) - {"record_id", "favorite", "note"}:
@@ -697,10 +701,28 @@ class Library:
             previous = read_json(path, {})
             annotation = {**previous, **payload, "schema_version": SCHEMA, "id": annotation_id,
                           "asset_id": asset_id, "updated_at": now(), "base_run_id": record.get("run_id")}
+            if payload.get("character_name"):
+                entity = next(row for row in record["entities"] if row["id"] == payload["entity_id"])
+                region_id = entity.get("identity_region_id")
+                if region_id:
+                    from .characters import CharacterStore, normalized
+                    from .identity_bindings import character_entity
+                    from .visual_identity import VisualIdentityPipeline
+                    profiles = CharacterStore(self).catalog(asset_id)["profiles"]
+                    requested = normalized(payload["character_name"])
+                    matches = [profile for profile in profiles if requested in {
+                        normalized(value) for value in [profile["name"], *profile.get("aliases", [])]}]
+                    if not character_entity(entity) or len(matches) != 1:
+                        raise ValueError("姓名或别名无法唯一对应当前作品的角色，请选择或先完善角色档案")
+                    reviewed = VisualIdentityPipeline(self).review(asset_id, region_id, status="confirmed",
+                        character_id=matches[0]["id"], reason="用户在当前画面的人物纠错中确认角色")
+                    decision = reviewed["match"]
+                    annotation["identity_review"] = {"region_id": region_id, "character_id": matches[0]["id"],
+                        "version": decision["version"], "status": "confirmed", "source": "human"}
             atomic_json(path, annotation)
             def semantic(value):
                 return (value.get("summary"), (value.get("entity_id"), value.get("character_name"), value.get("aliases"))
-                        if value.get("character_name") else None)
+                        if value.get("character_name") else None, value.get("identity_review"))
             if semantic(previous) != semantic(annotation):
                 SceneStore(self).mark_dependents_stale(asset_id, record["start_ms"], "前序证据的人工解释已变化")
             return annotation
@@ -710,6 +732,7 @@ class Library:
         from .scenes import SceneStore
         from .identity_scene import project_actions, project_audio_evidence
         from .audio_identity import AudioIdentityService
+        from .retrieval_store import RetrievalStore
         characters = CharacterStore(self)
         result = []
         for asset in [self.get_asset(asset_id)] if asset_id else self.list_assets():
@@ -724,11 +747,13 @@ class Library:
             for scene in scenes:
                 if scene.get("audio_evidence"):
                     scene["audio_evidence"] = project_audio_evidence(scene["audio_evidence"], audio)
-            for record in observations + scenes + self.subtitles(asset["id"]) + audio:
+            retrieval = RetrievalStore(self).records(asset["id"])
+            for record in observations + scenes + retrieval + self.subtitles(asset["id"]) + audio:
                 record = project_actions(record)
-                is_visual = "summary" in record
+                is_visual = "summary" in record or record.get("evidence_type") == "retrieval_window"
                 is_scene = "chunk_id" in record
                 is_audio = record.get("kind") == "audio"
+                is_retrieval = record.get("evidence_type") == "retrieval_window"
                 related = [a for a in annotations if a["record_id"] == record["id"]]
                 text = record.get("summary", record.get("text", ""))
                 favorite, note, user_confirmed = False, "", False
@@ -743,10 +768,18 @@ class Library:
                     if annotation.get("note") is not None:
                         note = annotation["note"]
                     if annotation.get("character_name") and not annotation.get("needs_reassociation"):
-                        user_confirmed = True
-                        names += [annotation["character_name"], *(annotation.get("aliases") or [])]
                         for entity in entities:
                             if entity["id"] == annotation.get("entity_id"):
+                                if entity.get("identity_region_id") or annotation.get("identity_review"):
+                                    # A region's current reversible decision is authoritative.
+                                    # Old annotations cannot resurrect a revoked binding or
+                                    # freeze an old name after the shared profile is renamed.
+                                    user_confirmed |= (entity.get("binding_status") == "human_confirmed"
+                                        or entity.get("association_status") == "confirmed"
+                                        and entity.get("association_source") == "human")
+                                    continue
+                                user_confirmed = True
+                                names += [annotation["character_name"], *(annotation.get("aliases") or [])]
                                 entity["name"] = annotation["character_name"]
                                 entity["character_name"] = annotation["character_name"]
                                 entity["aliases"] = annotation.get("aliases") or []
@@ -760,13 +793,16 @@ class Library:
                         names.extend([record["character_name"], *record.get("character_aliases", [])])
                     text = text or "语音片段（无文字）"
                     description = " ".join([text, *names])
-                if not text.strip():
+                if not text.strip() and not is_retrieval:
                     continue
                 if is_visual:
                     for entity in entities:
                         description += " " + " ".join(str(entity.get(k, "")) for k in ("appearance", "label", "name", "description"))
                         if entity.get("character_id"):
                             names.extend([entity.get("character_name", ""), *(entity.get("aliases") or [])])
+                        elif entity.get("candidate_character_id") and entity.get("candidate_character_name"):
+                            description += " 候选角色：" + " ".join([
+                                entity["candidate_character_name"], *(entity.get("candidate_character_aliases") or [])])
                     for event in record.get("events", []):
                         description += " " + str(event.get("action", ""))
                     description += " " + " ".join(record.get("resolved_actions", []))
@@ -793,11 +829,17 @@ class Library:
                                    "subtitle_ids", "frame_ids", "dub_version", "visual_evidence")} if is_audio else {}),
                                "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
                                "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", []),
+                               **({key: record[key] for key in ("evidence_type", "strategy", "source_fingerprint", "sampling_version",
+                                   "ordered_frames", "frame_ids", "shot_ids", "local_frame_ids", "context_frame_ids",
+                                   "subtitle_ids", "held_frame_spans", "identity_policy", "provenance",
+                                   "spatial_observations", "character_revision") if key in record} if is_retrieval else {}),
                                **({key: record.get(key) for key in ("content_kind", "chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
                                    "visual_facts", "dialogue_facts", "inferences", "representative_frame_ids",
                                    "understanding_level", "needs_deep", "needs_identity_review", "needs_action_deep",
                                    "audio_evidence", "reason", "provenance", "dependencies",
                                    "context_stale", "stale_reasons")} if is_scene else {})})
+        from .work_entities import WorkEntityStore
+        result = WorkEntityStore(self).project_records(result)
         if compact_subtitles:
             from .subtitle_projection import compact_subtitle_records
             return compact_subtitle_records(result)
@@ -947,6 +989,10 @@ class Library:
                 SceneStore(restored).validate_all(asset_id)
             from .characters import CharacterStore
             CharacterStore(restored).validate_all()
+            from .retrieval_store import RetrievalStore
+            RetrievalStore(restored).validate_all()
+            from .work_entities import WorkEntityStore
+            WorkEntityStore(restored).validate_all()
             from .audio_identity import validate_audio_artifacts
             from .visual_identity import validate_visual_artifacts
             validate_audio_artifacts(restored)

@@ -22,7 +22,8 @@ import jieba
 from .providers import ProviderError, ProviderManager
 
 jieba.setLogLevel(logging.WARNING)
-ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character", "project_id", "anime_id", "folder_id", "tag"}
+ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character", "character_id",
+                   "concept_id", "project_id", "anime_id", "folder_id", "tag"}
 STOP_WORDS = {
     "的", "了", "在", "是", "有", "和", "与", "及", "或", "吗", "呢", "啊", "吧", "着", "地", "得",
     "我", "你", "他", "她", "它", "我们", "你们", "他们", "那个", "这个", "这些", "那些", "哪个",
@@ -52,8 +53,33 @@ def _search_text(record: dict) -> str:
     for entity in record.get("entities", []) or []:
         pieces.extend(str(entity[key]) for key in ("name", "character_name", "description") if entity.get(key))
         pieces.extend(entity.get("aliases", []) or [])
+        # Candidate labels help find evidence, but never enter the confirmed
+        # character filter or establish visible identity.
+        if entity.get("candidate_character_id") and not entity.get("character_id"):
+            pieces.append(entity.get("candidate_character_name", ""))
+            pieces.extend(entity.get("candidate_character_aliases", []) or [])
+    for binding in record.get("concept_bindings", []) or []:
+        if binding.get("status") == "confirmed":
+            pieces.append(binding.get("concept_name", ""))
+            pieces.extend(binding.get("aliases", []) or [])
     pieces.extend(record.get("aliases", []) or [])
     return " ".join(str(part) for part in pieces if part)
+
+
+def unverified_character_names(query: str, record: dict) -> list[str]:
+    """Keep an explicitly queried, candidate-only identity from becoming fact."""
+    question = normalize(query)
+    confirmed, candidates = set(), []
+    for entity in record.get("entities", []) or []:
+        if entity.get("character_id"):
+            confirmed.update(normalize(str(value)) for value in (
+                entity.get("character_name"), entity.get("name"), *(entity.get("aliases") or [])) if value)
+        elif entity.get("candidate_character_id"):
+            candidates.extend(value for value in (
+                entity.get("candidate_character_name"), *(entity.get("candidate_character_aliases") or [])) if value)
+    return list(dict.fromkeys(str(name) for name in candidates
+                             if normalize(str(name)) and normalize(str(name)) in question
+                             and normalize(str(name)) not in confirmed))
 
 
 def _text_hash(record: dict) -> str:
@@ -86,6 +112,108 @@ def _context_records(records: list[dict]) -> list[dict]:
     return result
 
 
+def _visual_merge_keys(record: dict) -> set[tuple]:
+    if (record.get("kind") != "visual" or record.get("evidence_type") != "retrieval_window"
+            or not record.get("asset_id") or not record.get("source_fingerprint")
+            or len(record.get("member_ids", [])) > 1):
+        return set()
+    keys = set()
+    frame_id = record.get("hit_frame_id")
+    if frame_id and frame_id in record.get("frame_ids", []):
+        keys.add(("frame", frame_id))
+    stable = {}
+    for entity in record.get("entities", []):
+        identity = entity.get("character_id")
+        status = entity.get("identity_status", entity.get("association_status"))
+        if identity and status in {None, "confirmed", "auto_bound", "manual_confirmed"}:
+            stable.setdefault(entity["id"], set()).add(("character", identity))
+    for binding in record.get("concept_bindings", []):
+        if binding.get("status") == "confirmed" and binding.get("entity_id") and binding.get("concept_id"):
+            stable.setdefault(binding["entity_id"], set()).add(("concept", binding["concept_id"]))
+    for event in record.get("events", []):
+        action = unicodedata.normalize("NFKC", str(event.get("action") or "")).strip().casefold()
+        polarity = event.get("polarity", "positive")
+        if not action or polarity not in {"positive", "negative"} or event.get("uncertainty"):
+            continue
+        roles = []
+        has_participants = False
+        for field in ("actor_ids", "target_ids", "subject_id", "object_id", "recipient_id"):
+            ids = event.get(field) or []
+            ids = [ids] if isinstance(ids, str) else ids
+            if not isinstance(ids, list) or any(len(stable.get(identity, ())) != 1 for identity in ids):
+                break
+            has_participants |= bool(ids)
+            roles.append((field, tuple(sorted(next(iter(stable[identity])) for identity in ids))))
+        else:
+            if has_participants:
+                keys.add(("event", action, polarity, bool(event.get("temporal")), tuple(roles)))
+    return keys
+
+
+def merge_visual_candidates(candidates: list[dict]) -> list[dict]:
+    """Collapse bounded presentation duplicates without synthesizing events.
+
+    Each group retains the highest-ranked representative and all original source
+    spans. Adjacent pictures alone never establish an action or identity. The
+    common key must hold across every member, so a chain cannot join unrelated
+    events through a middle record with several different events.
+    """
+    groups = []
+    for candidate in candidates:
+        keys = _visual_merge_keys(candidate)
+        selected = None
+        for group in groups:
+            representative = group["rows"][0]
+            if (not keys or not group["keys"].intersection(keys)
+                    or any(candidate.get(field) != representative.get(field) for field in
+                           ("asset_id", "source_fingerprint", "work_id", "work_scope_id"))):
+                continue
+            start = min(group["start"], candidate["start_ms"])
+            end = max(group["end"], candidate["end_ms"])
+            gap = max(candidate["start_ms"] - group["end"], group["start"] - candidate["end_ms"], 0)
+            if gap > 1000 or end - start > 12000:
+                continue
+            # A frame ID must continue to mean precisely the same source PTS.
+            frames = {frame["id"]: frame for row in group["rows"] for frame in row.get("ordered_frames", [])}
+            if any(frame["id"] in frames and frames[frame["id"]] != frame for frame in candidate.get("ordered_frames", [])):
+                continue
+            selected = group
+            break
+        if selected is None:
+            groups.append({"rows": [candidate], "keys": keys,
+                           "start": candidate["start_ms"], "end": candidate["end_ms"]})
+        else:
+            selected["rows"].append(candidate)
+            selected["keys"].intersection_update(keys)
+            selected["start"], selected["end"] = start, end
+    result = []
+    for group in groups:
+        rows = group["rows"]
+        if len(rows) == 1:
+            result.append(rows[0])
+            continue
+        temporal = sorted(rows, key=lambda row: (row["start_ms"], row["end_ms"], row["id"]))
+        frames = {frame["id"]: frame for row in temporal for frame in row.get("ordered_frames", [])}
+        ordered_frames = sorted(frames.values(), key=lambda frame: (frame["at_ms"], frame["id"]))
+        frame_order = {frame["id"]: index for index, frame in enumerate(ordered_frames)}
+        merged = {**rows[0], "start_ms": group["start"], "end_ms": group["end"],
+                  "member_ids": [row.get("record_id") or row["id"] for row in temporal],
+                  "source_spans": [{"record_id": row.get("record_id") or row["id"],
+                                    "start_ms": row["start_ms"], "end_ms": row["end_ms"]} for row in temporal],
+                  "ordered_frames": [dict(frame) for frame in ordered_frames],
+                  "merge_basis": ("same_hit_frame" if any(key[0] == "frame" for key in group["keys"])
+                                  else "same_stable_event")}
+        for field in ("frame_ids", "evidence_frame_ids", "evidence_ids"):
+            values = list(dict.fromkeys(value for row in temporal for value in row.get(field, [])))
+            merged[field] = sorted(values, key=lambda value: frame_order.get(value, len(frame_order)))
+        merged["retrieval_branches"] = list(dict.fromkeys(
+            branch for row in rows for branch in row.get("retrieval_branches", [])))
+        # Keep the representative's local entities/events untouched: their IDs
+        # are local to that observation, and grouping is no new continuous event.
+        result.append(merged)
+    return result
+
+
 class SearchEngine:
     def __init__(self, index_dir: Path, providers: ProviderManager):
         self.index_dir = Path(index_dir)
@@ -94,7 +222,11 @@ class SearchEngine:
         self.providers = providers
         self._lock = threading.RLock()
         self._generation = 0
+        self.visual_encoder = None
+        self.concept_lookup = None
         self._initialize()
+        from .visual_index import VisualIndex
+        self.visual_index = VisualIndex(self)
 
     def _db(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=30)
@@ -254,7 +386,9 @@ class SearchEngine:
 
     def remove_assets(self, asset_ids):
         """Remove evidence immediately and invalidate any in-flight publication."""
+        asset_ids = list(asset_ids)
         with self._lock, self._db() as db:
+            self.visual_index.remove_assets(db, asset_ids)
             for asset_id in asset_ids:
                 db.execute("DELETE FROM evidence_fts WHERE rowid IN (SELECT rowid FROM records WHERE asset_id=?)", (asset_id,))
                 db.execute("DELETE FROM records WHERE asset_id=?", (asset_id,))
@@ -418,7 +552,52 @@ class SearchEngine:
             contexts = db.execute("SELECT COUNT(*) FROM records WHERE is_context=1").fetchone()[0]
             namespaces = [dict(row) for row in db.execute("SELECT * FROM namespaces ORDER BY updated_at DESC")]
         return {"records": records, "contexts": contexts, "embedding_namespaces": namespaces,
-                "lexical_ready": True}
+                "visual_namespaces": self.visual_index.status(), "lexical_ready": True}
+
+    async def index_visual(self, records: list[dict], frames: list[dict], encoder=None, progress=None) -> dict:
+        return await self.visual_index.build(records, frames, encoder or self.visual_encoder, progress)
+
+    async def match_visual_references(self, records: list[dict], references: list[dict], encoder=None) -> dict:
+        return await self.visual_index.match_references(records, references, encoder or self.visual_encoder)
+
+    async def _visual(self, query: str, filters: dict, degraded: list[str]) -> list[dict]:
+        if self.visual_encoder is None:
+            return []
+        return await self.visual_index.search(query, filters, self.visual_encoder, degraded)
+
+    def filtered_records(self, filters: dict | None = None) -> list[dict]:
+        """Canonical current index rows, filtered before concept lookup."""
+        where, params = self._where(filters or {})
+        with self._db() as db:
+            return [json.loads(row["data"]) for row in db.execute(
+                f"SELECT r.data FROM records r WHERE {where} AND r.is_context=0", params)]
+
+    async def _concept(self, query: str, filters: dict) -> list[dict]:
+        from .visual_index import evidence_digest
+        candidates = await asyncio.to_thread(self.concept_lookup, query, filters)
+        if not isinstance(candidates, list):
+            raise ValueError("作品概念召回须返回记录列表")
+        # The callback receives original constraints; its output is fenced again
+        # against deletion, stale source evidence and the authoritative SQL scope.
+        current = {row["id"]: row for row in await asyncio.to_thread(self.filtered_records, filters)}
+        selected, seen = [], set()
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise ValueError("作品概念召回包含无效记录")
+            row = current.get(candidate.get("id"))
+            if row is None or row["id"] in seen or evidence_digest(row) != evidence_digest(candidate):
+                continue
+            if (candidate.get("match_basis") != "setting_concept_appearance"
+                    or not candidate.get("concept_bindings")
+                    or any(binding.get("status") != "confirmed" for binding in candidate["concept_bindings"])):
+                continue
+            selected.append({**row, **{field: candidate[field] for field in (
+                "concept_bindings", "matched_concept_ids", "evidence_ids") if field in candidate},
+                "match_basis": "setting_concept_appearance", "event_verified": False, "retrieval_branches": ["concept"]})
+            seen.add(row["id"])
+            if len(selected) == 50:
+                break
+        return selected
 
     @staticmethod
     def _where(filters: dict) -> tuple[str, list]:
@@ -429,6 +608,15 @@ class SearchEngine:
             if key == "character":
                 clauses.append("EXISTS (SELECT 1 FROM json_each(r.characters) WHERE value=?)")
                 params.append(normalize(str(value)))
+            elif key == "character_id":
+                clauses.append("""(json_extract(r.data, '$.character_id')=? OR EXISTS
+                    (SELECT 1 FROM json_each(r.data, '$.entities')
+                     WHERE json_extract(value, '$.character_id')=?))""")
+                params.extend([value, value])
+            elif key == "concept_id":
+                clauses.append("""EXISTS (SELECT 1 FROM json_each(r.data, '$.concept_bindings')
+                    WHERE json_extract(value, '$.concept_id')=? AND json_extract(value, '$.status')='confirmed')""")
+                params.append(value)
             elif key in {"project_id", "anime_id"}:
                 clauses.append(f"json_extract(r.data, '$.{key}')=?")
                 params.append(value)
@@ -534,12 +722,31 @@ class SearchEngine:
             except (ProviderError, OSError, ValueError, RuntimeError) as exc:
                 message = str(exc) if isinstance(exc, ProviderError) else "索引读取失败，请重建索引"
                 degraded.append("语义检索不可用：" + message)
-        else:
+        elif self.visual_encoder is None and self.concept_lookup is None:
             degraded.append("未配置向量模型；本次仅使用字面检索")
+        visual = []
+        if self.visual_encoder is not None:
+            try:
+                # Preserve the original actor/object/action/negation constraints.
+                visual = await self._visual(query, filters, degraded)
+            except (ProviderError, OSError, ValueError, RuntimeError) as exc:
+                degraded.append("直接视觉检索不可用，已保留其他召回结果：" + str(exc))
+        concept = []
+        if self.concept_lookup is not None:
+            try:
+                concept = await self._concept(query, filters)
+            except (OSError, ValueError, RuntimeError) as exc:
+                degraded.append("作品概念检索不可用，已保留其他召回结果：" + str(exc))
         records, scores = {}, defaultdict(float)
-        for ranking in (lexical, semantic):
+        for ranking in (lexical, semantic, visual, concept):
             for rank, record in enumerate(ranking, 1):
-                records[record["id"]] = record
+                previous = records.get(record["id"], {})
+                records[record["id"]] = {**previous, **record,
+                    "retrieval_branches": list(dict.fromkeys(previous.get("retrieval_branches", [])
+                                                             + record.get("retrieval_branches", [])))}
+                if previous.get("evidence_ids") or record.get("evidence_ids"):
+                    records[record["id"]]["evidence_ids"] = list(dict.fromkeys(
+                        previous.get("evidence_ids", []) + record.get("evidence_ids", [])))
                 scores[record["id"]] += 1 / (60 + rank)
         ordered = sorted(records.values(), key=lambda record: scores[record["id"]], reverse=True)
         candidates = []
@@ -547,7 +754,9 @@ class SearchEngine:
             exact = record["kind"] == "subtitle" and normalize(query) in normalize(record.get("text", ""))
             candidates.append({**record, "score": scores[record["id"]],
                                "match_type": "full" if exact else "partial",
-                               "match_reason": "台词原文包含查询文本" if exact else "包含相关证据，组合条件尚待核对"})
+                               "match_reason": ("设定匹配该实体；画面证据仅确认出场，未证明当前功能或动作"
+                                                if record.get("match_basis") == "setting_concept_appearance" else
+                                                "台词原文包含查询文本" if exact else "包含相关证据，组合条件尚待核对")})
         if decision_profile_id and candidates:
             try:
                 decision = await self.providers.decide(decision_profile_id, query, candidates[:20])
@@ -562,7 +771,7 @@ class SearchEngine:
                         continue
                     candidate = by_id[judgment["id"]]
                     match_type = judgment["match_type"]
-                    if candidate.get("context_stale") and match_type == "full":
+                    if (candidate.get("context_stale") or candidate.get("match_basis") == "setting_concept_appearance") and match_type == "full":
                         match_type = "partial"
                     reranked.append({**candidate, "score": judgment["score"],
                                      "match_type": match_type,
@@ -574,7 +783,11 @@ class SearchEngine:
         # Suppress a context hit when one of its shorter source cues already contains
         # the complete literal quote. Context remains when the query spans cue boundaries.
         chosen = []
-        for candidate in candidates:
+        for candidate in merge_visual_candidates(candidates):
+            uncertain_names = unverified_character_names(query, candidate)
+            if uncertain_names:
+                candidate.update(match_type="partial", unverified_character_names=uncertain_names,
+                                 match_reason="匹配到候选角色，画面人物的实名尚未确认")
             if candidate.get("is_context") and any(
                 normalize(query) in normalize(records.get(source, {}).get("text", ""))
                 for source in candidate.get("source_ids", [])
