@@ -294,7 +294,26 @@ describe('Explicit retrieval core experiments', () => {
     expect(within(card).getByText('发布检索索引')).toBeTruthy();
     const batch = screen.getByRole('region', { name: '批量分析进度' });
     expect(batch.textContent).toContain('任务完成 1 / 1');
+    expect(batch.textContent).toContain('未启用局部事件与身份，不等于默认完整流程');
     expect(batch.textContent).toContain('不等于默认完整流程');
+  });
+
+  it.each([
+    ['completed', '已完成'], ['running', '已启用（处理中）'], ['disabled', '已关闭'],
+  ] as const)('reports actual new-core batch identity capability %s while preserving the legacy contract wording', (identity, label) => {
+    const value = context();
+    value.jobs = [
+      { id: 'new-core', batch_id: 'modern-batch', type: 'analysis', asset_id: asset.id, status: 'completed', progress: 1, completed: 2, total: 2, created_at: asset.created_at,
+        retrieval: { contract_version: 2, status: 'core_ready', default_completed_at: null, capabilities: { local_records: 'not_requested', identity } } },
+      { id: 'legacy-core', batch_id: 'legacy-batch', type: 'analysis', asset_id: asset.id, status: 'completed', progress: 1, completed: 2, total: 2, created_at: asset.created_at,
+        retrieval: { status: 'core_ready', default_completed_at: null, capabilities: { local_records: 'not_requested', identity: 'not_requested' } } },
+    ] as Job[];
+    mount(<Jobs />, value);
+    const [modern, legacy] = screen.getAllByRole('region', { name: '批量分析进度' });
+    expect(modern.textContent).toContain(`局部事件未启用；本地人物匹配：1 集${label}`);
+    expect(modern.textContent).not.toContain('未启用局部事件与身份');
+    expect(modern.textContent).toContain('不等于默认完整流程');
+    expect(legacy.textContent).toContain('未启用局部事件与身份，不等于默认完整流程');
   });
 
   it('shows local identity completed for the new no-VLM contract without implying events were generated', () => {
