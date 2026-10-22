@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 from .characters import CharacterStore, checked_box, scope_id
 from .library import atomic_json, confined_path, digest, now, read_json, safe_id
@@ -32,6 +32,32 @@ class ConfirmationDecision(Contract):
 
 class ConfirmationSample(Contract):
     max_frames: int = Field(default=12, ge=1, le=24, strict=True)
+
+
+class ConfirmationCandidate(Contract):
+    source_asset_id: str = Field(min_length=1, max_length=180)
+    region_id: str = Field(min_length=1, max_length=180)
+
+    @field_validator("source_asset_id", "region_id")
+    @classmethod
+    def checked_identifier(cls, value):
+        return safe_id(value)
+
+
+class ConfirmationBatch(Contract):
+    candidates: list[ConfirmationCandidate] = Field(min_length=1, max_length=3)
+    single_character: bool = Field(strict=True)
+    use_as_reference: bool = Field(strict=True)
+    reason: str = Field(default="", max_length=4000)
+
+    @model_validator(mode="after")
+    def explicit_unique_selection(self):
+        if not self.single_character or not self.use_as_reference:
+            raise ValueError("请确认所选裁剪均为该角色的清晰单人画面，并同意作为后续识别参考")
+        keys = [(row.source_asset_id, row.region_id) for row in self.candidates]
+        if len(set(keys)) != len(keys):
+            raise ValueError("所选人物裁剪不能重复")
+        return self
 
 
 class CharacterConfirmation:
@@ -230,11 +256,12 @@ class CharacterConfirmation:
                 "guidance": "确认仅标记当前区域，并将单人正片裁剪加入本作品可信图库。其他镜头仍需独立匹配与验证；未出场角色可跳过。"}
 
     def decide(self, asset_id, character_id, *, action, source_asset_id=None, region_id=None,
-               single_character=False, use_as_reference=False, reason=""):
+               single_character=False, use_as_reference=False, reason="", _catalog=None, _defer_projection=False,
+               _before_confirmation_write=None):
         if action not in {"confirm", "reject", "unclear", "skip", "resume"}:
             raise ValueError("角色确认操作无效")
         with self.library.lock:
-            catalog = CharacterStore(self.library).roster(asset_id)
+            catalog = _catalog if _catalog is not None else CharacterStore(self.library).roster(asset_id)
             scope = catalog["scope_id"]
             registry = CharacterStore(self.library)._read(scope)
             character_id = CharacterStore._resolve(registry, character_id, strict=True)
@@ -297,6 +324,8 @@ class CharacterConfirmation:
                                  if row["source"].get("confirmation_id") == key), None)
                 if existing and existing["status"] != "confirmed":
                     raise ValueError("此参考图已被撤销或降级，请在参考图库中复核")
+                if _before_confirmation_write is not None:
+                    _before_confirmation_write()
                 if previous.get("action") != "confirm":
                     self._save(scope, state, key, {**decision, "action": "confirming"})
                 if existing is None:
@@ -307,16 +336,89 @@ class CharacterConfirmation:
                 decision["reference_id"] = existing["id"]
                 # Recover a crash after reference creation without duplicate
                 # references or repeated human-review revisions.
-                if region["match"].get("source") != "human" or region["match"].get("character_id") != character_id:
+                if not desired:
                     self.pipeline.review(source_asset_id, region_id, status="confirmed", character_id=character_id,
                                          reason=reason.strip() or "角色确认：确认当前人物并授权正片裁剪作为后续识别参考",
                                          _catalog=catalog)
+                if _defer_projection:
+                    # The batch owns the same library lock through search
+                    # publication. Leave each durable journal in confirming
+                    # until its source asset's exact projection is published.
+                    return {"scope_id": scope, "key": key, "decision": decision}
                 from .scenes import SceneStore
                 SceneStore(self.library).invalidate_identity_inferences(source_asset_id, region_ids=[region_id])
                 if self.search is not None:
                     self.search.sync_asset(self.library.records(source_asset_id), source_asset_id)
             if previous.get("action") != action or action == "confirm" and previous.get("reference_id") != decision.get("reference_id"):
                 self._save(scope, state, key, decision)
+
+    def confirm_batch(self, asset_id, character_id, *, candidates, single_character, use_as_reference, reason=""):
+        payload = ConfirmationBatch.model_validate({"candidates": candidates, "single_character": single_character,
+                                                   "use_as_reference": use_as_reference, "reason": reason})
+        with self.library.lock:
+            catalog = CharacterStore(self.library).roster(asset_id)
+            scope = catalog["scope_id"]
+            registry = CharacterStore(self.library)._read(scope)
+            character_id = CharacterStore._resolve(registry, character_id, strict=True)
+            if character_id not in {row["id"] for row in catalog["profiles"]}:
+                raise ValueError("角色不在当前作品名单中")
+            results, tickets, sources, started = [], {}, {}, set()
+
+            def failed(index, exc):
+                item = results[index]
+                key = self._key(character_id, item["source_asset_id"], item["region_id"])
+                item.update(status="failed", error=str(exc))
+                item["recovery_required"] = self._read(scope)["decisions"].get(key, {}).get("action") == "confirming"
+
+            for candidate in payload.candidates:
+                index = len(results)
+                item = candidate.model_dump()
+                results.append({**item, "status": "failed"})
+                try:
+                    tickets[index] = self.decide(asset_id, character_id, action="confirm", **item,
+                        single_character=True, use_as_reference=True, reason=payload.reason,
+                        _catalog=catalog, _defer_projection=True,
+                        _before_confirmation_write=lambda: started.add(index))
+                    sources.setdefault(candidate.source_asset_id, []).append(index)
+                except Exception as exc:
+                    failed(index, exc)
+                    # A write may have succeeded before a subsequent review
+                    # failed. Publish any durable changes once for this source,
+                    # but leave the failed item's journal for an explicit retry.
+                    if index in started and results[index]["recovery_required"]:
+                        sources.setdefault(candidate.source_asset_id, []).append(index)
+
+            from .scenes import SceneStore
+            for source_id, indices in sources.items():
+                try:
+                    SceneStore(self.library).invalidate_identity_inferences(
+                        source_id, region_ids=[results[index]["region_id"] for index in indices])
+                    if self.search is not None:
+                        self.search.sync_asset(self.library.records(source_id), source_id)
+                except Exception as exc:
+                    for index in indices:
+                        if index in tickets:
+                            failed(index, exc)
+                    continue
+                for index in indices:
+                    if index not in tickets:
+                        continue
+                    ticket = tickets[index]
+                    try:
+                        # Read again after every item: a preceding finalize can
+                        # succeed while a later one fails, without losing either
+                        # the success or the unfinished confirmation journal.
+                        state = self._read(scope)
+                        previous = state["decisions"].get(ticket["key"], {})
+                        decision = ticket["decision"]
+                        if previous.get("action") != "confirm" or previous.get("reference_id") != decision["reference_id"]:
+                            self._save(scope, state, ticket["key"], decision)
+                        results[index].update(status="confirmed", recovery_required=False)
+                    except Exception as exc:
+                        failed(index, exc)
+            confirmed = sum(row["status"] == "confirmed" for row in results)
+            return {"results": results, "summary": {"requested": len(results), "confirmed": confirmed,
+                                                    "failed": len(results) - confirmed}}
 
     def start_sampling(self, asset_id, max_frames=12):
         if type(max_frames) is not int or not 1 <= max_frames <= 24:
@@ -422,6 +524,11 @@ def register_character_confirmation_routes(app, library, search, pipeline):
     def confirmation_decision(asset_id: str, character_id: str, payload: ConfirmationDecision):
         service.decide(asset_id, character_id, **payload.model_dump())
         return service.queue(asset_id)
+
+    @app.post("/api/assets/{asset_id}/identity/confirmation/characters/{character_id}/confirm-batch")
+    def confirmation_batch(asset_id: str, character_id: str, payload: ConfirmationBatch):
+        result = service.confirm_batch(asset_id, character_id, **payload.model_dump())
+        return {**result, "queue": service.queue(asset_id)}
 
     @app.post("/api/assets/{asset_id}/identity/confirmation/sample")
     def confirmation_sample(asset_id: str, payload: ConfirmationSample):

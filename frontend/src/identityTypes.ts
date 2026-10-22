@@ -16,6 +16,11 @@ export interface CharacterConfirmationResult {
   sampling: null | { status: 'running' | 'completed' | 'failed' | 'unavailable' | 'interrupted'; completed: number; total: number; error?: string; asset_id: string };
   guidance?: string; sampling_available?: boolean; sampling_unavailable_reason?: string;
 }
+export interface CharacterConfirmationBatchResult {
+  results: { source_asset_id: string; region_id: string; status: 'confirmed' | 'failed'; error?: string; recovery_required?: boolean }[];
+  summary: { requested: number; confirmed: number; failed: number };
+  queue: CharacterConfirmationResult;
+}
 export interface ReferenceQuality {
   width?: number; height?: number; sharpness?: number; single_character?: boolean;
   accepted?: boolean; reasons?: string[];
