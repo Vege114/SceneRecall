@@ -2,6 +2,24 @@
 
 Internal records and REST use snake_case. Time is integer milliseconds relative to asset start. Source data are versioned JSON; all indexes disposable. Engineering tests use generated fixtures and provider doubles. Real media/model validation is recorded separately in `VALIDATION.md` and is not inferred from synthetic tests.
 
+## Character confirmation before large runs (2026-10-22)
+
+The character archive and analysis dialog expose an optional preflight wizard. It operates within the existing character scope and permitted roster, reusing durable regions across current member episodes. Reading candidates never calls a model. Each role receives at most three quality-accepted crops, ranked by its CCIP distance and diversified using saved shot boundaries; when shot data are absent, temporal separation is only a heuristic, not a claim of distinct shots. A candidate remains unverified regardless of its rank.
+
+All routes are covered by the existing local session middleware:
+
+- `GET /api/assets/{asset_id}/identity/confirmation`: current role profiles, confirmed/pending/skipped progress, bounded candidate groups, source availability and sampling status.
+- `POST /api/assets/{asset_id}/identity/confirmation/characters/{character_id}/decision`: `action` is `confirm`, `reject`, `unclear`, `skip` or `resume`. Candidate actions require `source_asset_id` and `region_id`. Confirmation additionally requires both `single_character:true` and `use_as_reference:true`.
+- `POST /api/assets/{asset_id}/identity/confirmation/sample`: `{max_frames:12}` by default, strict integer range 1–24. It starts bounded local detection/CCIP work and returns promptly. Poll `GET .../confirmation/sampling` for progress; refresh the full queue after completion.
+
+Confirmation checks current source membership, cast policy, registered frame time, crop bounds, source fingerprint and exact crop pixels. It creates a human region decision and an explicitly authorized, quality-checked `frame_crop` reference with asset/frame/region/fingerprint/confirmation provenance. The reference identity makes retries idempotent; an interrupted confirmation remains recoverable through the queue. Existing scene inferences and search projections are refreshed for the exact source region. No observations, cross-shot tracks or unseen appearances are fabricated; if sampling has not yet produced a searchable observation, the region label applies when its evidence is subsequently published.
+
+`works/<scope>/confirmation/state.json` retains current decisions plus audit history. Rejections and unclear decisions exclude the role/candidate pair; skip/resume are role-level decisions. Merged role IDs resolve through the existing registry. Human corrections, deleted/moved assets, revoked references and current cast restrictions are respected. The confirmation files are included in metadata backups, with evidence and reference validation before restoration.
+
+`sampling.json` persists bounded progress. Same-scope concurrent starts coalesce; interrupted work resumes completed frames, while a later explicit completed-round request samples other times. Nearby registered frames are reused before extracting new frames. Sampling enables local matching for that request only, disables automatic calibration and does not change global identity settings, call VLM/audio models, download weights, train a model or schedule whole-episode analysis. The separate existing Bangumi cache action remains explicit and never promotes downloaded images to trusted references. Missing sources, references or models produce actionable states.
+
+The wizard does not block analysis until every role is found. Reference enrollment is independent from held-out calibration: confirmed examples cannot count as held-out evaluation footage or justify automatic identity propagation.
+
 ## Experimental retrieval-first contract (2026-10-20)
 
 `retrieval-first-v1` is an explicit, independently versioned analysis strategy. The application/GUI default remains `scene-chunks-v1` until the new quality and full-workflow performance gates pass. Existing scene jobs retain all frozen inputs, prompt/receipt meanings, chronological dependencies and completion conditions described below; new retrieval rules do not reinterpret old tasks. Full interface, current limitations and P0–P4 gates are in [RETRIEVAL_FIRST.md](RETRIEVAL_FIRST.md).

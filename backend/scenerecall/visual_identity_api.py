@@ -65,6 +65,8 @@ def register_visual_identity_routes(app, library, search):
     app.state.visual_identity = pipeline
     app.state.reference_gallery = gallery
     app.state.bangumi_reference_cache = BangumiReferenceCache(library, gallery)
+    from .character_confirmation import register_character_confirmation_routes
+    register_character_confirmation_routes(app, library, search, pipeline)
 
     @app.post("/api/assets/{asset_id}/references/cache-bangumi")
     async def cache_bangumi_references(asset_id: str, payload: BangumiReferenceCacheInput):

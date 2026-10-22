@@ -1,4 +1,21 @@
+import type { CharacterProfile } from './types';
+
 export type IdentityStatus = 'confirmed' | 'candidate' | 'unknown';
+export interface CharacterConfirmationCandidate {
+  region_id: string; asset_id: string; asset_title: string; frame_id: string; at_ms: number;
+  box: number[]; crop_url: string; shot_id: string; distance?: number | null;
+  quality: ReferenceQuality; source_available?: boolean; recovery_required?: boolean;
+}
+export interface CharacterConfirmationRole {
+  character_id: string; profile: CharacterProfile; status: 'pending' | 'confirmed' | 'skipped';
+  trusted_reference_count: number; candidates: CharacterConfirmationCandidate[]; available_count: number;
+}
+export interface CharacterConfirmationResult {
+  scope_id: string; asset_id: string; roles: CharacterConfirmationRole[];
+  summary: { total: number; confirmed: number; skipped: number; pending: number; candidates: number };
+  sampling: null | { status: 'running' | 'completed' | 'failed' | 'unavailable' | 'interrupted'; completed: number; total: number; error?: string; asset_id: string };
+  guidance?: string; sampling_available?: boolean; sampling_unavailable_reason?: string;
+}
 export interface ReferenceQuality {
   width?: number; height?: number; sharpness?: number; single_character?: boolean;
   accepted?: boolean; reasons?: string[];

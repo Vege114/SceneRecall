@@ -787,6 +787,8 @@ def decorate_identity_records(library, asset_id, records, *, strict=False):
 
 def validate_visual_artifacts(library):
     """Validate restored references/regions before publishing an imported ZIP."""
+    from .character_confirmation_validation import validate_character_confirmation_artifacts
+
     for location in (library.root / "works").glob("*/reference-images/gallery.json"):
         value = read_json(location)
         scope = safe_id(location.parent.parent.name)
@@ -847,3 +849,4 @@ def validate_visual_artifacts(library):
             if (not (directory / "regions" / f"{safe_id(identity)}.json").is_file()
                     or decision.get("status") not in {"confirmed", "candidate", "unknown"}):
                 raise ValueError("人工身份修订缺少原始区域")
+    validate_character_confirmation_artifacts(library)

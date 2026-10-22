@@ -8,6 +8,7 @@ import { StageEstimates } from './SceneAnalysis';
 import TaskModels, { taskModelOptions, useTaskModels } from './TaskModels';
 import TaskExecution, { saveExecutionDefaults } from './TaskExecution';
 import { assetTaskLabel, settleConcurrent } from '../taskHelpers';
+import CharacterConfirmation from './CharacterConfirmation';
 
 export default function JobModal({ asset, assets: selection, onClose }: { asset?: Asset; assets?: Asset[]; onClose: () => void }) {
   const { bootstrap, refresh, notify } = useApp();
@@ -37,6 +38,8 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
   const [previewCount, setPreviewCount] = useState(24);
   const [busy, setBusy] = useState<'estimate' | 'start' | 'scan' | null>(null);
   const [error, setError] = useState('');
+  const [confirmationAsset, setConfirmationAsset] = useState<Asset | null>(null);
+  const [confirmationAssetId, setConfirmationAssetId] = useState(assets[0]?.id || '');
   const request = useRef({ key: '', id: '' });
   const form = useRef<HTMLFormElement>(null);
   const plansRef = useRef(plans);
@@ -116,8 +119,10 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
     } finally { setBusy(null); }
   };
   const subtitleCount = assets.filter((item) => item.subtitle_mode === 'embedded').length;
+  if (confirmationAsset) return <CharacterConfirmation asset={confirmationAsset} onClose={() => setConfirmationAsset(null)} onSaved={async () => { setEstimate(null); setEstimates([]); setEstimateKey(''); await refresh(); }} />;
   return <Modal title={assets.length > 1 ? '分析这批视频' : '分析这部作品'} subtitle={assets.length > 1 ? `已选择 ${assets.length} 集 · 每集独立预算与进度` : assets[0] && assetTaskLabel(assets[0])} onClose={onClose} wide><form ref={form} onSubmit={runEstimate}>
     <div className="modal-body">
+      {(retrieval || vision) && <section className="keyframe-preview" aria-label="分析前角色确认"><div className="section-row"><div><h3>先确认角色，再开展大规模识别</h3><p className="helper">复用已有正片候选，将你确认的清晰单人裁剪加入作品共享参考图库。未出场的角色可以跳过。</p></div><button type="button" className="button secondary" disabled={!!busy || scanning || !assets.length} onClick={() => setConfirmationAsset(assets.find((item) => item.id === confirmationAssetId) || assets[0])}>开始角色确认</button></div>{assets.length > 1 && <Field label="角色确认的起始剧集" hint="同一作品的候选与确认进度共享；不同作品可分别选择。"><select value={confirmationAssetId} disabled={!!busy || scanning} onChange={(event) => setConfirmationAssetId(event.target.value)}>{assets.map((item) => <option key={item.id} value={item.id}>{assetTaskLabel(item)}</option>)}</select></Field>}<p className="helper">角色确认是可选的准备步骤；查看候选不会启动分析或调用 VLM。</p></section>}
       <fieldset disabled={!!busy || scanning}>
         <Field label="处理策略"><select value={strategy} onChange={(event) => { const next = event.target.value as typeof strategy; setStrategy(next); if (next === 'retrieval-first-v1' && !end) setEnd(String(Math.min(start + 60, ...assets.map((item) => item.duration_ms / 1000)))); }}><option value="scene-chunks-v1">场景理解（当前默认）</option><option value="retrieval-first-v1">画面检索 · 可选 VLM</option></select></Field>
         {retrieval && <><label className="check-line"><input type="checkbox" checked={useVlm} onChange={(event) => setUseVlm(event.target.checked)} /><span>使用 VLM 生成局部描述与事件</span></label><Alert tone="info">{useVlm ? '本地画面索引之外，调用 VLM 生成局部人物、物体、场所及事件记录。本地人物匹配按独立识别设置执行；全部必需阶段完成后才报告完整流程完成。' : '不使用生成式 VLM：建立本地直接视觉索引、已有字幕索引。本地人物匹配按独立识别设置执行，关闭 VLM 不会将其跳过；未开启本地识别时需先启用。不会生成逐窗口描述或结构化事件。'}</Alert><p className="helper">{useVlm ? '局部记录会增加模型请求与处理时间；Codex 未显式选择模型时使用 gpt-6.1-sol / low。当前不承诺整集实时完成。' : '图文编码器与已启用的人物匹配在本机运行；角色档案和参考图在同一作品范围跨集共享。证据不足时显示候选或未知，不会直接把最相似角色当作实名。VLM 选项只控制描述与事件生成，不控制本地人物匹配。'}</p>{useVlm && <TaskModels roles={modelRoles} value={taskModels.overrides} onChange={taskModels.change} disabled={!!busy || scanning} />}{useVlm && missing.length > 0 && <Alert>请先在<a href="#/settings" onClick={onClose}>模型与设置</a>中为画面理解分配 vision 模型；取消勾选 VLM 可继续建立基础检索索引。</Alert>}{bootstrap.visual_encoder?.available === false && <Alert tone="error">本机视觉编码器尚不可用：{bootstrap.visual_encoder.reason || bootstrap.visual_encoder.message || '请先配置本机编码器与权重。'}</Alert>}</>}

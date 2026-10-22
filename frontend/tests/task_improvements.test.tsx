@@ -46,7 +46,7 @@ describe('Parallel local scans', () => {
     await waitFor(() => expect(screen.getAllByText(/选中 1 张关键帧/)).toHaveLength(5));
     expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
     expect(fetch.mock.calls.every(([url]) => url === '/api/keyframe-plans')).toBe(true);
-    expect(screen.getByText('少女歌剧 · 第 1 季 · 第 6 集')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: '关键帧预扫描' })).getByText('少女歌剧 · 第 1 季 · 第 6 集')).toBeTruthy();
   });
 
   it('polls other episodes while an earlier poll is still pending', async () => {
