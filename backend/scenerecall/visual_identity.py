@@ -122,6 +122,7 @@ class ReferenceGallery:
                 if character_id not in allowed:
                     raise FileNotFoundError("角色不在当前作品的名单中")
             saved = self._read(scope)
+            source_assets = {row["id"]: row for row in catalog["assets"]}
             rows = []
             for original in saved["references"]:
                 resolved = CharacterStore._resolve(registry, original["character_id"])
@@ -133,7 +134,9 @@ class ReferenceGallery:
                 # silently continue to serve as a model reference in this work.
                 if row["source"]["kind"] == "frame_crop":
                     try:
-                        source = self.library.get_asset(row["source"]["asset_id"])
+                        source = source_assets.get(row["source"]["asset_id"])
+                        if source is None:
+                            continue
                         if scope_id(source) != scope:
                             continue
                     except (FileNotFoundError, ValueError):
@@ -151,12 +154,14 @@ class ReferenceGallery:
 
     def matching(self, asset_id, *, _catalog=None):
         """Confirmed exemplars plus stored Bangumi images as candidates only."""
-        active = self.active_reference_ids(asset_id, include_candidates=True)
+        active = self.active_reference_ids(asset_id, include_candidates=True, _catalog=_catalog)
         return [row for row in self.list(asset_id, _catalog=_catalog)["references"] if row["id"] in active]
 
-    def active_reference_ids(self, asset_id, *, include_candidates=False):
+    def active_reference_ids(self, asset_id, *, include_candidates=False, _catalog=None):
         """Nonrecursive trust projection usable while catalog reads scenes."""
-        asset = self.library.get_asset(asset_id)
+        source_assets = {row["id"]: row for row in _catalog["assets"]} if _catalog is not None else None
+        asset = source_assets[asset_id] if source_assets is not None else self.library.get_asset(asset_id)
+        local_sources = {asset_id: asset}
         scope = scope_id(asset)
         registry = CharacterStore(self.library)._read(scope)
         policy = CharacterStore.cast_policy(registry, asset.get("anime_profile"))
@@ -171,7 +176,15 @@ class ReferenceGallery:
                 continue
             if row["source"]["kind"] == "frame_crop":
                 try:
-                    if scope_id(self.library.get_asset(row["source"]["asset_id"])) != scope:
+                    source_id = row["source"]["asset_id"]
+                    if source_assets is None and source_id not in local_sources:
+                        try:
+                            local_sources[source_id] = self.library.get_asset(source_id)
+                        except (FileNotFoundError, ValueError):
+                            local_sources[source_id] = None
+                    source = (source_assets.get(row["source"]["asset_id"]) if source_assets is not None
+                              else local_sources[source_id])
+                    if source is None or scope_id(source) != scope:
                         continue
                 except (FileNotFoundError, ValueError):
                     continue
@@ -179,7 +192,7 @@ class ReferenceGallery:
         return result
 
     def add(self, asset_id, character_id, content: bytes, *, source_kind="upload", source_url="",
-            confirmed=False, single_character=False, source=None):
+            confirmed=False, single_character=False, source=None, _catalog=None):
         if source_kind not in {"upload", "external_cached", "frame_crop"}:
             raise ValueError("参考图来源无效")
         if source_kind == "external_cached" and not source_url.strip():
@@ -192,7 +205,7 @@ class ReferenceGallery:
             raise ValueError("参考图未通过单角色、尺寸或清晰度检查")
         encoded = _png(picture)
         with self.library.lock:
-            catalog, allowed = _allowed(self.library, asset_id)
+            catalog, allowed = _allowed(self.library, asset_id, catalog=_catalog)
             character_id = CharacterStore._resolve(CharacterStore(self.library)._read(catalog["scope_id"]),
                                                    character_id, strict=True)
             if character_id not in allowed:
@@ -211,7 +224,7 @@ class ReferenceGallery:
             saved["revision"] += 1
             saved["audit"].append({"at": timestamp, "id": identifier, "action": "create", "after": copy.deepcopy(row)})
             atomic_json(self._directory(scope) / "gallery.json", saved)
-        return next(row for row in self.list(asset_id, character_id)["references"] if row["id"] == identifier)
+        return next(row for row in self.list(asset_id, character_id, _catalog=catalog)["references"] if row["id"] == identifier)
 
     def crop(self, asset_id, character_id, frame_id, box, *, confirmed=False, single_character=False):
         box = checked_box(box)
@@ -629,18 +642,23 @@ class VisualIdentityPipeline:
         atomic_json(self._directory(asset_id) / "latest.json", result)
         return result
 
-    def _project(self, asset_id, regions, *, _catalog=None):
+    def _project(self, asset_id, regions, *, _catalog=None, _crop_paths=True):
         decisions = read_json(self._directory(asset_id) / "decisions.json", {"decisions": {}})["decisions"]
         catalog, profiles = _allowed(self.library, asset_id, catalog=_catalog)
         registry = CharacterStore(self.library)._read(catalog["scope_id"])
-        trusted = self.gallery.active_reference_ids(asset_id)
-        matching = self.gallery.active_reference_ids(asset_id, include_candidates=True)
+        trusted = self.gallery.active_reference_ids(asset_id, _catalog=catalog)
+        matching = self.gallery.active_reference_ids(asset_id, include_candidates=True, _catalog=catalog)
         result = copy.deepcopy(regions)
         for row in result:
             identifier = safe_id(row["id"])
             # Absolute paths persisted by an earlier machine/backup are never
             # authority to read a file. Reconstruct from the owning asset/id.
-            row["crop_path"] = str(confined_path(self._directory(asset_id), f"crops/{identifier}.png"))
+            if _crop_paths:
+                row["crop_path"] = str(confined_path(self._directory(asset_id), f"crops/{identifier}.png"))
+            else:
+                # Metadata-only queues validate their owned crop directory in
+                # bulk and resolve selected image paths before exposing them.
+                row.pop("crop_path", None)
             decision = decisions.get(row["id"])
             if decision:
                 row["match"].update({key: copy.deepcopy(value) for key, value in decision.items()
@@ -708,11 +726,11 @@ class VisualIdentityPipeline:
         latest["regions"] = self._project(asset_id, regions)
         return latest
 
-    def review(self, asset_id, region_id, *, status, character_id=None, reason):
+    def review(self, asset_id, region_id, *, status, character_id=None, reason, _catalog=None):
         if status not in {"confirmed", "candidate", "unknown"} or not str(reason).strip():
             raise ValueError("人物身份修改须填写状态和原因")
         with self.library.lock:
-            catalog, profiles = _allowed(self.library, asset_id)
+            catalog, profiles = _allowed(self.library, asset_id, catalog=_catalog)
             if character_id is not None:
                 character_id = CharacterStore._resolve(CharacterStore(self.library)._read(catalog["scope_id"]),
                                                        character_id, strict=True)
@@ -731,7 +749,7 @@ class VisualIdentityPipeline:
             saved["revision"] += 1
             saved["audit"].append({"region_id": region_id, "before": before, "after": copy.deepcopy(decision)})
             atomic_json(self._directory(asset_id) / "decisions.json", saved)
-            return self._project(asset_id, [region])[0]
+            return self._project(asset_id, [region], _catalog=catalog)[0]
 
 
 def decorate_identity_records(library, asset_id, records, *, strict=False):

@@ -7,7 +7,7 @@ export interface CharacterConfirmationCandidate {
   quality: ReferenceQuality; source_available?: boolean; recovery_required?: boolean;
 }
 export interface CharacterConfirmationRole {
-  character_id: string; profile: CharacterProfile; status: 'pending' | 'confirmed' | 'skipped';
+  character_id: string; profile: Omit<CharacterProfile, 'appearances' | 'appearance_count' | 'representative'>; status: 'pending' | 'confirmed' | 'skipped';
   trusted_reference_count: number; candidates: CharacterConfirmationCandidate[]; available_count: number;
 }
 export interface CharacterConfirmationResult {

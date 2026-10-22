@@ -441,6 +441,33 @@ class CharacterStore:
         return sorted([asset for asset in self.library.list_assets(_catalog=catalog) if scope_id(asset) == scope],
                       key=lambda a: (a.get("season") or 0, a.get("episode") or 0, a["created_at"], a["id"]))
 
+    def roster(self, asset_id: str) -> dict:
+        """Current permitted dossiers without projecting every episode's evidence.
+
+        This operation-owned snapshot is for identity/reference validation and
+        preflight UI metadata. Appearance counts and representative evidence
+        belong to ``catalog``; omitting them must never imply zero appearances.
+        """
+        with self.library.lock:
+            organization = self.library.organization._read()
+            asset = self.library.get_asset(asset_id, _catalog=organization)
+            scope = scope_id(asset)
+            registry = self._read(scope)
+            archive = asset.get("anime_profile")
+            if archive and archive.get("mode") == "bangumi":
+                from .bangumi import normalize_dossier_names
+                upgraded = self.seed_registry(registry, normalize_dossier_names(archive["dossier"]))
+                if upgraded != registry:
+                    atomic_json(self._path(scope), upgraded)
+                    registry = upgraded
+            policy = self.cast_policy(registry, archive)
+            return {"scope_id": scope, "revision": registry["revision"],
+                    "profiles": [{key: copy.deepcopy(value) for key, value in profile.items()
+                                  if key not in {"appearances", "appearance_count", "representative"}}
+                                 for profile in registry["profiles"].values() if self.profile_allowed(profile, policy)],
+                    "assets": self._assets(scope, catalog=organization), "cast_policy": policy,
+                    "membership_revision": asset.get("membership_revision", 0)}
+
     def catalog(self, asset_id: str) -> dict:
         with self.library.lock:
             organization = self.library.organization._read()

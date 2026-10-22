@@ -216,31 +216,88 @@ export default function CharacterProfiles({ asset, selectedId, onSeek, onSaved }
   const [references, setReferences] = useState<CharacterProfile | null>(null);
   const [creating, setCreating] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [confirmationRefreshError, setConfirmationRefreshError] = useState('');
+  const confirmationDirty = useRef(false);
+  const confirmationRefreshSequence = useRef(0);
+  const activeAsset = useRef<string | null>(asset.id);
   const [image, setImage] = useState<string | null>(null);
   const [limit, setLimit] = useState(24);
-  const requestSequence = useRef(0);
-  const load = useCallback(async () => {
-    const sequence = ++requestSequence.current;
-    try { const data = await api<CharacterLibrary>(characterPath(asset.id)); if (sequence === requestSequence.current) { setLibrary(data); setError(''); } }
-    catch (caught) { if (sequence === requestSequence.current) setError(message(caught)); }
-    finally { if (sequence === requestSequence.current) setLoading(false); }
+  const catalogFlight = useRef<{ assetId: string; promise: Promise<void>; dirty: boolean; cancelled: boolean; controller: AbortController } | null>(null);
+  const load = useCallback((afterMutation = false): Promise<void> => {
+    if (catalogFlight.current?.assetId === asset.id) {
+      if (afterMutation) catalogFlight.current.dirty = true;
+      return catalogFlight.current.promise;
+    }
+    const flight = { assetId: asset.id, promise: Promise.resolve(), dirty: false, cancelled: false, controller: new AbortController() };
+    catalogFlight.current = flight;
+    flight.promise = (async () => {
+      try {
+        do {
+          flight.dirty = false;
+          try {
+            const next = await api<CharacterLibrary>(characterPath(asset.id), { signal: flight.controller.signal });
+            if (!flight.cancelled && !flight.dirty && catalogFlight.current === flight) { setLibrary(next); setError(''); }
+          } catch (caught) {
+            if (!flight.cancelled && !flight.dirty && catalogFlight.current === flight) { setError(message(caught)); throw caught; }
+          }
+        } while (flight.dirty && !flight.cancelled);
+      } finally {
+        if (!flight.cancelled && catalogFlight.current === flight) setLoading(false);
+        if (catalogFlight.current === flight) catalogFlight.current = null;
+      }
+    })();
+    return flight.promise;
+  }, [asset.id]);
+  useEffect(() => {
+    activeAsset.current = asset.id;
+    confirmationDirty.current = false;
+    confirmationRefreshSequence.current += 1;
+    setLibrary(null); setLoading(true); setError(''); setConfirmationRefreshError('');
+    return () => {
+      activeAsset.current = null;
+      const flight = catalogFlight.current;
+      if (flight?.assetId === asset.id) { flight.cancelled = true; flight.controller.abort(); catalogFlight.current = null; }
+    };
   }, [asset.id]);
   const activeIds = library?.assets.map((candidate) => candidate.id) || [asset.id];
   const running = jobs.some((job) => activeIds.includes(job.asset_id || '') && ['queued', 'pending', 'running'].includes(job.status));
-  useEffect(() => { void load(); if (!running) return; const timer = window.setInterval(() => { void load(); }, 5000); return () => window.clearInterval(timer); }, [load, running]);
+  const observedRunning = useRef(false);
+  useEffect(() => { void load().catch(() => undefined); }, [load]);
+  useEffect(() => {
+    if (confirming) return;
+    if (observedRunning.current !== running) { observedRunning.current = running; void load().catch(() => undefined); }
+    if (!running) return;
+    const timer = window.setInterval(() => { void load().catch(() => undefined); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [load, running, confirming]);
   useEffect(() => { if (selectedId) { setExpandedId(selectedId); setQuery(''); } }, [selectedId]);
-  const saved = async () => { await load(); await onSaved(); };
+  const saved = async () => { await Promise.all([load(true), onSaved()]); };
+  const refreshConfirmedProfiles = () => {
+    const request = ++confirmationRefreshSequence.current;
+    observedRunning.current = running;
+    setConfirmationRefreshError('');
+    void saved().catch((caught) => {
+      if (activeAsset.current === asset.id && request === confirmationRefreshSequence.current) {
+        setConfirmationRefreshError(`角色确认已保存，但档案或详情刷新失败：${message(caught)}`);
+      }
+    });
+  };
+  const closeConfirmation = () => {
+    setConfirming(false);
+    // The catalog scans the whole work. Refresh once after review, so it cannot delay the next confirmation.
+    if (confirmationDirty.current) { confirmationDirty.current = false; refreshConfirmedProfiles(); }
+  };
   const filtered = useMemo(() => {
     const profiles = library?.profiles || [];
     const matching = profiles.filter((profile) => `${profile.name} ${profile.name_cn || ''} ${profile.name_ja || ''} ${profile.name_en || ''} ${profile.aliases.join(' ')} ${profile.description} ${(profile.appearance || []).join(' ')} ${profile.notes}`.toLowerCase().includes(query.trim().toLowerCase()));
     return selectedId ? [...matching].sort((left, right) => Number(right.id === selectedId) - Number(left.id === selectedId)) : matching;
   }, [library, query, selectedId]);
   if (loading) return <div className="character-loading"><Spinner label="正在读取角色档案" /></div>;
-  if (!library) return <div className="character-loading"><Alert tone="error">{error || '无法读取角色档案'}</Alert><button className="button secondary" onClick={() => { setLoading(true); void load(); }}>重新加载角色档案</button></div>;
+  if (!library) return <div className="character-loading"><Alert tone="error">{error || '无法读取角色档案'}</Alert><button className="button secondary" onClick={() => { setLoading(true); void load().catch(() => undefined); }}>重新加载角色档案</button></div>;
   return <div className="character-library">
     <div className="character-library-heading"><div><span className="eyebrow">CHARACTER ARCHIVE</span><h2>{library.profiles.length} 份角色档案</h2><p>{library.assets.length > 1 ? `同一作品的 ${library.assets.length} 个视频共享档案` : '在这部作品的不同镜头间持续识别'} · 修订 {library.revision}</p></div><div className="button-row">{library.profiles.length > 0 && <button className="button small primary" onClick={() => setConfirming(true)}><Check size={14} />开始角色确认</button>}{library.cast_policy?.mode !== 'bangumi' && asset.anime_profile?.mode !== 'bangumi' && <button className="button small secondary" onClick={() => setCreating(true)}>新建角色档案</button>}<button className="button small secondary" onClick={() => setReanalyzing(true)}><RefreshCw size={14} />按新版档案重新识别</button></div></div>
     <p className="character-library-intro">{library.cast_policy?.mode === 'bangumi' || asset.anime_profile?.mode === 'bangumi' ? '角色档案以 Bangumi 列出的角色为准，画面分析补充这些角色的外观与出场证据。' : '为能确认姓名的剧中人物建立档案，结合画面积累外观与出场证据。'}你可以先添加独立参考图库与声音样本，再核对出场和说话人；修正身份会更新映射与检索展示。</p>
-    {running && <Alert tone="info"><Spinner label="分析进行中，角色档案会持续更新" /> <a href="#/jobs">查看任务</a></Alert>}{error && <Alert tone="error">{error}<button className="text-button" onClick={() => { void load(); }}>重试加载</button></Alert>}
+    {running && <Alert tone="info"><Spinner label="分析进行中，角色档案会持续更新" /> <a href="#/jobs">查看任务</a></Alert>}{error && !confirmationRefreshError && <Alert tone="error">{error}<button className="text-button" onClick={() => { void load().catch(() => undefined); }}>重试加载</button></Alert>}{confirmationRefreshError && <Alert tone="error">{confirmationRefreshError}<button className="text-button" onClick={refreshConfirmedProfiles}>重试刷新档案与详情</button></Alert>}
     {library.profiles.length > 0 && <div className="character-search"><Search size={16} /><input aria-label="搜索角色档案" placeholder="搜索姓名、别名或外貌特征…" value={query} onChange={(event) => { setQuery(event.target.value); setLimit(24); }} /></div>}
     {filtered.length > 0 ? <><div className="character-grid">{filtered.slice(0, limit).map((profile) => <article className={`character-card ${expandedId === profile.id ? 'selected' : ''}`} key={profile.id} aria-label={`${profile.name}的角色档案`}>
       <Portrait assetId={asset.id} revision={library.revision} profile={profile} onOpen={setImage} /><div className="character-card-body"><div className="character-name-row"><h3>{profile.name}</h3><span className={`character-review ${profile.user_edited ? 'reviewed' : ''}`}>{profile.user_edited ? '人工修订' : profile.external_source ? 'Bangumi 初始资料' : 'AI 识别'}</span></div><CharacterNames profile={profile} /><ExternalCharacterReference profile={profile} /><p className="character-description">{profile.description || (profile.external_source ? 'Bangumi 暂无角色简介。' : '暂无外貌描述，后续识别会继续补充。')}</p>{profile.appearance && profile.appearance.length > 0 && <div className="character-traits">{profile.appearance.slice(0, 6).map((trait, index) => <span key={`${trait}-${index}`}>{trait}</span>)}</div>}{profile.notes && <p className="character-notes"><Pencil size={12} />{profile.notes}</p>}<button className="text-button character-reference-manage" onClick={() => setReferences(profile)} aria-label={`管理${profile.name}的参考图片与声音样本`}>参考图库与声音样本</button><div className="character-actions"><button className="text-button" onClick={() => setExpandedId(expandedId === profile.id ? '' : profile.id)} aria-expanded={expandedId === profile.id} aria-label={`查看${profile.name}的出场记录`}><Images size={14} />{profile.appearance_count} 次出场</button><div><button className="icon-button" aria-label={`编辑${profile.name}的档案`} title="编辑档案" onClick={() => setEditing({ profile, mode: 'edit' })}><Pencil size={15} /></button><button className="icon-button" aria-label={`合并${profile.name}的档案`} title={library.profiles.length < 2 ? '至少需要两份档案才能合并' : '合并档案'} disabled={library.profiles.length < 2} onClick={() => setEditing({ profile, mode: 'merge' })}><GitMerge size={16} /></button><button className="icon-button character-delete" aria-label={`删除${profile.name}的档案`} title="删除档案" onClick={() => setEditing({ profile, mode: 'delete' })}><Trash2 size={15} /></button></div></div></div>
@@ -248,6 +305,6 @@ export default function CharacterProfiles({ asset, selectedId, onSeek, onSaved }
         {appearance.frame_ids?.[0] && <button className="character-frame" onClick={() => setImage(frameUrl(appearance.asset_id, appearance.frame_ids[0]))} aria-label={`放大${profile.name}在${appearance.asset_title}的证据画面`}><img src={frameUrl(appearance.asset_id, appearance.frame_ids[0])} alt={`${profile.name}的出场证据`} loading="lazy" /></button>}<div><strong>{appearance.asset_title}</strong><span>{formatTime(appearance.start_ms)} — {formatTime(appearance.end_ms)}</span></div>{appearance.asset_id === asset.id ? <button className="icon-button" aria-label={`播放${profile.name}在${formatTime(appearance.start_ms)}的出场`} onClick={() => onSeek(appearance.start_ms)}><Play size={16} /></button> : <a className="icon-button" aria-label={`前往${appearance.asset_title}查看${profile.name}`} href={assetLink(appearance.asset_id, appearance.start_ms)}><ArrowRight size={16} /></a>}
       </div>) : <p className="helper">当前分析版本还没有此角色的出场记录。</p>}</div>}
     </article>)}</div>{filtered.length > limit && <button className="button secondary load-more" onClick={() => setLimit(limit + 24)}>显示更多角色</button>}</> : <Empty icon={<UsersRound size={29} />} title={query ? '没有找到这个角色' : '角色故事，从第一次登场开始'} action={!query && <button className="button secondary" onClick={() => openJob(asset)} disabled={!asset.source_available || running}>开始画面分析</button>}>{query ? '试试别名或外貌特征。' : '完成画面分析后，这里会汇集角色档案与出场证据。已有作品可重新分析以建立跨镜头人物关联。'}</Empty>}
-    {confirming && <CharacterConfirmation asset={asset} onClose={() => setConfirming(false)} onSaved={saved} />}{creating && <CreateCharacter assetId={asset.id} onClose={() => setCreating(false)} onSaved={saved} />}{references && <CharacterReferences assetId={asset.id} profile={references} onClose={() => setReferences(null)} onSaved={saved} />}{editing && <CharacterEditModal assetId={asset.id} profile={editing.profile} library={library} mode={editing.mode} onClose={() => setEditing(null)} onSaved={saved} />}{reanalyzing && <ReanalyzeModal asset={asset} library={library} onClose={() => setReanalyzing(false)} onReload={saved} />}{image && <Modal title="角色出场证据" subtitle="请结合画面与原片，核对角色身份。" onClose={() => setImage(null)} wide><div className="evidence-full"><img src={image} alt="角色出场的完整证据画面" /></div></Modal>}
+    {confirming && <CharacterConfirmation asset={asset} onClose={closeConfirmation} onSaved={async () => { confirmationDirty.current = true; }} />}{creating && <CreateCharacter assetId={asset.id} onClose={() => setCreating(false)} onSaved={saved} />}{references && <CharacterReferences assetId={asset.id} profile={references} onClose={() => setReferences(null)} onSaved={saved} />}{editing && <CharacterEditModal assetId={asset.id} profile={editing.profile} library={library} mode={editing.mode} onClose={() => setEditing(null)} onSaved={saved} />}{reanalyzing && <ReanalyzeModal asset={asset} library={library} onClose={() => setReanalyzing(false)} onReload={saved} />}{image && <Modal title="角色出场证据" subtitle="请结合画面与原片，核对角色身份。" onClose={() => setImage(null)} wide><div className="evidence-full"><img src={image} alt="角色出场的完整证据画面" /></div></Modal>}
   </div>;
 }

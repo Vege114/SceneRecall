@@ -44,12 +44,31 @@ export default function CharacterConfirmation({ asset, onClose, onSaved }: { ass
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
   const [notice, setNotice] = useState('');
   const [preview, setPreview] = useState<CharacterConfirmationCandidate | null>(null);
   const [cached, setCached] = useState<BangumiReferenceCacheResult | null>(null);
   const alive = useRef(true);
   const sequence = useRef(0);
   const mutation = useRef(false);
+  const refreshSequence = useRef(0);
+  const currentAsset = useRef(asset.id);
+  currentAsset.current = asset.id;
+  const refreshAfterSave = () => {
+    const request = ++refreshSequence.current;
+    const savedAsset = asset.id;
+    setRefreshError('');
+    // Parents invalidate their read snapshots synchronously and coalesce their
+    // own requests. Start every invalidation, even if this dialog closes next.
+    void (async () => {
+      try { await onSaved(); }
+      catch (caught) {
+        if (alive.current && currentAsset.current === savedAsset && request === refreshSequence.current) {
+          setRefreshError(`确认已保存，但外层列表刷新失败：${message(caught)}`);
+        }
+      }
+    })();
+  };
   const apply = useCallback((result: CharacterConfirmationResult) => {
     if (!alive.current) return;
     setData(result);
@@ -102,7 +121,7 @@ export default function CharacterConfirmation({ asset, onClose, onSaved }: { ass
       setPreview(null);
       if (action === 'confirm') {
         setNotice(`已确认「${role.profile.name}」的这张正片裁剪，并加入本作品的可信图库。其他镜头仍需独立匹配或核对。`);
-        try { await onSaved(); } catch (caught) { if (alive.current) setError(`确认已保存，但外层列表刷新失败：${message(caught)}`); }
+        refreshAfterSave();
       } else if (action === 'skip' && result) { setNotice('已保存跳过状态，可以稍后继续。'); nextRole(result, characterId); }
       else if (action === 'reject') setNotice('已记住这个否定结果，不会再为该角色推荐这张候选。');
       else if (action === 'unclear') setNotice('已换过这组候选，新的候选会优先展示。');
@@ -131,6 +150,7 @@ export default function CharacterConfirmation({ asset, onClose, onSaved }: { ass
     <div className="modal-body character-confirmation">
       <p className="confirmation-intro">先核对少量清晰的单人裁剪，再用作本作品后续集数的识别参考。候选来自已有分析；确认只作用于所选画面。未出场或暂时无法辨认的角色可以跳过。</p>
       {error && <Alert tone="error">{error}<button type="button" className="text-button" disabled={!!busy} onClick={() => { setError(''); void load(); }}>重新读取确认进度</button></Alert>}
+      {refreshError && <Alert>{refreshError}<button type="button" className="text-button" onClick={refreshAfterSave}>重试刷新外层列表</button></Alert>}
       {notice && <Alert tone="success">{notice}</Alert>}
       {loading ? <Spinner label="正在读取已有角色候选" /> : data && <>
         <div className="confirmation-progress"><div><strong>已确认 {data.summary.confirmed} / {data.summary.total} 个角色</strong><span>已跳过 {data.summary.skipped} · 待确认 {data.summary.pending}</span></div><progress aria-label="角色确认进度" value={data.summary.confirmed + data.summary.skipped} max={Math.max(1, data.summary.total)} /></div>

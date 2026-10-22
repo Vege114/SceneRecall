@@ -18,14 +18,86 @@ function mockApi(handler: (url: string, init?: RequestInit) => unknown | Promise
   vi.stubGlobal('fetch', fetch);
   return fetch;
 }
-function setup(currentAsset = asset) {
-  const onSaved = vi.fn().mockResolvedValue(undefined); const onClose = vi.fn();
-  render(<CharacterConfirmation asset={currentAsset} onSaved={onSaved} onClose={onClose} />);
-  return { user: userEvent.setup(), onSaved, onClose };
+function setup(currentAsset = asset, onSaved = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)) {
+  const onClose = vi.fn();
+  const view = render(<CharacterConfirmation asset={currentAsset} onSaved={onSaved} onClose={onClose} />);
+  return { user: userEvent.setup(), onSaved, onClose, view };
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void; let reject!: (error: Error) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Pre-analysis character confirmation', () => {
+  it('allows the next confirmation while outer refresh is pending and ignores an older refresh failure', async () => {
+    const state = initial(); const firstRefresh = deferred<void>();
+    const refresh = vi.fn<() => Promise<void>>().mockImplementationOnce(() => firstRefresh.promise).mockResolvedValue(undefined);
+    const fetch = mockApi((_url, options) => {
+      if (options?.method === 'POST') {
+        const decision = JSON.parse(options.body as string);
+        state.roles[0].candidates = state.roles[0].candidates.filter((item) => item.region_id !== decision.region_id);
+        state.roles[0].status = 'confirmed'; state.roles[0].trusted_reference_count += 1;
+        state.summary.confirmed = 1; state.summary.pending = 0;
+      }
+      return state;
+    });
+    const { user, onClose } = setup(asset, refresh);
+    await screen.findByText('正片里，哪个是小夏？');
+    for (let i = 0; i < 2; i += 1) {
+      const card = within(screen.getAllByRole('article')[0]);
+      await user.click(card.getByRole('checkbox'));
+      await user.click(card.getByRole('button', { name: '确认并用作后续参考' }));
+      await screen.findByText(`可信参考 ${i + 1} 张`);
+      expect(screen.queryByText('正在保存确认进度')).toBeNull();
+      expect((screen.getByRole('button', { name: '保存进度并返回' }) as HTMLButtonElement).disabled).toBe(false);
+    }
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(2);
+    await act(async () => { firstRefresh.reject(new Error('旧快照刷新失败')); });
+    expect(screen.queryByText(/旧快照刷新失败/)).toBeNull();
+    expect(screen.getByText(/已确认「小夏」的这张正片裁剪/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '保存进度并返回' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('reports refresh failure separately and retries only the refresh without repeating a saved confirmation', async () => {
+    const refresh = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error('作品列表暂不可用')).mockResolvedValue(undefined);
+    const fetch = mockApi(() => initial());
+    const { user } = setup(asset, refresh);
+    await screen.findByText('正片里，哪个是小夏？');
+    const card = within(screen.getAllByRole('article')[0]);
+    await user.click(card.getByRole('checkbox'));
+    await user.click(card.getByRole('button', { name: '确认并用作后续参考' }));
+    await screen.findByText('确认已保存，但外层列表刷新失败：作品列表暂不可用');
+    expect(screen.getByText(/已确认「小夏」的这张正片裁剪/)).toBeTruthy();
+    expect(screen.queryByText('正在保存确认进度')).toBeNull();
+    await user.click(screen.getByRole('button', { name: '重试刷新外层列表' }));
+    await waitFor(() => expect(screen.queryByText(/外层列表刷新失败/)).toBeNull());
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('starts invalidation before closing and handles a late refresh rejection after unmount', async () => {
+    const pending = deferred<void>();
+    const refresh = vi.fn<() => Promise<void>>(() => pending.promise);
+    const fetch = mockApi(() => initial());
+    const { user, onClose, view } = setup(asset, refresh);
+    await screen.findByText('正片里，哪个是小夏？');
+    const card = within(screen.getAllByRole('article')[0]);
+    await user.click(card.getByRole('checkbox'));
+    await user.click(card.getByRole('button', { name: '确认并用作后续参考' }));
+    await screen.findByText(/已确认「小夏」的这张正片裁剪/);
+    await user.click(screen.getByRole('button', { name: '保存进度并返回' }));
+    expect(onClose).toHaveBeenCalledOnce(); expect(refresh).toHaveBeenCalledOnce();
+    view.unmount();
+    await act(async () => { pending.reject(new Error('卸载后刷新失败')); });
+    expect(screen.queryByText(/卸载后刷新失败/)).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+  });
+
   it('reads existing cross-episode candidates without starting inference and requires single-character consent', async () => {
     const state = initial();
     const fetch = mockApi((_url, options) => {

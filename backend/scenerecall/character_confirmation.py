@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
+import stat
 import threading
 from pathlib import Path
 from typing import Literal
@@ -14,7 +16,7 @@ from typing import Literal
 from pydantic import Field
 
 from .characters import CharacterStore, checked_box, scope_id
-from .library import atomic_json, digest, now, read_json, safe_id
+from .library import atomic_json, confined_path, digest, now, read_json, safe_id
 from .models import Contract
 from .visual_identity import VisualIdentityPipeline, _image, _png, image_quality
 
@@ -93,9 +95,38 @@ class CharacterConfirmation:
         policy = CharacterStore.cast_policy(registry, asset.get("anime_profile"))
         return bool(profile and CharacterStore.profile_allowed(profile, policy))
 
+    def _crop_inventory(self, asset_id):
+        """One directory read, retaining full confinement checks for links.
+
+        A normal file under a confined directory plus a checked filename has
+        no traversable components. Symlinks and Windows reparse points retain
+        the complete resolver, as do the few candidates actually displayed.
+        """
+        directory = self.pipeline._directory(asset_id)
+        crops = confined_path(directory, "crops")
+        try:
+            with os.scandir(crops) as stream:
+                entries = {entry.name: entry for entry in stream}
+        except FileNotFoundError:
+            entries = {}
+
+        def exists(region_id):
+            name = f"{safe_id(region_id)}.png"
+            entry = entries.get(name)
+            if entry is None:
+                return False
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+                if entry.is_symlink() or getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+                    return confined_path(directory, f"crops/{name}").is_file()
+                return stat.S_ISREG(metadata.st_mode)
+            except FileNotFoundError:
+                return False
+        return exists
+
     def queue(self, asset_id):
         with self.library.lock:
-            catalog = CharacterStore(self.library).catalog(asset_id)
+            catalog = CharacterStore(self.library).roster(asset_id)
             scope = catalog["scope_id"]
             registry = CharacterStore(self.library)._read(scope)
             state = self._read(scope)
@@ -108,7 +139,7 @@ class CharacterConfirmation:
                     key = self._key(identity, row.get("source_asset_id"), row.get("region_id"))
                     decisions[key] = row
             trusted = self.gallery.list(asset_id, trusted_only=True, _catalog=catalog)["references"]
-            active_references = self.gallery.active_reference_ids(asset_id, include_candidates=True)
+            active_references = self.gallery.active_reference_ids(asset_id, include_candidates=True, _catalog=catalog)
             pending_regions = {}
             for decision in decisions.values():
                 if decision["action"] == "confirming":
@@ -122,20 +153,21 @@ class CharacterConfirmation:
                 raw = [read_json(path) for path in sorted((directory / "regions").glob("*.json"))]
                 if not raw:
                     continue
-                regions = self.pipeline._project(asset["id"], raw, _catalog=catalog)
                 frame_registry = read_json(self.library.asset_dir(asset["id"]) / "frames" / "registry.json", {})
+                raw = [row for row in raw if row.get("quality", {}).get("accepted")
+                       and row.get("source_fingerprint", asset["fingerprint"]) == asset["fingerprint"]
+                       and row["at_ms"] == frame_registry.get(row["frame_id"], {}).get("at_ms")]
+                regions = self.pipeline._project(asset["id"], raw, _catalog=catalog, _crop_paths=False)
+                crop_exists = self._crop_inventory(asset["id"])
                 frame_shots, shots = self._shots(asset)
                 policy = CharacterStore.cast_policy(registry, asset.get("anime_profile"))
                 allowed = {identity for identity, profile in profiles.items()
                            if CharacterStore.profile_allowed(profile, policy)}
                 for region in regions:
                     pending = pending_regions.get((asset["id"], region["id"]), set()) & allowed
-                    if (not region.get("quality", {}).get("accepted")
-                            or region.get("source_fingerprint", asset["fingerprint"]) != asset["fingerprint"]
-                            or region["at_ms"] != frame_registry.get(region["frame_id"], {}).get("at_ms")
-                            or not pending and region["match"].get("status") == "confirmed"
+                    if (not pending and region["match"].get("status") == "confirmed"
                             or not pending and region["match"].get("source") == "human" and region["match"].get("status") == "unknown"
-                            or not Path(region["crop_path"]).is_file()):
+                            or not crop_exists(region["id"])):
                         continue
                     shot = frame_shots.get(region["frame_id"])
                     if not shot:
@@ -180,6 +212,10 @@ class CharacterConfirmation:
                 count = sum(row["character_id"] == identity and row["source"]["kind"] == "frame_crop" for row in trusted)
                 role_decision = decisions.get(self._key(identity), {})
                 recovering = any(row.get("recovery_required") for row in choices)
+                for candidate in selected:
+                    # Resolve every displayed image using the same confinement
+                    # boundary as other visual evidence endpoints.
+                    confined_path(self.pipeline._directory(candidate["asset_id"]), f"crops/{safe_id(candidate['region_id'])}.png")
                 status = "pending" if recovering else "confirmed" if count else "skipped" if role_decision.get("action") == "skip" else "pending"
                 roles.append({"character_id": identity, "profile": profile, "status": status,
                               "trusted_reference_count": count, "candidates": selected, "available_count": len(choices)})
@@ -198,7 +234,7 @@ class CharacterConfirmation:
         if action not in {"confirm", "reject", "unclear", "skip", "resume"}:
             raise ValueError("角色确认操作无效")
         with self.library.lock:
-            catalog = CharacterStore(self.library).catalog(asset_id)
+            catalog = CharacterStore(self.library).roster(asset_id)
             scope = catalog["scope_id"]
             registry = CharacterStore(self.library)._read(scope)
             character_id = CharacterStore._resolve(registry, character_id, strict=True)
@@ -233,7 +269,7 @@ class CharacterConfirmation:
             registry_frames = read_json(self.library.asset_dir(source_asset_id) / "frames" / "registry.json", {})
             if region["at_ms"] != registry_frames.get(region["frame_id"], {}).get("at_ms"):
                 raise ValueError("人物裁剪时间与注册帧不一致")
-            frame = self.library.frame_path(source_asset_id, region["frame_id"])
+            frame = self.library.frame_paths(source_asset_id, [region["frame_id"]], registry=registry_frames)[region["frame_id"]]
             box = checked_box(region["box"])
             if box is None:
                 raise ValueError("人物裁剪缺少区域")
@@ -257,7 +293,7 @@ class CharacterConfirmation:
                         or not image_quality(cropped, single_character=True)["accepted"]
                         or hashlib.sha256(encoded).digest() != hashlib.sha256(Path(region["crop_path"]).read_bytes()).digest()):
                     raise ValueError("原片裁剪已变化或未通过单人、尺寸、清晰度检查")
-                existing = next((row for row in self.gallery.list(source_asset_id, character_id)["references"]
+                existing = next((row for row in self.gallery.list(source_asset_id, character_id, _catalog=catalog)["references"]
                                  if row["source"].get("confirmation_id") == key), None)
                 if existing and existing["status"] != "confirmed":
                     raise ValueError("此参考图已被撤销或降级，请在参考图库中复核")
@@ -267,13 +303,14 @@ class CharacterConfirmation:
                     existing = self.gallery.add(source_asset_id, character_id, encoded, source_kind="frame_crop",
                         confirmed=True, single_character=True, source={"asset_id": source_asset_id,
                         "frame_id": region["frame_id"], "box": box, "region_id": region_id,
-                        "source_fingerprint": source["fingerprint"], "confirmation_id": key})
+                        "source_fingerprint": source["fingerprint"], "confirmation_id": key}, _catalog=catalog)
                 decision["reference_id"] = existing["id"]
                 # Recover a crash after reference creation without duplicate
                 # references or repeated human-review revisions.
                 if region["match"].get("source") != "human" or region["match"].get("character_id") != character_id:
                     self.pipeline.review(source_asset_id, region_id, status="confirmed", character_id=character_id,
-                                         reason=reason.strip() or "角色确认：确认当前人物并授权正片裁剪作为后续识别参考")
+                                         reason=reason.strip() or "角色确认：确认当前人物并授权正片裁剪作为后续识别参考",
+                                         _catalog=catalog)
                 from .scenes import SceneStore
                 SceneStore(self.library).invalidate_identity_inferences(source_asset_id, region_ids=[region_id])
                 if self.search is not None:
