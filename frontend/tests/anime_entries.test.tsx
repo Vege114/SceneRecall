@@ -8,7 +8,7 @@ import Library from '../src/components/Library';
 const anime: Asset = { id: 'anime', work_id: 'work', title: '动画第一集', kind: 'animation', duration_ms: 12000, width: 640, height: 360, subtitle_mode: 'container', source_available: true, source_changed: false, created_at: '2026-10-13T00:00:00Z', status: 'ready' };
 const legacy: Asset = { ...anime, id: 'legacy', work_id: 'legacy-work', title: '旧资料', kind: 'movie', project_id: 'legacy-project' };
 function context(): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/ui', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.3' }, assets: [anime, legacy], projects: [{ id: 'legacy-project', name: '已有项目', kind: 'movie', folder_id: null, tags: [], asset_count: 1 }], folders: [], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openJob: vi.fn(), openJobs: vi.fn(), openImport: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/ui', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.4.0' }, assets: [anime, legacy], projects: [{ id: 'legacy-project', name: '已有项目', kind: 'movie', folder_id: null, tags: [], asset_count: 1 }], folders: [], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openJob: vi.fn(), openJobs: vi.fn(), openImport: vi.fn() };
 }
 function show() { return render(<AppContext.Provider value={context()}><Library /></AppContext.Provider>); }
 function mockFetch() {

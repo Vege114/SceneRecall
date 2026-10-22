@@ -16,7 +16,7 @@ const tracks: SubtitleTracks = { duration_ms: 12000, recommended_stream_index: 2
   { index: 4, codec: 'hdmv_pgs_subtitle', language: 'jpn', title: '图像字幕', default: false, forced: false, supported: false, reason: '图像轨暂不支持' },
 ] };
 function context(): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/subtitle-ui-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.2.0' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
+  return { bootstrap: { library_path: '/tmp/subtitle-ui-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.4.0' }, assets: [asset], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openImport: vi.fn(), openJob: vi.fn() };
 }
 function renderApp(ui: ReactNode, value = context()) { return render(<AppContext.Provider value={value}>{ui}</AppContext.Provider>); }
 function mockFetch(handler: (url: string, options?: RequestInit) => unknown | Promise<unknown>) {

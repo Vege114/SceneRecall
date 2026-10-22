@@ -4,14 +4,14 @@
 
 ## 运行准备
 
-音频模型使用独立 Python 环境或安装 optional extras，避免强制所有用户安装 PyTorch：
+音频模型通过主应用环境的 optional extras 选装，避免强制所有用户安装 PyTorch：
 
 ```sh
 uv sync --extra audio --extra asr --extra dev
 uv run scenerecall --data-dir "$HOME/SceneRecallLibrary"
 ```
 
-需要 FFmpeg/ffprobe。`audio` 包含 pyannote.audio 4.x、SpeechBrain、PyTorch/torchaudio；`asr` 是可选 faster-whisper。若当前前端/后端环境安装版本与重型包不兼容，请使用 README 的音频独立环境安装方式。没有依赖也可以正常启动应用和查看已有记录。音频与视觉本地模型通过共享 `LOCAL_MODEL_GATE` 控制竞争；CPU 默认可运行，CUDA 需兼容驱动，MPS 的具体模型支持尚未验证。同步上游 scorer 当前仅支持 CPU/CUDA。模型内存和实际耗时由素材、硬件、权重决定，本次没有测得动画实际吞吐。
+需要 FFmpeg/ffprobe。`audio` 包含 pyannote.audio 4.x、SpeechBrain、PyTorch/torchaudio；`asr` 是可选 faster-whisper。音频依赖安装在运行后端的环境，imgutils 视觉依赖另用独立环境，详见 [视听环境安装](CHARACTER_AV.md#安装与运行)。没有依赖也可以正常启动应用和查看已有记录。音频与视觉本地模型通过共享 `LOCAL_MODEL_GATE` 控制竞争；CPU 默认可运行，CUDA 需兼容驱动，MPS 的具体模型支持尚未验证。同步上游 scorer 当前仅支持 CPU/CUDA。模型内存和实际耗时由素材、硬件、权重决定，本次没有测得动画实际吞吐。
 
 手动获取以下模型，再在资产“音频角色识别”的高级设置填写**完整本机目录**：
 

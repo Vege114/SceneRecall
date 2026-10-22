@@ -13,7 +13,7 @@ import App from '../src/App';
 
 const asset: Asset = { id: 'synthetic-asset', work_id: 'synthetic-work', title: '合成测试片段', kind: 'movie', duration_ms: 12000, width: 640, height: 360, subtitle_mode: 'external', source_available: true, source_changed: false, created_at: '2026-01-01T00:00:00Z', status: 'ready' };
 const profile: Profile = { id: 'vision-test', name: '测试视觉接口', base_url: 'http://127.0.0.1:9000/v1', model: 'local-test-model', capabilities: ['vision'], secret_mode: 'session', has_key: true };
-const bootstrap: Bootstrap = { library_path: '/tmp/scenerecall-ui-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: { assets: 1, records: 1, favorites: 0 }, tools: { ffmpeg: true, ffprobe: true }, version: '0.1.0' };
+const bootstrap: Bootstrap = { library_path: '/tmp/scenerecall-ui-tests', settings: { bindings: {}, defaults: DEFAULTS }, provider_profiles: [], stats: { assets: 1, records: 1, favorites: 0 }, tools: { ffmpeg: true, ffprobe: true }, version: '0.4.0' };
 const noSubtitles = { duration_ms: 12000, tracks: [], recommended_stream_index: null, external_candidates: [], recommended_mode: 'auto', recommended_subtitle_path: null, reason: '未找到字幕', scan_complete: true };
 
 function appContext(overrides: Partial<AppContextValue> = {}): AppContextValue {
