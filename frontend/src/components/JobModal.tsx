@@ -109,14 +109,14 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
       if (payloads.length === 1) await post('/jobs', payloads[0]);
       else await post('/jobs/batch', { request_id: request.current.id, items: payloads });
       submitted.current = true;
-      let refreshError = '';
-      try { await refresh(); } catch (error) { refreshError = message(error); }
-      notify(`${payloads.length} 个分析任务已加入队列`); onClose(); window.location.hash = '/jobs';
-      if (refreshError) notify(`任务已创建，但列表刷新失败：${refreshError}。请在任务队列刷新。`, 'error');
     } catch (error) {
-      if (defaultsSaved) { try { await refresh(); } catch { /* Keep the creation error visible. */ } }
+      if (defaultsSaved) void refresh().catch(() => { /* Keep the creation error visible. */ });
       setError(defaultsSaved ? `默认执行方式已保存，但任务创建失败：${message(error)}。请重试创建任务。` : message(error));
+      return;
     } finally { setBusy(null); }
+    // Creation is durable at this point; library refreshes must not extend submission.
+    notify(`${payloads.length} 个分析任务已加入队列`); onClose(); window.location.hash = '/jobs';
+    void refresh().catch((error) => notify(`任务已创建，但列表刷新失败：${message(error)}。请在任务队列刷新。`, 'error'));
   };
   const subtitleCount = assets.filter((item) => item.subtitle_mode === 'embedded').length;
   if (confirmationAsset) return <CharacterConfirmation asset={confirmationAsset} onClose={() => setConfirmationAsset(null)} onSaved={async () => { setEstimate(null); setEstimates([]); setEstimateKey(''); await refresh(); }} />;

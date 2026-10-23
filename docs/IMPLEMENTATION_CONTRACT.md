@@ -2,6 +2,12 @@
 
 Internal records and REST use snake_case. Time is integer milliseconds relative to asset start. Source data are versioned JSON; all indexes disposable. Engineering tests use generated fixtures and provider doubles. Real media/model validation is recorded separately in `VALIDATION.md` and is not inferred from synthetic tests.
 
+## Analysis submission feedback (2026-10-23)
+
+The single/batch analysis dialog treats a successful `POST /api/jobs` or `POST /api/jobs/batch` response as durable acceptance: it immediately announces queueing, closes and navigates to the job queue. Scene deepening likewise closes and invokes its started callback after the deepen POST succeeds. Neither flow waits for the subsequent library/settings/job refresh to finish. A background refresh failure reports that the task was already created; it never becomes a creation failure or enables resubmission of the accepted operation. The deepening entry retains the returned job ID until the job list observes it, then follows server status to permit another operation once appropriate.
+
+Actual POST failures keep the form available for correction/retry. If execution defaults were saved before enqueueing failed, the partial-success error is shown immediately while refreshing those settings in the background. Server validation, durable queueing, budgets, worker scheduling and the existing mutation-aware polling rules remain the acceptance/execution boundary; this UI change does not claim to shorten backend validation or model processing.
+
 ## Character confirmation before large runs (2026-10-22)
 
 The character archive and analysis dialog expose an optional preflight wizard. It operates within the existing character scope and permitted roster, reusing durable regions across current member episodes. Reading candidates never calls a model. Each role receives at most three quality-accepted crops, ranked by its CCIP distance and diversified using saved shot boundaries; when shot data are absent, temporal separation is only a heuristic, not a claim of distinct shots. A candidate remains unverified regardless of its rank.
