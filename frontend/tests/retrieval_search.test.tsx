@@ -231,6 +231,22 @@ describe('Explicit retrieval core experiments', () => {
     expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it('treats an encoder still being checked as preparation instead of invalid configuration', async () => {
+    const value = context();
+    value.bootstrap.visual_encoder = { available: false };
+    value.bootstrap.startup = { index: { status: 'ready' }, statistics: { status: 'ready' }, encoder: { status: 'running' } };
+    const user = userEvent.setup();
+    const { rerender } = mount(<JobModal asset={asset} onClose={vi.fn()} />, value);
+    await user.selectOptions(screen.getByLabelText('处理策略'), 'retrieval-first-v1');
+    expect(screen.getByText('正在检查本机视觉编码器，完成后即可开始画面索引任务。')).toBeTruthy();
+    expect(screen.queryByText(/本机视觉编码器尚不可用/)).toBeNull();
+    expect(screen.queryByText('本机编码器尚不可用')).toBeNull();
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(true);
+    const prepared = { ...value, bootstrap: { ...value.bootstrap, visual_encoder: { available: true }, startup: { ...value.bootstrap.startup, encoder: { status: 'ready' as const } } } };
+    rerender(<AppContext.Provider value={prepared}><JobModal asset={asset} onClose={vi.fn()} /></AppContext.Provider>);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('requires only a vision binding when VLM is checked and allows no-VLM indexing when unchecked', async () => {
     const fetch = mockFetch(() => ({})); const user = userEvent.setup();
     mount(<JobModal asset={asset} onClose={vi.fn()} />);

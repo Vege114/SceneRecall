@@ -4,6 +4,7 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
+from startup_helpers import wait_for_search
 
 from scenerecall.anime_profiles import AnimeProfileStore
 from scenerecall.jobs import JobQueue
@@ -154,6 +155,7 @@ def test_compacted_search_preserves_source_cues_favorites_and_annotation_updates
         with search._db() as db:
             indexed = {row[0] for row in db.execute("SELECT id FROM records WHERE is_context=0")}
         assert indexed == {"cue_a", "cue_d"}, "retired effect projections must leave no stale hits"
+        wait_for_search(client)
         response = client.post("/api/search", json={"query": "合成测试字幕"})
         assert response.status_code == 200, response.text
         assert {row["record_id"] for row in response.json()["results"]} == {"cue_a", "cue_d"}

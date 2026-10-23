@@ -10,13 +10,14 @@ vi.mock('../src/components/Library', async () => {
   const { post } = await import('../src/api');
   const { useState } = await import('react');
   return { default: function LibraryProbe() {
-    const { bootstrap, assets, projects, jobs, refresh } = useApp();
+    const { bootstrap, assets, projects, jobs, refresh, retryResource } = useApp();
     const [refreshed, setRefreshed] = useState(0);
     return <><h1>测试资料库</h1><p aria-label="当前任务">{jobs.map((job) => job.status).join(',')}</p>
       <p aria-label="可选模型">{bootstrap.provider_profiles.map((profile) => profile.name).join(',')}</p>
       <p aria-label="当前视频">{assets.map((asset) => asset.title).join(',')}</p>
       <p aria-label="当前项目">{projects?.map((project) => project.name).join(',')}</p>
       <button onClick={() => { void refresh().then(() => setRefreshed((value) => value + 1)).catch(() => undefined); }}>刷新列表</button>
+      <button onClick={() => { void retryResource?.('projects').catch(() => undefined); }}>重试项目</button>
       <button onClick={() => { void post('/profiles', { name: '新模型' }).then(refresh).then(() => setRefreshed((value) => value + 1)).catch(() => undefined); }}>保存模型</button>
       <p aria-label="完成刷新次数">{refreshed}</p></>;
   } };
@@ -53,6 +54,26 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('App refresh and polling under slow local API responses', () => {
+  it('discards a resource retry started before a mutation and follows it with a fresh snapshot', async () => {
+    const oldProjects = deferred<unknown>();
+    const counts = requests((url, count) => {
+      if (url === '/api/projects' && count === 1) throw new Error('temporary failure');
+      if (url === '/api/projects' && count === 2) return oldProjects.promise;
+      if (url === '/api/projects') return [{ id: 'new-project', name: '保存后的项目' }];
+      return initial(url);
+    });
+    await mount();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重试项目' })); });
+    expect(counts['/api/projects']).toBe(2);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存模型' })); });
+    expect(counts['/api/projects']).toBe(2);
+    await act(async () => { oldProjects.resolve([{ id: 'old-project', name: '保存前的项目' }]); });
+    expect(counts['/api/projects']).toBe(3);
+    expect(screen.getByLabelText('当前项目').textContent).toBe('保存后的项目');
+    expect(screen.queryByText('保存前的项目')).toBeNull();
+    expect(screen.getByLabelText('完成刷新次数').textContent).toBe('1');
+  });
+
   it('keeps jobs polling on the queue page without aggregate polling, then resumes library polling after leaving', async () => {
     window.history.replaceState({}, '', '/#/jobs');
     const counts = requests((url) => url === '/api/jobs' ? [] : initial(url));

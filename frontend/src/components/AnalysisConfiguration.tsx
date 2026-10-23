@@ -32,6 +32,7 @@ export default function AnalysisConfiguration({ value, onChange, disabled = fals
   value: Defaults; onChange: (value: Defaults) => void; disabled?: boolean; defaults?: boolean; hasEmbedded?: boolean;
 }) {
   const { bootstrap } = useApp();
+  const encoderChecking = !!bootstrap.startup && ['pending', 'running'].includes(bootstrap.startup.encoder.status);
   const retrieval = value.analysis_strategy === 'retrieval-first-v1';
   const vision = retrieval || !!value.stages?.includes('vision');
   const roles = analysisRoles(value, hasEmbedded);
@@ -56,7 +57,7 @@ export default function AnalysisConfiguration({ value, onChange, disabled = fals
         {vision && fixed('关键帧划分方式', '本地内容变化检测 · PyAV / FFmpeg', '任务内自动划分；复用有效的扫描结果，选帧规则保持不变。')}
         {vision && fixed('角色确认方式', '人工核对候选角色', '在任务队列中确认、否定或明确跳过；未确认的候选不会自动成为实名。')}
         {vision && fixed('人物检测与匹配模型', '本地人物检测 + CCIP · 沿用作品配置', '按作品已启用的识别设置与参考图库执行。未启用时需先在角色档案中配置。')}
-        {retrieval && fixed('画面索引模型', bootstrap.visual_encoder?.model || '本地图文编码器 · 当前已配置模型', bootstrap.visual_encoder?.available === false ? bootstrap.visual_encoder.reason || bootstrap.visual_encoder.message || '本机编码器尚不可用' : '使用本机编码器和权重，不发送画面给生成式模型。')}
+        {retrieval && fixed('画面索引模型', bootstrap.visual_encoder?.model || '本地图文编码器 · 当前已配置模型', encoderChecking ? '正在后台检查本机编码器与权重。' : bootstrap.visual_encoder?.available === false ? bootstrap.visual_encoder.reason || bootstrap.visual_encoder.message || '本机编码器尚不可用' : '使用本机编码器和权重，不发送画面给生成式模型。')}
         {fixed('文字字幕处理方式', '本地解析与时间索引', '使用导入时提取的容器字幕或外挂字幕。')}
       </div>
     </section>

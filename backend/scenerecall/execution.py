@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 
 class ReservationBusy(Exception):
@@ -12,6 +13,29 @@ async def yield_to_io():
     """Give ready I/O a turn, including when cached operations never suspend."""
     # A positive delay lets the loop poll I/O before admitting more CPU work.
     await asyncio.sleep(0.001)
+
+
+async def run_in_thread(callback: Callable, *args, **kwargs):
+    """Run blocking work without letting it outlive cancellation of its owner.
+
+    Cancelling ``to_thread`` alone leaves its worker running. Drain the worker
+    even across repeated cancellation so lifecycle cleanup can safely close
+    resources after awaiting the cancelled operation.
+    """
+    worker = asyncio.create_task(asyncio.to_thread(callback, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not worker.cancelled():
+            worker.exception()
+        raise
 
 
 async def finish_on_cancel(operation):

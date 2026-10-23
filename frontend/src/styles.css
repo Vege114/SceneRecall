@@ -174,3 +174,5 @@ fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.7}.o
 @media(max-width:520px){.confirmation-review{grid-template-columns:1fr}.confirmation-role-list{max-height:140px}}
 
 .status-waiting_input{color:#a18a5e;background:#f6f0df;border-color:#e9dfc6}.job-workflow-progress{display:flex;flex-wrap:wrap;gap:12px;list-style:none;margin:16px 0;padding:0}.job-workflow-progress>li{flex:1;min-width:140px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:#8c968a;background:#f7f8f2;font-size:11px}.job-workflow-progress strong{font-weight:500}.job-workflow-progress small{margin-left:auto;font-size:10px}.job-workflow-progress .workflow-completed{background:#edf3e7;color:#688455;border-color:#dbe8cf}.job-workflow-progress .workflow-running{background:#edf1eb;color:#527357;border-color:#c9d8c5}.job-workflow-progress .workflow-partial,.job-workflow-progress .workflow-waiting_input{background:#f7f0de;color:#9a7d49;border-color:#eadfc1}
+
+.resource-status { padding: 16px 0; color: var(--muted); }

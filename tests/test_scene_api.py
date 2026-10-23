@@ -6,6 +6,7 @@ from PIL import Image
 from scenerecall.library import atomic_json, atomic_jsonl, source_snapshot
 from scenerecall.main import create_app
 from scenerecall.scenes import SceneStore
+from startup_helpers import wait_for_search
 
 
 class SceneAPIProvider:
@@ -68,6 +69,7 @@ def scene_app(tmp_path):
         assert client.get(f"/api/assets/{asset_id}").status_code == 401
         client.post("/api/session", json={"token": "scenes-api-test"})
         assert client.put("/api/settings", json={"bindings": {"vision": "synthetic"}}).status_code == 200
+        wait_for_search(client)
         yield app, client, provider, scene
 
 

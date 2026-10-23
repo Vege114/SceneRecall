@@ -3,6 +3,7 @@ import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
+from startup_helpers import wait_for_search
 
 from scenerecall.library import atomic_json, atomic_jsonl, digest, read_json
 from scenerecall.main import create_app
@@ -26,6 +27,7 @@ def test_import_binding_refreshes_earlier_episodes_without_rebuilding_vectors(tm
     immutable = {path: path.read_bytes() for path in library.asset_dir(first["id"]).rglob("*") if path.is_file()}
     with TestClient(app) as client:
         client.post("/api/session", json={"token": "identity-test"})
+        wait_for_search(client)
         asyncio.run(search.rebuild(library.records(), "embed"))
         original_namespace = search.status()["embedding_namespaces"]
         request = ImportInput.model_validate({"request_id": "bind-next-episode", "project_id": first["project_id"],

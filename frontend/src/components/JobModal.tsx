@@ -22,6 +22,7 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
   const submitting = useRef(false);
   const request = useRef({ key: '', id: '' });
   const retrieval = options.analysis_strategy === 'retrieval-first-v1';
+  const encoderChecking = !!bootstrap.startup && ['pending', 'running'].includes(bootstrap.startup.encoder.status);
   const hasEmbedded = assets.some((entry) => entry.subtitle_mode === 'embedded');
   const roles = analysisRoles(options, hasEmbedded);
   const missing = roles.some((role) => !analysisProfile(role, options, bootstrap.settings, bootstrap.provider_profiles));
@@ -38,7 +39,7 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
       subtitle_fps: options.subtitle_fps, subtitle_crop: options.subtitle_crop,
       max_requests: options.max_requests, max_cost: usesCodex || !activeRoles.length ? null : options.max_cost, force };
   }).filter((entry) => entry.stages.length);
-  const startReady = !!payloads.length && !missing && !offline.length && (!retrieval || bootstrap.visual_encoder?.available !== false);
+  const startReady = !!payloads.length && !missing && !offline.length && (!retrieval || (!encoderChecking && bootstrap.visual_encoder?.available !== false));
   const startJob = async (event: FormEvent) => {
     event.preventDefault();
     if (submitting.current || submitted.current || !startReady) return;
@@ -67,7 +68,8 @@ export default function JobModal({ asset, assets: selection, onClose }: { asset?
       <p className="helper">已载入默认任务配置。设置完成后直接开始；关键帧划分、角色确认与分析都在任务队列中继续。需要你判断角色时会显示“等待确认”。</p>
       <AnalysisConfiguration value={options} onChange={setOptions} disabled={busy} hasEmbedded={hasEmbedded} />
       {offline.length > 0 && <Alert tone="error">{offline.map(assetTaskLabel).join('、')}：原视频离线或已变化，请先定位原文件。</Alert>}
-      {retrieval && bootstrap.visual_encoder?.available === false && <Alert tone="error">本机视觉编码器尚不可用：{bootstrap.visual_encoder.reason || bootstrap.visual_encoder.message || '请先配置本机编码器与权重。'}</Alert>}
+      {retrieval && encoderChecking && <Alert tone="info">正在检查本机视觉编码器，完成后即可开始画面索引任务。</Alert>}
+      {retrieval && !encoderChecking && bootstrap.visual_encoder?.available === false && <Alert tone="error">本机视觉编码器尚不可用：{bootstrap.visual_encoder.reason || bootstrap.visual_encoder.message || '请先配置本机编码器与权重。'}</Alert>}
       <fieldset disabled={busy}>
         <div className="section-row"><h3>分析范围</h3><div><button type="button" className="text-button" onClick={() => { setStart(0); setEnd(''); }}>处理全片</button><button type="button" className="text-button" onClick={() => { setStart(0); setEnd('60'); }}>先试运行前 60 秒</button></div></div>
         <div className="form-grid"><Field label="开始时间（秒）"><input type="number" min={0} step={0.001} required value={start} onChange={(event) => setStart(Number(event.target.value))} /></Field><Field label="结束时间（秒）" hint={assets.length > 1 ? '留空分析各集全片；指定时间自动裁剪到每集片尾' : `留空分析到结尾 · 全长 ${duration(assets[0]?.duration_ms || 0)}`}><input type="number" min={start + 0.001} step={0.001} placeholder="视频结尾" value={end} onChange={(event) => setEnd(event.target.value)} /></Field></div>

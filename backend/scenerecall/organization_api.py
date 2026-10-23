@@ -79,18 +79,18 @@ def register_organization_routes(app, library, queue, search):
         return organization.anime(project_id)
 
     @app.post("/api/projects")
-    async def create_project(payload: ProjectCreate):
+    def create_project(payload: ProjectCreate):
         return organization.save_project(payload.model_dump())
 
     @app.post("/api/projects/assign")
     async def assign(payload: Assignment):
-        result = organization.assign(payload.asset_ids, payload.project_id, queue)
+        result = await asyncio.to_thread(organization.assign, payload.asset_ids, payload.project_id, queue)
         await refresh()
         return result
 
     @app.patch("/api/projects/{project_id}")
     async def edit_project(project_id: str, payload: ProjectEdit):
-        result = organization.save_project(payload.model_dump(exclude_unset=True), project_id)
+        result = await asyncio.to_thread(organization.save_project, payload.model_dump(exclude_unset=True), project_id)
         await refresh()
         return result
 
@@ -108,12 +108,12 @@ def register_organization_routes(app, library, queue, search):
         return organization.folders()
 
     @app.post("/api/folders")
-    async def create_folder(payload: FolderCreate):
+    def create_folder(payload: FolderCreate):
         return organization.save_folder(payload.model_dump())
 
     @app.patch("/api/folders/{folder_id}")
     async def edit_folder(folder_id: str, payload: FolderEdit):
-        result = organization.save_folder(payload.model_dump(exclude_unset=True), folder_id)
+        result = await asyncio.to_thread(organization.save_folder, payload.model_dump(exclude_unset=True), folder_id)
         await refresh()
         return result
 

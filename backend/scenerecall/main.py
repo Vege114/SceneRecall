@@ -54,23 +54,26 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     from .visual_encoder import VisualEncoder
     search.visual_encoder = VisualEncoder(library.root / "private")
     queue = JobQueue(library, providers, search)
+    from .startup import StartupPreparation
+    preparation = StartupPreparation(library, search, queue, start_worker=start_worker)
     session_token = token or secrets.token_urlsafe(32)
     allowed_ports = allowed_ports or {8765, 5173}
 
     @asynccontextmanager
     async def lifespan(app):
-        # Reconcile derived lexical records with source files on every launch.
-        await search.rebuild_from_source(library.records)
-        if start_worker:
-            await queue.start()
-        yield
-        await queue.stop()
-        await search.visual_encoder.close()
+        preparation.start()
+        try:
+            yield
+        finally:
+            await preparation.stop()
+            await queue.stop()
+            await search.visual_encoder.close()
 
     app = FastAPI(title="SceneRecall", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.library, app.state.providers, app.state.search, app.state.jobs = library, providers, search, queue
     app.state.session_token = session_token
     app.state.characters = characters
+    app.state.preparation = preparation
 
     @app.middleware("http")
     async def local_session(request: Request, call_next):
@@ -94,7 +97,20 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 supplied = auth[7:]
             if not hmac.compare_digest(supplied.encode("utf-8"), session_token.encode("utf-8")):
                 return JSONResponse({"detail": "请使用启动时的本机会话链接登录"}, status_code=401)
-        response = await call_next(request)
+        path = request.url.path
+        read_only_post = (path in {"/api/session", "/api/search", "/api/startup/retry", "/api/local-files/pick",
+                                  "/api/media/subtitle-tracks", "/api/media/subtitle-detection",
+                                  "/api/deletions/preview", "/api/backups"}
+                          or path.endswith("/estimate") or path.startswith("/api/profiles/") and path.endswith("/test"))
+        mutation = (request.method in {"POST", "PUT", "PATCH", "DELETE"}
+                    and path.startswith("/api/") and not (request.method == "POST" and read_only_post))
+        if mutation:
+            preparation.begin_mutation()
+        try:
+            response = await call_next(request)
+        finally:
+            if mutation:
+                preparation.end_mutation()
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
@@ -158,7 +174,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     def asset_view(asset):
         asset = dict(asset)
         observations = library.observations(asset["id"])
-        scenes = SceneStore(library).list(asset["id"])
+        # Cards need only the active count and first frame, not a full semantic
+        # projection and recursive dependency/staleness verification.
+        scenes = SceneStore(library)._raw(asset["id"])
         observations = scenes or observations
         if observations and observations[0].get("evidence_frame_ids"):
             asset["thumbnail_url"] = f"/api/assets/{asset['id']}/frames/{observations[0]['evidence_frame_ids'][0]}"
@@ -180,15 +198,22 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return response
 
     @app.get("/api/bootstrap")
-    def bootstrap():
-        # File-backed projections run in FastAPI's worker pool, so a large
-        # library cannot monopolize the event loop or stall /api/health.
-        assets = library.list_assets()
-        return {"library_path": str(library.root), "settings": settings(), "provider_profiles": providers.list(),
-                "stats": {"assets": len(assets), "records": len(library.records()),
-                          "favorites": len(library.collections())},
-                "tools": {"ffmpeg": bool(shutil.which("ffmpeg")), "ffprobe": bool(shutil.which("ffprobe"))},
-                "visual_encoder": search.visual_encoder.settings(), "version": __version__}
+    async def bootstrap():
+        preparation.request_refresh()
+
+        def configuration():
+            return {"library_path": str(library.root), "settings": settings(), "provider_profiles": providers.list(),
+                    "tools": {"ffmpeg": bool(shutil.which("ffmpeg")), "ffprobe": bool(shutil.which("ffprobe"))},
+                    "version": __version__}
+
+        result = await asyncio.to_thread(configuration)
+        return {**result, "stats": dict(preparation.stats), "visual_encoder": dict(preparation.encoder),
+                "startup": preparation.snapshot()}
+
+    @app.post("/api/startup/retry")
+    async def retry_startup():
+        preparation.retry()
+        return preparation.snapshot()
 
     @app.get("/api/settings")
     def get_settings():
@@ -280,12 +305,16 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     from .audio_identity_api import register_audio_routes
     register_visual_identity_routes(app, library, search)
     queue.character_confirmation = app.state.character_confirmation
+
+    async def refresh_asset_search(asset_id):
+        await asyncio.to_thread(lambda: search.sync_asset(library.records(asset_id), asset_id=asset_id))
+
     app.state.audio_identity = register_audio_routes(app, library, characters,
-        refresh=lambda asset_id: search.sync_asset(library.records(asset_id), asset_id=asset_id))
+        refresh=refresh_asset_search)
     queue.lrasd_previews = app.state.audio_identity.lrasd_previews
     from .work_entity_api import register_work_entity_routes
     work_entities = register_work_entity_routes(app, library,
-        refresh=lambda asset_id: asyncio.to_thread(search.sync_asset, library.records(asset_id), asset_id=asset_id))
+        refresh=refresh_asset_search)
     search.concept_lookup = lambda query, filters: work_entities.search_occurrences(
         query, filters, eligible_records=search.filtered_records(filters))
 
@@ -400,14 +429,14 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return Response(output.getvalue(), media_type="image/jpeg")
 
     @app.patch("/api/assets/{asset_id}/characters/{character_id}")
-    async def character_edit(asset_id: str, character_id: str, payload: CharacterEditInput):
+    def character_edit(asset_id: str, character_id: str, payload: CharacterEditInput):
         with library.lock:
             profile = characters.update(asset_id, character_id, payload.model_dump(exclude_unset=True))
             refresh_character_search(asset_id)
         return profile
 
     @app.delete("/api/assets/{asset_id}/characters/{character_id}")
-    async def character_delete(asset_id: str, character_id: str,
+    def character_delete(asset_id: str, character_id: str,
                                expected_revision: int | None = Query(default=None, ge=0)):
         with library.lock:
             characters.delete(asset_id, character_id, expected_revision=expected_revision)
@@ -415,7 +444,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return {"ok": True}
 
     @app.post("/api/assets/{asset_id}/characters/{character_id}/merge")
-    async def character_merge(asset_id: str, character_id: str, payload: CharacterMergeInput):
+    def character_merge(asset_id: str, character_id: str, payload: CharacterMergeInput):
         with library.lock:
             profile = characters.merge(asset_id, character_id, payload.target_id,
                                        expected_revision=payload.expected_revision)
@@ -517,6 +546,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.post("/api/search")
     async def query(payload: SearchInput):
+        if preparation.started and preparation.states["index"]["status"] != "ready":
+            raise HTTPException(503, preparation.states["index"].get("message", "搜索索引正在准备，请稍后再试"),
+                                headers={"Retry-After": "2"})
         bindings = settings()["bindings"]
         result = await search.search(payload.query, filters=payload.filters, limit=payload.limit,
                                     **{k + "_profile_id": bindings.get(k) if k == "embedding" or payload.enhancements else None
@@ -606,7 +638,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.get("/api/index/status")
     def index_status():
-        return search.status()
+        return {**search.status(), "lexical_ready": preparation.states["index"]["status"] == "ready",
+                "startup": preparation.snapshot()["index"]}
 
     @app.post("/api/index/rebuild")
     async def index_rebuild(payload: dict = Body(default={})):

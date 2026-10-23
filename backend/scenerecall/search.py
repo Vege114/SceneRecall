@@ -19,6 +19,7 @@ from typing import Any
 
 import jieba
 
+from .execution import run_in_thread
 from .providers import ProviderError, ProviderManager
 
 jieba.setLogLevel(logging.WARNING)
@@ -212,6 +213,10 @@ def merge_visual_candidates(candidates: list[dict]) -> list[dict]:
         # are local to that observation, and grouping is no new continuous event.
         result.append(merged)
     return result
+
+
+class SearchGenerationConflict(ValueError):
+    """The source changed while a disposable index snapshot was being built."""
 
 
 class SearchEngine:
@@ -428,25 +433,21 @@ class SearchEngine:
             if inspect.isawaitable(result):
                 await result
 
-    async def rebuild_from_source(self, source: Callable[[], list[dict]],
-                                  embedding_profile_id: str | None = None, **kwargs) -> dict:
-        """Fence the source snapshot as well as publication against concurrent edits."""
+    _build_in_thread = staticmethod(run_in_thread)
+
+    def _snapshot_source(self, source: Callable[[], list[dict]]) -> tuple[int, list[dict]]:
         with self._lock:
             generation = self._generation
-        records = await asyncio.to_thread(source)
-        return await self.rebuild(records, embedding_profile_id, expected_generation=generation, **kwargs)
+        return generation, source()
 
-    async def rebuild(self, records: list[dict], embedding_profile_id: str | None = None,
-                      *, before_batch: Callable | None = None, on_batch: Callable | None = None,
-                      embed_batch: Callable | None = None, expected_generation: int | None = None) -> dict:
+    def _prepare_rebuild(self, records: list[dict], embedding_profile_id: str | None,
+                         expected_generation: int | None,
+                         publication_guard: Callable[[], None] | None) -> tuple[int, list[dict], str | None, int | None]:
         with self._lock:
             generation = self._generation if expected_generation is None else expected_generation
             self._check_generation(generation)
         self._validate_records(records)
         all_records = records + _context_records(records)
-        usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-        count, cost, cost_known, cache_hits = 0, 0.0, True, 0
-        namespace = None
         records_digest = self._records_digest(all_records)
         signature = self._signature(embedding_profile_id) if embedding_profile_id else None
         with self._lock, self._db() as db:
@@ -457,11 +458,32 @@ class SearchEngine:
                 and db.execute("SELECT COUNT(*) FROM evidence_fts").fetchone()[0] == len(all_records))
             vector_ready = bool(signature and completed.get("vector:" + signature) == records_digest
                 and db.execute("SELECT 1 FROM namespaces WHERE signature=?", (signature,)).fetchone())
+            cache_hits = None
             if lexical_ready and (not signature or vector_ready):
-                return {"records": len(records), "contexts": len(all_records) - len(records),
-                        "embedding_profile_id": embedding_profile_id,
-                        "cache_hits": len({_text_hash(record) for record in all_records}) if signature else 0,
-                        "request_count": 0, "usage": usage, "cost": 0.0, "resumed": True}
+                if publication_guard:
+                    publication_guard()
+                cache_hits = len({_text_hash(record) for record in all_records}) if signature else 0
+        return generation, all_records, signature, cache_hits
+
+    async def rebuild_from_source(self, source: Callable[[], list[dict]],
+                                  embedding_profile_id: str | None = None, **kwargs) -> dict:
+        """Fence the source snapshot as well as publication against concurrent edits."""
+        generation, records = await self._build_in_thread(self._snapshot_source, source)
+        return await self.rebuild(records, embedding_profile_id, expected_generation=generation, **kwargs)
+
+    async def rebuild(self, records: list[dict], embedding_profile_id: str | None = None,
+                      *, before_batch: Callable | None = None, on_batch: Callable | None = None,
+                      embed_batch: Callable | None = None, expected_generation: int | None = None,
+                      publication_guard: Callable[[], None] | None = None) -> dict:
+        generation, all_records, signature, resumed_cache_hits = await self._build_in_thread(
+            self._prepare_rebuild, records, embedding_profile_id, expected_generation, publication_guard)
+        usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        count, cost, cost_known, cache_hits = 0, 0.0, True, 0
+        namespace = None
+        if resumed_cache_hits is not None:
+            return {"records": len(records), "contexts": len(all_records) - len(records),
+                    "embedding_profile_id": embedding_profile_id, "cache_hits": resumed_cache_hits,
+                    "request_count": 0, "usage": usage, "cost": 0.0, "resumed": True}
         if embedding_profile_id and all_records:
             import lancedb
             profile = self.providers.get(embedding_profile_id)
@@ -508,10 +530,10 @@ class SearchEngine:
             # A fresh table is published only after all embeddings succeed. An interrupted
             # build never overwrites the table currently referenced by the SQLite manifest.
             lance = lancedb.connect(str(self.index_dir / "vectors"))
-            await asyncio.to_thread(lance.create_table, name, data=data)
+            await self._build_in_thread(lance.create_table, name, data=data)
             namespace = (signature, embedding_profile_id, profile["model"], name, dimension,
                          len(all_records), time.time())
-        await asyncio.to_thread(self._publish, all_records, namespace, generation)
+        await self._build_in_thread(self._publish_guarded, all_records, namespace, generation, publication_guard)
         return {"records": len(records), "contexts": len(all_records) - len(records),
                 "embedding_profile_id": embedding_profile_id, "cache_hits": cache_hits,
                 "request_count": count, "usage": usage, "cost": cost if cost_known else None}
@@ -523,7 +545,14 @@ class SearchEngine:
 
     def _check_generation(self, generation: int) -> None:
         if self._generation != generation:
-            raise ValueError("索引构建期间资料发生变化，请重试重建；原索引已保留")
+            raise SearchGenerationConflict("索引构建期间资料发生变化，请重试重建；原索引已保留")
+
+    def _publish_guarded(self, records: list[dict], namespace: tuple | None, generation: int,
+                         publication_guard: Callable[[], None] | None) -> None:
+        with self._lock:
+            if publication_guard:
+                publication_guard()
+            self._publish(records, namespace, generation)
 
     def _publish(self, records: list[dict], namespace: tuple | None, generation: int) -> None:
         with self._lock, self._db() as db:

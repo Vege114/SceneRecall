@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from startup_helpers import wait_for_search
 from PIL import Image
 
 from scenerecall.library import atomic_json, read_json, source_snapshot
@@ -75,6 +76,7 @@ def character_app(tmp_path):
         assert client.get("/api/assets/asset_first/characters").status_code == 401
         client.post("/api/session", json={"token": "characters-test"})
         client.put("/api/settings", json={"bindings": {"vision": "synthetic"}})
+        wait_for_search(client)
         yield app, client, original
 
 

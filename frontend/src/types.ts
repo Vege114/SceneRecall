@@ -137,7 +137,12 @@ export interface ConcurrencySettingsResult {
   settings: Settings;
   provider_profiles: Profile[];
 }
+export interface StartupTask {
+  status: 'pending' | 'running' | 'ready' | 'error';
+  message?: string;
+}
 export interface Bootstrap {
+  startup?: { index: StartupTask; statistics: StartupTask; encoder: StartupTask };
   visual_encoder?: { available: boolean; model?: string; reason?: string; message?: string };
   library_path: string;
   settings: Settings;

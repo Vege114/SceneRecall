@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from scenerecall.main import create_app
+from startup_helpers import wait_for_search
 from test_organization import appearance, seed
 
 
@@ -16,6 +17,7 @@ def test_organization_crud_assignment_recursive_search_and_session(tmp_path):
         project = client.post("/api/projects", json={"name": "新动画", "folder_id": child["id"], "tags": ["精彩"]}).json()
         response = client.post("/api/projects/assign", json={"asset_ids": ["asset_one"], "project_id": project["id"]})
         assert response.status_code == 200 and response.json()["moved_count"] == 1
+        wait_for_search(client)
         for filters in ({"project_id": project["id"]}, {"folder_id": parent["id"]}, {"tag": "精彩"}):
             result = client.post("/api/search", json={"query": "杯子", "filters": filters}).json()
             assert result["results"][0]["asset_id"] == "asset_one"

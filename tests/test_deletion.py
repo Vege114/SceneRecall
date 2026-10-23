@@ -5,6 +5,7 @@ import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
+from startup_helpers import wait_for_search
 
 from scenerecall.characters import CharacterStore
 from scenerecall.library import DeletedAssetError, Library, atomic_json, read_json
@@ -178,6 +179,7 @@ def test_deleted_public_links_search_and_annotations_are_hidden(tmp_path):
     appearance(library, app.state.characters)
     with TestClient(app) as client:
         client.post("/api/session", json={"token": "test"})
+        wait_for_search(client)
         assert client.post("/api/search", json={"query": "杯子"}).json()["results"]
         deleted = client.delete("/api/assets/asset_one").json()
         for path in ("/api/assets/asset_one", "/api/assets/asset_one/frames/frame_test", "/api/assets/asset_one/media",

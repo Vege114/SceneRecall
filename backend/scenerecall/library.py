@@ -882,14 +882,42 @@ class Library:
     def runs(self, asset_id: str) -> list[dict]:
         return [read_json(p) for p in (self.asset_dir(asset_id) / "analyses").glob("*/run.json")]
 
-    def collections(self) -> list[dict]:
-        current = {r["id"]: r for r in self.records(compact_subtitles=False)}
-        result = [r for r in current.values() if r["favorite"]]
+    def statistics(self, records: list[dict] | None = None) -> dict:
+        """Count one raw projection, including collectible historical evidence.
+
+        Callers that already built evidence can supply records produced with
+        compact_subtitles=False. Search counts use compacted cues; collections
+        keep every independently annotated source cue and historical record.
+        """
+        from .subtitle_projection import compact_subtitle_records
+        if records is None:
+            records = self.records(compact_subtitles=False)
+        return {"assets": len(self.list_assets()), "records": len(compact_subtitle_records(records)),
+                "favorites": len(self.collections(records=records))}
+
+    def collections(self, *, records: list[dict] | None = None) -> list[dict]:
+        # Favorites originate in annotations. Inspect their effective state
+        # before projecting expensive scene/identity evidence: an empty
+        # collection needs no evidence reads, and other assets are irrelevant.
+        favored = []
         for asset in self.list_assets():
             states = {}
-            for annotation in self.annotations(asset["id"]):
+            annotations = sorted((read_json(path) for path in
+                (self.asset_dir(asset["id"]) / "annotations").glob("*.json")), key=lambda row: row["updated_at"])
+            for annotation in annotations:
                 rid = annotation["record_id"]
                 states[rid] = {**states.get(rid, {}), **annotation}
+            if any(annotation.get("favorite") for annotation in states.values()):
+                favored.append((asset, states))
+        if not favored:
+            return []
+        if records is None:
+            records = [record for asset, _ in favored
+                       for record in self.records(asset["id"], compact_subtitles=False)]
+        favored_ids = {asset["id"] for asset, _ in favored}
+        current = {record["id"]: record for record in records if record["asset_id"] in favored_ids}
+        result = [record for record in current.values() if record["favorite"]]
+        for asset, states in favored:
             for rid, annotation in states.items():
                 if rid in current or not annotation.get("favorite"):
                     continue

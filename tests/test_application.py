@@ -6,6 +6,7 @@ import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
+from startup_helpers import wait_for_search
 
 from scenerecall.jobs import JobQueue
 from scenerecall.library import Library, read_json
@@ -108,6 +109,7 @@ def test_api_auth_subtitles_search_and_range(tmp_path, synthetic):
         imported = client.post("/api/assets", json={"video_path": str(synthetic[0]), "subtitle_mode": "external", "subtitle_path": str(synthetic[1]), "title": "合成测试"})
         assert imported.status_code == 200, imported.text
         asset = imported.json()
+        wait_for_search(client)
         response = client.post("/api/search", json={"query": "现在出发"})
         assert response.status_code == 200, response.text
         assert response.json()["results"][0]["asset_id"] == asset["id"]

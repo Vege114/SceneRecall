@@ -48,26 +48,33 @@ def test_partial_execution_settings_preserve_other_defaults_and_invalid_choices_
     assert client.get("/api/settings").json()["defaults"]["execution"] == expected
 
 
-def test_execution_default_patch_preserves_hidden_modes_and_unrelated_settings_on_restart(execution_api):
-    app, client = execution_api
+def test_execution_default_patch_preserves_hidden_modes_and_unrelated_settings_on_restart(tmp_path):
+    app = create_app(tmp_path / "library", providers=CharacterAPIProvider(), start_worker=False, token="execution-test")
+    seed_episode(app.state.library, "first", 1)
+    seed_episode(app.state.library, "second", 2)
     existing = {**PARALLEL, "transcript": "serial", "preparation": "serial", "max_concurrency": 3}
-    client.put("/api/settings", json={"defaults": {
-        "execution": existing, "subtitle_fps": 1.5, "max_requests": 77, "max_cost": .5}})
-    before = client.get("/api/settings").json()
-    response = client.put("/api/settings", json={"defaults": {
-        "execution": {"subtitle": "parallel", "max_concurrency": 6}}})
-    assert response.status_code == 200, response.text
-    expected = {**before, "defaults": {**before["defaults"], "execution": {
-        **existing, "subtitle": "parallel", "max_concurrency": 6}}}
-    assert response.json() == expected
+    with TestClient(app) as client:
+        client.post("/api/session", json={"token": "execution-test"})
+        client.put("/api/settings", json={"bindings": {"vision": "synthetic"}})
+        client.put("/api/settings", json={"defaults": {
+            "execution": existing, "subtitle_fps": 1.5, "max_requests": 77, "max_cost": .5}})
+        before = client.get("/api/settings").json()
+        response = client.put("/api/settings", json={"defaults": {
+            "execution": {"subtitle": "parallel", "max_concurrency": 6}}})
+        assert response.status_code == 200, response.text
+        expected = {**before, "defaults": {**before["defaults"], "execution": {
+            **existing, "subtitle": "parallel", "max_concurrency": 6}}}
+        assert response.json() == expected
+    # A restart closes the original application's background readers before
+    # opening another Library against the same on-disk transaction journal.
     restarted = create_app(app.state.library.root, providers=CharacterAPIProvider(),
                            start_worker=False, token="restarted-defaults")
     with TestClient(restarted) as other:
         other.post("/api/session", json={"token": "restarted-defaults"})
         assert other.get("/api/settings").json() == expected
-    job = client.post("/api/jobs", json={"asset_id": "first", "execution": expected["defaults"]["execution"]}).json()
-    client.put("/api/settings", json={"defaults": {"execution": {"max_concurrency": 8}}})
-    assert client.get(f"/api/jobs/{job['id']}").json()["execution"]["max_concurrency"] == 6
+        job = other.post("/api/jobs", json={"asset_id": "first", "execution": expected["defaults"]["execution"]}).json()
+        other.put("/api/settings", json={"defaults": {"execution": {"max_concurrency": 8}}})
+        assert other.get(f"/api/jobs/{job['id']}").json()["execution"]["max_concurrency"] == 6
 
 
 @pytest.mark.parametrize("choice", [

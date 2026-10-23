@@ -10,7 +10,7 @@ from scenerecall.main import create_app
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route,store,method", [
-    ("/api/bootstrap", "library", "records"),
+    ("/api/bootstrap", "providers", "list"),
     ("/api/assets", "library", "list_assets"),
     ("/api/projects", "organization", "projects"),
     ("/api/anime", "organization", "anime"),
@@ -66,6 +66,39 @@ async def test_health_responds_while_task_continuation_reads_character_reference
             health = await asyncio.wait_for(client.get("/api/health"), timeout=1)
             assert health.status_code == 200
             assert not finished.is_set(), "health was blocked while continuing a task"
+        finally:
+            release.set()
+            response = await pending
+        assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path,projection,payload", [
+    ("post", "/api/projects", "save_project", {"name": "项目"}),
+    ("post", "/api/folders", "save_folder", {"name": "文件夹"}),
+    ("patch", "/api/projects/project_one", "save_project", {"name": "改名"}),
+    ("patch", "/api/folders/folder_one", "save_folder", {"name": "改名"}),
+    ("post", "/api/projects/assign", "assign", {"asset_ids": ["asset_one"], "project_id": None}),
+])
+async def test_organization_edit_waiting_for_background_library_lock_keeps_http_responsive(
+        tmp_path, monkeypatch, method, path, projection, payload):
+    app = create_app(tmp_path, start_worker=False, token="responsiveness-test")
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def blocked(*args, **kwargs):
+        started.set()
+        release.wait(2)
+        finished.set()
+        return {"id": "test"}
+
+    monkeypatch.setattr(app.state.library.organization, projection, blocked)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+        pending = asyncio.create_task(client.request(method, path, json=payload,
+            headers={"authorization": "Bearer responsiveness-test"}))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            assert (await asyncio.wait_for(client.get("/api/health"), 1)).status_code == 200
+            assert not finished.is_set()
         finally:
             release.set()
             response = await pending
