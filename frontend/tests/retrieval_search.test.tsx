@@ -208,19 +208,19 @@ describe('Explicit retrieval core experiments', () => {
     const fetch = mockFetch(() => ({ id: 'core-job' })); const user = userEvent.setup(); const close = vi.fn();
     mount(<JobModal asset={asset} onClose={close} />);
     expect((screen.getByLabelText('处理策略') as HTMLSelectElement).value).toBe('scene-chunks-v1');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(true);
     await user.selectOptions(screen.getByLabelText('处理策略'), 'retrieval-first-v1');
     expect(screen.queryByLabelText('本次任务模型设置')).toBeNull();
     expect(screen.queryByRole('button', { name: '扫描关键帧' })).toBeNull();
     expect((screen.getByRole('checkbox', { name: '使用 VLM 生成局部描述与事件' }) as HTMLInputElement).checked).toBe(false);
-    expect(screen.getByText(/本地人物匹配按独立识别设置执行，关闭 VLM 不会将其跳过/)).toBeTruthy();
-    expect(screen.getByText(/VLM 选项只控制描述与事件生成，不控制本地人物匹配/)).toBeTruthy();
+    expect(screen.getByText(/人物匹配仍按作品识别设置执行/)).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
-    await user.click(screen.getByRole('button', { name: '开始检索索引（不使用 VLM）' }));
+    await user.click(screen.getByRole('button', { name: '先试运行前 60 秒' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/jobs']);
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ analysis_strategy: 'retrieval-first-v1', retrieval_mode: 'core', start_ms: 0, end_ms: 60000, stages: ['vision'], max_cost: null });
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).model_overrides).toBeUndefined();
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).model_overrides).toEqual({});
   });
 
   it('explains an unavailable local encoder before starting an experiment', async () => {
@@ -228,7 +228,7 @@ describe('Explicit retrieval core experiments', () => {
     const user = userEvent.setup(); mount(<JobModal asset={asset} onClose={vi.fn()} />, value);
     await user.selectOptions(screen.getByLabelText('处理策略'), 'retrieval-first-v1');
     expect(screen.getByText(/本机视觉编码器尚不可用：未安装本机权重/)).toBeTruthy();
-    expect((screen.getByRole('button', { name: '开始检索索引（不使用 VLM）' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('requires only a vision binding when VLM is checked and allows no-VLM indexing when unchecked', async () => {
@@ -238,11 +238,11 @@ describe('Explicit retrieval core experiments', () => {
     const toggle = screen.getByRole('checkbox', { name: '使用 VLM 生成局部描述与事件' });
     await user.click(toggle);
     expect(screen.getByLabelText('本次任务模型设置')).toBeTruthy();
-    expect(screen.getByText(/取消勾选 VLM 可继续建立基础检索索引/)).toBeTruthy();
-    expect((screen.getByRole('button', { name: '开始检索与 VLM 记录' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/请为画面理解选择可用连接/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(toggle);
     expect(screen.queryByLabelText('本次任务模型设置')).toBeNull();
-    expect((screen.getByRole('button', { name: '开始检索索引（不使用 VLM）' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -256,11 +256,11 @@ describe('Explicit retrieval core experiments', () => {
     await user.selectOptions(screen.getByLabelText('处理策略'), 'retrieval-first-v1');
     await user.click(screen.getByRole('checkbox', { name: '使用 VLM 生成局部描述与事件' }));
     expect(screen.queryByRole('button', { name: '扫描关键帧' })).toBeNull();
-    await user.click(screen.getByRole('button', { name: '开始检索与 VLM 记录' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/jobs']);
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({
-      analysis_strategy: 'retrieval-first-v1', retrieval_mode: 'complete', stages: ['vision'], end_ms: 60000,
+      analysis_strategy: 'retrieval-first-v1', retrieval_mode: 'complete', stages: ['vision'], end_ms: null,
     });
   });
 
@@ -271,14 +271,14 @@ describe('Explicit retrieval core experiments', () => {
     const toggle = screen.getByRole('checkbox', { name: '使用 VLM 生成局部描述与事件' });
     await user.click(toggle); await user.click(toggle);
     await user.click(screen.getByRole('button', { name: '处理全片' }));
-    await user.click(screen.getByRole('button', { name: '开始检索索引（不使用 VLM）' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/jobs/batch']);
     const payload = JSON.parse(fetch.mock.calls[0][1]!.body as string);
     expect(payload.items).toHaveLength(2);
     for (const item of payload.items) {
       expect(item).toMatchObject({ retrieval_mode: 'core', analysis_strategy: 'retrieval-first-v1', start_ms: 0, end_ms: null, stages: ['vision'], max_cost: null });
-      expect(item.model_overrides).toBeUndefined();
+      expect(item.model_overrides).toEqual({});
     }
   });
 

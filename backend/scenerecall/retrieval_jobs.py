@@ -13,6 +13,11 @@ CAPABILITIES = ("sampling", "visual_index", "subtitle_index", "local_records", "
 
 class RetrievalJobMixin:
     def validate_retrieval(self, request, settings, asset, end):
+        required = {"vision"} if request.retrieval_mode == "complete" else set()
+        if set(request.model_bindings) - required:
+            raise ValueError("只能为本次任务启用的阶段选择模型连接")
+        if set(request.model_overrides) - required:
+            raise ValueError("只能为本次任务启用的阶段选择模型和思考等级")
         if request.stages != ["vision"]:
             raise ValueError("画面检索任务仅接受 vision；字幕使用已有文字轨，新增 OCR 请单独运行")
         encoder = getattr(self.search, "visual_encoder", None)
@@ -50,7 +55,8 @@ class RetrievalJobMixin:
                 raise ValueError("局部记录模型未声明 vision 能力")
             config["source_profile_snapshots"]["vision"] = copy.deepcopy(profile)
             if profile.get("provider_type") == "codex_cli":
-                profile.update(model="gpt-6.1-sol", reasoning_effort="low")
+                if request.task_pipeline != "unified-v1":
+                    profile.update(model="gpt-6.1-sol", reasoning_effort="low")
                 if request.max_cost is not None:
                     raise ValueError("Codex CLI 无法使用金额预算，请保留请求数预算")
             selected = request.model_overrides.get("vision")

@@ -39,19 +39,16 @@ describe('Scene preparation and budgets', () => {
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).bindings).toEqual({ preparation: profile.id, vision: profile.id });
   });
 
-  it('requires preparation before starting the new strategy and includes staged request ranges', async () => {
+  it('requires a preparation connection before starting scene understanding', async () => {
     const user = userEvent.setup(); const value = context(); delete value.bootstrap.settings.bindings.preparation;
-    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'reused-plan', status: 'completed', frames: [], frame_count: 112 } : estimate);
-    mount(<JobModal asset={asset} onClose={vi.fn()} />, value);
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await screen.findByRole('button', { name: '重新扫描关键帧' });
-    await user.click(screen.getByRole('button', { name: '估算用量' }));
-    await screen.findByRole('button', { name: '重新估算' });
-    expect((screen.getByRole('button', { name: /开始分析/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByLabelText('分阶段请求估算').textContent).toContain('0–2 次');
-    expect(within(screen.getByLabelText('分阶段请求估算')).getByText('更新连续理解')).toBeTruthy();
-    expect(screen.getByText(/预计 2 批视觉分块/)).toBeTruthy();
-    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toMatchObject({ analysis_strategy: 'scene-chunks-v1', keyframe_plan_id: 'reused-plan' });
+    const fetch = mockFetch(() => ({})); mount(<JobModal asset={asset} onClose={vi.fn()} />, value);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/请为台词整理与视觉分块选择可用连接/)).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText('分块与简要索引连接'), profile.id);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ analysis_strategy: 'scene-chunks-v1', task_pipeline: 'unified-v1', model_bindings: { preparation: profile.id } });
   });
 
   it('disables dollar budgets when the preparation connection uses Codex', async () => {

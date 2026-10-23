@@ -70,6 +70,7 @@ export interface TaskModelOverride {
   reasoning_effort?: string | null;
 }
 export type TaskModelOverrides = Partial<Record<TaskModelRole, TaskModelOverride>>;
+export type TaskModelBindings = Partial<Record<TaskModelRole, string>>;
 export interface CodexModelCatalog {
   models: { id: string; name: string; reasoning_efforts: string[]; default_reasoning_effort: string | null }[];
   default_model?: string | null;
@@ -113,6 +114,10 @@ export function taskModelLabel(profile?: Profile, selection?: TaskModelOverride)
 export interface Defaults {
   execution?: ExecutionOptions;
   analysis_strategy?: 'scene-chunks-v1' | 'content-keyframes-v1' | 'retrieval-first-v1';
+  retrieval_mode?: 'core' | 'complete';
+  stages?: ('vision' | 'subtitle')[];
+  model_bindings?: TaskModelBindings;
+  model_overrides?: TaskModelOverrides;
   window_ms: number;
   frames_per_window: number;
   subtitle_fps: number;
@@ -412,9 +417,12 @@ export interface Job {
   cost_incomplete?: boolean;
   stage_metrics?: Record<string, { request_count?: number; elapsed_ms?: number; wall_elapsed_ms?: number; cache_hits?: number; fallback_count?: number; timeout_count?: number; invalid_output_count?: number; degraded_reason?: string; usage?: Record<string, number>; completed?: number; total?: number }>;
   stage_progress?: Record<string, { completed: number; total?: number | null; status: 'pending' | 'running' | 'completed' }>;
+  workflow_progress?: Record<string, { status: 'pending' | 'running' | 'waiting_input' | 'completed' | 'partial'; completed?: number; total?: number | null; message?: string }>;
+  input_required?: { kind: 'character_confirmation'; asset_id: string } | null;
   created_at: string;
 }
 export interface JobPayload extends Omit<Defaults, 'window_ms' | 'frames_per_window'> {
+  task_pipeline?: 'unified-v1';
   model_overrides?: TaskModelOverrides;
   keyframe_plan_id?: string;
   sampling_strategy?: string;
@@ -498,7 +506,7 @@ export function keyframeReason(reason?: string): string { return ({ stable_pose:
 export function stageLabel(stage?: string): string {
   const retrieval: Record<string, string> = { retrieval_sampling: '检索画面采样', sampling: '检索画面采样', visual_index: '直接视觉索引', subtitle_index: '字幕索引', local_records: '局部事件记录', final_publish: '发布检索索引' };
   if (stage && retrieval[stage]) return retrieval[stage];
-  return ({ visual_identity: '人物检测与匹配', identity: '身份复核', audio: '音频识别', audio_extraction: '音频提取', diarization: '说话人分段', voice_matching: '声音匹配', audio_sync: '音画复核', transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', import: '校验视频与提取字幕', import_profile: '同步作品档案', import_index: '建立搜索索引', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
+  return ({ character_confirmation: '角色确认', analysis: '分析与索引', visual_identity: '人物检测与匹配', identity: '身份复核', audio: '音频识别', audio_extraction: '音频提取', diarization: '说话人分段', voice_matching: '声音匹配', audio_sync: '音画复核', transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', import: '校验视频与提取字幕', import_profile: '同步作品档案', import_index: '建立搜索索引', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
 }
 
 export function estimatedRequests(estimate: Estimate): string {

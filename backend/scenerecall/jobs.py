@@ -21,6 +21,7 @@ from .execution import ReservationBusy, bounded_map, execution_width, finish_on_
 from .pipeline import EpisodePipelineMixin
 from .identity_jobs import IdentityJobMixin
 from .retrieval_jobs import RetrievalJobMixin
+from .task_lifecycle import TaskLifecycleMixin
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -83,7 +84,7 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
     return result
 
 
-class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
+class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
     def __init__(self, library: Library, providers, search):
         from .characters import CharacterStore
 
@@ -159,6 +160,7 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
             job["sampling_strategy"] = config.get("sampling_strategy", "uniform-v1")
         if config.get("warnings"):
             job["warnings"] = list(config["warnings"])
+        self.initialize_task_workflow(job)
         return job
 
     def add(self, job_type: str, config: dict, asset_id=None) -> dict:
@@ -175,10 +177,10 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
         end = request.end_ms or asset["duration_ms"]
         if not request.start_ms < end <= asset["duration_ms"]:
             raise ValueError("分析时间超出视频范围")
-        bindings = settings.get("bindings", {})
+        bindings = {**settings.get("bindings", {}), **request.model_bindings}
         strategy = request.analysis_strategy or ("scene-chunks-v1" if bindings.get("preparation") else "content-keyframes-v1")
         if strategy == "retrieval-first-v1":
-            return self.validate_retrieval(request, settings, asset, end)
+            return self.validate_retrieval(request, {**settings, "bindings": bindings}, asset, end)
         if "vision" in request.stages and strategy == "scene-chunks-v1":
             from .scenes import SceneStore
             overlap = [row for row in SceneStore(self.library).list(request.asset_id)
@@ -194,6 +196,8 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
             required.append("preparation")
         if set(request.model_overrides) - set(required):
             raise ValueError("只能为本次任务启用的阶段选择模型和思考等级")
+        if set(request.model_bindings) - set(required):
+            raise ValueError("只能为本次任务启用的阶段选择模型连接")
         for stage in required:
             if stage == "subtitle" and asset["subtitle_mode"] != "embedded":
                 raise ValueError("容器或外挂文字字幕已在本地解析，无需调用字幕视觉模型")
@@ -354,10 +358,12 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
             raise ValueError("相关资料已删除或恢复，旧任务不可继续，请创建新任务")
 
     def control(self, job_id: str, action: str, overrides=None) -> dict:
+        if action == "continue":
+            return self.continue_task_workflow(job_id)
         job = self.get(job_id)
         state = job["status"]
-        if action == "pause" and state in ("queued", "running"):
-            return self.update(job_id, status="paused" if state == "queued" else "pausing", message="将在当前步骤结束后暂停")
+        if action == "pause" and state in ("queued", "running", "waiting_input"):
+            return self.update(job_id, status="paused" if state in {"queued", "waiting_input"} else "pausing", message="将在当前步骤结束后暂停")
         if action == "cancel" and state not in ("completed", "cancelled"):
             return self.update(job_id, status="cancelling" if state in ("running", "pausing", "cancelling") or job_id in self._executing_jobs else "cancelled", message="正在取消；已提交的结果保留")
         if action in ("resume", "retry") and state in ("paused", "failed", "partial", "cancelled"):
@@ -366,13 +372,15 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
             if job.get("stale_organization"):
                 raise ValueError("视频归属已经改变，请创建新的分析任务；已完成资料保留")
             if (job["type"] == "analysis" and "vision" in config.get("stages", [])
-                    and config.get("analysis_strategy") != "retrieval-first-v1"):
+                    and config.get("analysis_strategy") != "retrieval-first-v1"
+                    and (not self.unified_task(config) or job.get("workflow_progress", {}).get(
+                        "character_confirmation", {}).get("status") == "completed")):
                 self.character_context(job["asset_id"], config.get("character_snapshot"))
             if (job["type"] == "analysis" and "subtitle" in config.get("stages", [])
                     and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
                 raise ValueError("字幕来源已切换为文字字幕，请创建只包含画面理解的新任务")
             if overrides:
-                if "model_overrides" in overrides:
+                if "model_overrides" in overrides or "model_bindings" in overrides:
                     raise ValueError("恢复或重试会沿用任务已保存的模型选择；如需切换模型，请创建新任务")
                 for key in ("max_requests", "max_cost"):
                     if key in overrides:
@@ -580,6 +588,8 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
             job = self.update(job_id, status="running", error=None, error_code=None)
             self._executing_jobs.add(job_id)
         try:
+            if job["type"] == "analysis":
+                await self.prepare_task_workflow(job_id)
             if prepare_only:
                 await self.prepare_episode_inputs(job_id)
                 self.checkpoint(job_id)
@@ -608,6 +618,8 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
             self.update(job_id, status="partial" if failures else "completed", progress=1,
                         message=f"完成，{len(failures)} 个单元失败，可重试" if failures else
                         "核心检索实验完成；默认完整流程尚未完成" if retrieval and retrieval.get("status") == "core_ready" else "处理完成")
+            if self.unified_task(job["config"]):
+                self.workflow_step(job_id, "analysis", "partial" if failures else "completed")
         except StopJob:
             stopped = self.get(job_id)
             if stopped["status"] in {"pausing", "paused"}:

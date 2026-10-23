@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import type { ReactNode } from 'react';
 import { AppContext, type AppContextValue } from '../src/context';
-import { DEFAULTS, type Asset, type ImportInput, type Job, type KeyframePlan } from '../src/types';
+import { DEFAULTS, type Asset, type ImportInput, type Job } from '../src/types';
 import ImportModal from '../src/components/ImportModal';
 import JobModal from '../src/components/JobModal';
 import Library from '../src/components/Library';
@@ -14,12 +14,10 @@ import Settings from '../src/components/Settings';
 const asset: Asset = { id: 'ep1', work_id: 'work1', title: '第一集', kind: 'animation', project_id: 'project1', project_name: '星海', folder_id: 'child', tags: ['科幻'], duration_ms: 12000, width: 640, height: 360, subtitle_mode: 'container', source_available: true, source_changed: false, created_at: '2026-10-13T00:00:00Z', status: 'ready' };
 const second: Asset = { ...asset, id: 'ep2', title: '第二集', duration_ms: 8000, subtitle_mode: 'embedded' };
 const baseJob: Job = { id: 'job1', type: 'analysis', status: 'queued', asset_id: 'ep1', progress: 0, completed: 0, total: 2, created_at: asset.created_at };
-const plan = (id: string): KeyframePlan => ({ id: `plan-${id}`, job_id: `scan-${id}`, status: 'completed', frame_count: 1, batch_count: 1, frames: [{ id: `frame-${id}`, at_ms: 500, thumbnail_url: `/api/frames/${id}`, reason: '稳定姿态' }] });
 const noSubtitles = { duration_ms: 12000, tracks: [], recommended_stream_index: null, external_candidates: [], recommended_mode: 'auto', recommended_subtitle_path: null, reason: '未找到字幕', scan_complete: true };
-const estimate = { duration_ms: 12000, estimated_frames: 1, estimated_requests: 1, cost_estimate: null, warnings: [] };
 const input = (id: string): ImportInput => ({ item_id: id, video_path: `/tmp/${id}.mkv`, title: id, kind: 'animation', series: '星海', season: 1, episode: null, version: '', subtitle_mode: 'auto', subtitle_path: null, subtitle_offset_ms: 0 });
 function context(overrides: Partial<AppContextValue> = {}): AppContextValue {
-  return { bootstrap: { library_path: '/tmp/ui', settings: { bindings: { vision: 'model', preparation: 'model', subtitle: 'model' }, defaults: DEFAULTS }, provider_profiles: [{ id: 'model', name: 'test', model: 'test', base_url: 'http://localhost', secret_mode: 'none', capabilities: ['vision', 'subtitle'] }], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.4.0' }, assets: [asset, second], projects: [{ id: 'project1', name: '星海', kind: 'animation', folder_id: 'child', tags: ['科幻'], asset_count: 2, anime_profile: { mode: 'scratch' } }, { id: 'project2', name: '短片集', kind: 'movie', folder_id: null, tags: ['收藏'], asset_count: 0 }], folders: [{ id: 'parent', name: '动画', parent_id: null }, { id: 'child', name: '长篇', parent_id: 'parent' }], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openJob: vi.fn(), openJobs: vi.fn(), openImport: vi.fn(), ...overrides };
+  return { bootstrap: { library_path: '/tmp/ui', settings: { bindings: { vision: 'model', preparation: 'model', subtitle: 'model' }, defaults: DEFAULTS }, provider_profiles: [{ id: 'model', name: 'test', model: 'test', base_url: 'http://localhost', secret_mode: 'none', capabilities: ['preparation', 'vision', 'subtitle'] }], stats: {}, tools: { ffmpeg: true, ffprobe: true }, version: '0.4.0' }, assets: [asset, second], projects: [{ id: 'project1', name: '星海', kind: 'animation', folder_id: 'child', tags: ['科幻'], asset_count: 2, anime_profile: { mode: 'scratch' } }, { id: 'project2', name: '短片集', kind: 'movie', folder_id: null, tags: ['收藏'], asset_count: 0 }], folders: [{ id: 'parent', name: '动画', parent_id: null }, { id: 'child', name: '长篇', parent_id: 'parent' }], jobs: [], refresh: vi.fn().mockResolvedValue(undefined), refreshJobs: vi.fn().mockResolvedValue(undefined), notify: vi.fn(), openJob: vi.fn(), openJobs: vi.fn(), openImport: vi.fn(), ...overrides };
 }
 function show(ui: ReactNode, value = context()) { return render(<AppContext.Provider value={value}>{ui}</AppContext.Provider>); }
 function mockFetch(handler: (url: string, body: any, options?: RequestInit) => unknown | Promise<unknown>) {
@@ -184,45 +182,39 @@ describe('Projects, hierarchy, and search', () => {
   });
 });
 
-describe('Content keyframe review and batch budgets', () => {
-  it('requires a scanned preview and builds independent per-episode stages and budgets', async () => {
-    const user = userEvent.setup(); const fetch = mockFetch((url, body) => url === '/api/keyframe-plans' ? plan(body.asset_id) : url.endsWith('/estimate') ? { ...estimate, items: body.items.map((entry: any) => ({ ...estimate, asset_id: entry.asset_id })) } : { jobs: [] }); const close = vi.fn(); show(<JobModal assets={[asset, second]} onClose={close} />);
-    expect((screen.getByRole('button', { name: '估算用量' }) as HTMLButtonElement).disabled).toBe(true);
+describe('Unified workflow and batch budgets', () => {
+  it('starts with independent per-episode stages, ranges and budgets in one submission', async () => {
+    const user = userEvent.setup(); const fetch = mockFetch(() => ({ jobs: [] })); const close = vi.fn(); show(<JobModal assets={[asset, second]} onClose={close} />);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByLabelText(/画面窗口|每窗口画面/)).toBeNull();
-    await user.click(screen.getByRole('button', { name: '先试运行前 60 秒' })); await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第二集 · 视频 ep2 00:00:00 关键帧');
-    expect(requests(fetch).map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/keyframe-plans']);
-    expect(requests(fetch).map((call) => JSON.parse(call[1]!.body as string).end_ms)).toEqual([12000, 8000]);
-    await user.clear(screen.getByLabelText(/每集最多模型请求数/)); await user.type(screen.getByLabelText(/每集最多模型请求数/), '50');
-    await user.click(screen.getByRole('button', { name: '估算用量' })); await screen.findByRole('button', { name: '重新估算' }); await user.click(screen.getByRole('button', { name: '开始分析' })); await waitFor(() => expect(close).toHaveBeenCalledOnce());
-    const body = JSON.parse(requests(fetch).find((call) => call[0] === '/api/jobs/batch')![1]!.body as string);
-    expect(body.items.map((entry: any) => entry.stages)).toEqual([['vision'], ['vision', 'subtitle']]); expect(body.items.map((entry: any) => entry.max_requests)).toEqual([50, 50]); expect(body.items.map((entry: any) => entry.keyframe_plan_id)).toEqual(['plan-ep1', 'plan-ep2']); expect(body.items[0]).not.toHaveProperty('window_ms'); expect(body.items[0]).not.toHaveProperty('frames_per_window');
+    await user.click(screen.getByRole('button', { name: '先试运行前 60 秒' }));
+    await user.clear(screen.getByLabelText(/每个视频最多模型请求数/)); await user.type(screen.getByLabelText(/每个视频最多模型请求数/), '50');
+    await user.click(screen.getByRole('button', { name: '开始任务' })); await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(requests(fetch).map((call) => call[0])).toEqual(['/api/jobs/batch']);
+    const body = JSON.parse(requests(fetch)[0][1]!.body as string);
+    expect(body.items.map((entry: any) => entry.stages)).toEqual([['vision'], ['vision', 'subtitle']]);
+    expect(body.items.map((entry: any) => entry.max_requests)).toEqual([50, 50]);
+    expect(body.items.map((entry: any) => entry.end_ms)).toEqual([12000, 8000]);
+    for (const entry of body.items) { expect(entry.task_pipeline).toBe('unified-v1'); expect(entry).not.toHaveProperty('keyframe_plan_id'); expect(entry).not.toHaveProperty('window_ms'); expect(entry).not.toHaveProperty('frames_per_window'); }
   });
 
-  it('invalidates the selected keyframe plan when the range changes', async () => {
-    const user = userEvent.setup(); mockFetch((_url, body) => plan(body.asset_id)); show(<JobModal asset={asset} onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第一集 · 视频 ep1 00:00:00 关键帧'); await user.type(screen.getByLabelText(/结束时间/), '5');
-    expect(screen.getByText('分析范围已变化，请重新扫描关键帧。')).toBeTruthy(); expect((screen.getByRole('button', { name: '估算用量' }) as HTMLButtonElement).disabled).toBe(true);
+  it('uses the latest edited range without requiring a keyframe rescan', async () => {
+    const user = userEvent.setup(); const fetch = mockFetch(() => ({})); show(<JobModal asset={asset} onClose={vi.fn()} />);
+    await user.type(screen.getByLabelText(/结束时间/), '5');
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(requests(fetch)).toHaveLength(1));
+    expect(JSON.parse(requests(fetch)[0][1]!.body as string)).toMatchObject({ asset_id: asset.id, end_ms: 5000, task_pipeline: 'unified-v1' });
   });
 
-  it('loads the preview of an already cached scan before allowing estimates', async () => {
-    const user = userEvent.setup(); const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { id: 'plan-ep1', status: 'completed', job_id: 'cached' } : plan('ep1')); show(<JobModal asset={asset} onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' })); await screen.findByAltText('第一集 · 视频 ep1 00:00:00 关键帧'); expect(requests(fetch).map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/keyframe-plans/plan-ep1']);
-  });
-
-  it('polls a pending local scan and does not call model endpoints during scanning', async () => {
-    const user = userEvent.setup();
-    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? { ...plan('ep1'), status: 'queued', frames: undefined } : plan('ep1'));
-    show(<JobModal asset={asset} onClose={vi.fn()} />); await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await waitFor(() => expect(screen.getByAltText('第一集 · 视频 ep1 00:00:00 关键帧')).toBeTruthy(), { timeout: 3000 });
-    expect(screen.getByAltText('第一集 · 视频 ep1 00:00:00 关键帧')).toBeTruthy(); expect(requests(fetch).every((call) => call[0].startsWith('/api/keyframe-plans'))).toBe(true);
-  });
-
-  it('shows scan progress and cancels a local scan without creating analysis work', async () => {
-    const user = userEvent.setup(); const fetch = mockFetch((url) => url.endsWith('/cancel') ? { status: 'cancelled', message: '已取消' } : { ...plan('ep1'), status: 'running', progress: 0.25, message: '本地关键帧扫描 3 / 12 秒', frames: [] });
-    show(<JobModal asset={asset} onClose={vi.fn()} />); await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    expect(await screen.findByText('本地关键帧扫描 3 / 12 秒')).toBeTruthy(); expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25');
-    await user.click(screen.getByRole('button', { name: '取消「第一集 · 视频 ep1」扫描' })); await screen.findByText('已取消');
-    expect(requests(fetch).map((call) => call[0])).toEqual(['/api/keyframe-plans', '/api/jobs/scan-ep1/cancel']); expect((screen.getByRole('button', { name: '估算用量' }) as HTMLButtonElement).disabled).toBe(true);
+  it('shows keyframe progress and cancels the already-created analysis task', async () => {
+    const user = userEvent.setup(); const fetch = mockFetch(() => ({ status: 'cancelled' }));
+    show(<Jobs />, context({ jobs: [{ ...baseJob, type: 'analysis', status: 'running', stage: 'keyframes', completed: 3, total: 12, progress: 0.25, message: '本地关键帧扫描 3 / 12 秒', workflow_progress: { keyframes: { status: 'running', completed: 3, total: 12 }, character_confirmation: { status: 'pending' }, analysis: { status: 'pending' } } }] }));
+    expect(screen.getByText('本地关键帧扫描 3 / 12 秒')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('25');
+    expect(within(screen.getByLabelText('关键帧划分流程阶段')).getByText('进行中')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '取消', exact: true }));
+    await waitFor(() => expect(requests(fetch)).toHaveLength(1));
+    expect(requests(fetch)[0][0]).toBe(`/api/jobs/${baseJob.id}/cancel`);
   });
 
   it('controls the batch without replaying successful child jobs', async () => {
@@ -238,6 +230,6 @@ describe('Content keyframe review and batch budgets', () => {
   });
 
   it('removes visual interval settings while keeping independent OCR cadence', async () => {
-    const user = userEvent.setup(); show(<Settings />); await user.click(screen.getByRole('button', { name: '分析默认值' })); expect(screen.queryByLabelText(/最长分析窗口|每窗口画面数/)).toBeNull(); expect(screen.getByLabelText(/画面字幕 OCR 采样/)).toBeTruthy();
+    const user = userEvent.setup(); show(<Settings />); await user.click(screen.getByRole('button', { name: '默认任务配置' })); expect(screen.queryByLabelText(/最长分析窗口|每窗口画面数/)).toBeNull(); expect(screen.getByLabelText(/画面字幕 OCR 采样/)).toBeTruthy();
   });
 });

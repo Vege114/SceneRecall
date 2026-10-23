@@ -148,7 +148,7 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
   useEffect(() => {
     if (initialChunk && tab === 'visual') document.getElementById(`scene-${initialChunk}`)?.scrollIntoView?.({ block: 'center' });
   }, [initialChunk, tab, limit, detail]);
-  const running = jobs.some((job) => job.asset_id === id && ['queued', 'pending', 'running', 'pausing', 'cancelling'].includes(job.status));
+  const running = jobs.some((job) => job.asset_id === id && ['queued', 'pending', 'running', 'pausing', 'cancelling', 'waiting_input'].includes(job.status));
   useEffect(() => {
     const submitted = jobs.find((job) => job.id === identitySubmitted);
     if (submitted && !['queued', 'pending', 'running', 'pausing', 'cancelling'].includes(submitted.status)) setIdentitySubmitted(null);

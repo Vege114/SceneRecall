@@ -219,13 +219,9 @@ describe('Existing asset extraction and OCR exclusion', () => {
     renderApp(<JobModal asset={{ ...asset, subtitle_mode: 'container' }} onClose={onClose} />, value);
     const ocr = screen.getByRole('checkbox', { name: /画面字幕 OCR/ }) as HTMLInputElement;
     expect(ocr.disabled).toBe(true); expect(ocr.checked).toBe(false);
-    expect(screen.getByText('容器文本字幕已在本地提取，无需发送字幕图片')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await screen.findByRole('button', { name: '重新扫描关键帧' });
-    await user.click(screen.getByRole('button', { name: '估算用量' }));
-    await screen.findByRole('button', { name: '重新估算' });
-    await user.click(screen.getByRole('button', { name: /开始分析/ }));
+    expect(screen.getByText('已有文字字幕在本地使用，无需 OCR')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /开始任务/ }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(fetch.mock.calls.filter((call) => call[0] !== '/api/keyframe-plans').map((call) => JSON.parse(call[1]!.body as string).stages)).toEqual([['vision'], ['vision']]);
+    expect(fetch.mock.calls.filter((call) => call[0] !== '/api/keyframe-plans').map((call) => JSON.parse(call[1]!.body as string).stages)).toEqual([['vision']]);
   });
 });

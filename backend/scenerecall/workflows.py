@@ -590,6 +590,10 @@ class WorkflowQueueMixin:
             else:
                 item["model_overrides"] = {stage: selection.model_dump(exclude_unset=True)
                                            for stage, selection in request_item.model_overrides.items()}
+            if not item.get("model_bindings"):
+                item.pop("model_bindings", None)
+            if item.get("task_pipeline") is None:
+                item.pop("task_pipeline", None)
         if len({item.asset_id for item in request.items}) != len(request.items):
             raise ValueError("同一批分析不能重复选择同一视频")
         with self.library.lock, self.connect() as db:
@@ -613,7 +617,7 @@ class WorkflowQueueMixin:
 
     def control_batch(self, batch_id, action, overrides=None):
         safe_id(batch_id)
-        allowed = {"pause": {"queued", "running"}, "cancel": {"queued", "running", "pausing", "paused", "partial", "failed"},
+        allowed = {"pause": {"queued", "running", "waiting_input"}, "cancel": {"queued", "running", "waiting_input", "pausing", "paused", "partial", "failed"},
                    "resume": {"paused"}, "retry": {"failed", "partial", "cancelled"}}
         if action not in allowed:
             raise ValueError("不支持的批次操作")

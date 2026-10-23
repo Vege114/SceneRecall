@@ -635,7 +635,7 @@ class OrganizationStore:
                 self._commit(catalog, registries)
                 self.share_anime_cast()
                 for job in affected_jobs:
-                    if job["status"] in {"queued", "paused", "failed", "partial"}:
+                    if job["status"] in {"queued", "waiting_input", "paused", "failed", "partial"}:
                         queue.update(job["id"], status="paused", stale_organization=True,
                                      message="项目归属已变化，旧任务已暂停；请按当前项目重新创建分析任务")
             return {"assets": [self.library.get_asset(asset_id) for asset_id in asset_ids], "moved_count": len(ids)}

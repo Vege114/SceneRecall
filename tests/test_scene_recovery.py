@@ -78,7 +78,7 @@ async def test_prompt_upgrade_rejects_old_paused_job_and_new_run_does_not_reuse_
 async def test_long_static_scene_prepares_every_subtitle_while_visual_context_stays_bounded(scene_worker, monkeypatch):
     worker = scene_worker(600)
 
-    def static_scan(path, start, end, checkpoint=None, progress=None):
+    def static_scan(path, start, end, checkpoint=None, progress=None, *, metadata=None, decoder="ffmpeg"):
         shot = {"id": "synthetic_held_scene", "start_ms": start, "end_ms": end}
         frame = {"id": "synthetic_held_frame", "shot_id": shot["id"], "at_ms": start + 250,
                  "pts": start + 250, "time_base": [1, 1000], "source_pts": start + 250,

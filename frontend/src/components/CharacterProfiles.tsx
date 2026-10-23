@@ -90,7 +90,7 @@ function ReanalyzeModal({ asset, library, onClose, onReload }: { asset: Asset; l
   const defaults = { ...DEFAULTS, ...bootstrap.settings.defaults };
   const model = bootstrap.provider_profiles.find((profile) => profile.id === bootstrap.settings.bindings.vision);
   const preparation = bootstrap.provider_profiles.find((profile) => profile.id === bootstrap.settings.bindings.preparation);
-  const analysisStrategy = defaults.analysis_strategy || (preparation ? 'scene-chunks-v1' : 'content-keyframes-v1');
+  const analysisStrategy = defaults.analysis_strategy === 'content-keyframes-v1' ? 'content-keyframes-v1' : preparation ? 'scene-chunks-v1' : 'content-keyframes-v1';
   const usesPreparation = analysisStrategy === 'scene-chunks-v1';
   const modelRoles: TaskModelRole[] = usesPreparation ? ['preparation', 'vision'] : ['vision'];
   const taskModels = useTaskModels(modelRoles);

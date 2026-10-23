@@ -32,7 +32,9 @@ from .search import SearchEngine
 from .scenes import SceneStore
 
 DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", "embedding", "query", "decision", "answer")},
-            "defaults": {"window_ms": 6000, "frames_per_window": 4, "subtitle_fps": 2,
+            "defaults": {"analysis_strategy": "scene-chunks-v1", "retrieval_mode": "core",
+                         "stages": ["vision", "subtitle"], "model_bindings": {}, "model_overrides": {},
+                         "window_ms": 6000, "frames_per_window": 4, "subtitle_fps": 2,
                          "subtitle_crop": [0, .65, 1, .35], "max_requests": 1000, "max_cost": None,
                          "execution": {"transcript": "parallel", "preparation": "parallel", "subtitle": "parallel",
                                        "max_concurrency": 16}}}
@@ -146,6 +148,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     "stages": job["config"].get("stages", []),
                     "analysis_strategy": job["config"].get("analysis_strategy", "content-keyframes-v1")}
                    if job["type"] == "analysis" else {}),
+                **({"task_pipeline": job["config"]["task_pipeline"]}
+                   if job["config"].get("task_pipeline") else {}),
                 **({key: job["config"].get(key) for key in (
                     "retrieval_mode", "retrieval_contract_version", "retrieval_operation")}
                    if job["config"].get("analysis_strategy") == "retrieval-first-v1" else {}),
@@ -200,9 +204,27 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             if profile_id and capability not in providers.get(profile_id).get("capabilities", []):
                 raise ValueError(f"所选模型未声明 {capability} 能力")
         defaults = {**current["defaults"], **payload.get("defaults", {})}
-        AnalysisInput(asset_id="validation", **defaults)
+        execution_patch = ExecutionOptions.model_validate(defaults["execution"]).model_dump(exclude_unset=True)
         defaults["execution"] = ExecutionOptions.model_validate({
-            **current["defaults"]["execution"], **defaults["execution"]}).model_dump()
+            **current["defaults"]["execution"], **execution_patch}).model_dump()
+        options = AnalysisInput(asset_id="validation", **defaults)
+        effective_bindings = {**bindings, **options.model_bindings}
+        for capability, profile_id in options.model_bindings.items():
+            if capability not in providers.get(profile_id).get("capabilities", []):
+                raise ValueError(f"所选模型未声明 {capability} 能力")
+        for capability, selected in options.model_overrides.items():
+            if selected.profile_id != effective_bindings.get(capability):
+                raise ValueError("默认任务模型的连接与阶段所选连接不一致，请重新选择")
+            profile = providers.get(selected.profile_id)
+            if selected.provider_type != profile.get("provider_type"):
+                raise ValueError("默认任务模型的连接来源已变化，请重新选择")
+            model = selected.model if "model" in selected.model_fields_set else profile.get("model", "")
+            codex_cli.validate_reasoning_effort(model, selected.reasoning_effort)
+        # Preserve omitted model/effort fields: omission inherits the connection,
+        # whereas an explicitly empty model selects the CLI's default model.
+        defaults["model_bindings"] = dict(options.model_bindings)
+        defaults["model_overrides"] = {stage: selected.model_dump(exclude_unset=True)
+                                      for stage, selected in options.model_overrides.items()}
         result = {"bindings": bindings, "defaults": defaults}
         atomic_json(library.root / "private" / "settings.json", result)
         return result
@@ -227,16 +249,19 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.post("/api/profiles")
     async def profile_save(payload: dict = Body(...)):
         if payload.get("id") and isinstance(payload.get("capabilities"), list):
-            removed = [capability for capability, profile_id in settings()["bindings"].items()
-                       if profile_id == payload["id"] and capability not in payload["capabilities"]]
+            current = settings()
+            referenced = list(current["bindings"].items()) + list(current["defaults"]["model_bindings"].items())
+            removed = sorted({capability for capability, profile_id in referenced
+                              if profile_id == payload["id"] and capability not in payload["capabilities"]})
             if removed:
-                raise ValueError("请先在能力分配中解除以下绑定并保存，再修改连接：" + "、".join(removed))
+                raise ValueError("请先在能力分配或任务默认设置中解除以下绑定并保存，再修改连接：" + "、".join(removed))
         return await asyncio.to_thread(providers.upsert, payload)
 
     @app.delete("/api/profiles/{profile_id}")
     async def profile_delete(profile_id: str):
-        if profile_id in settings()["bindings"].values():
-            raise ValueError("请先解除该模型的能力绑定")
+        current = settings()
+        if profile_id in current["bindings"].values() or profile_id in current["defaults"]["model_bindings"].values():
+            raise ValueError("请先解除该模型的能力绑定和任务默认设置中的选择")
         providers.delete(profile_id)
         return {"ok": True}
 
@@ -254,6 +279,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     from .visual_identity_api import register_visual_identity_routes
     from .audio_identity_api import register_audio_routes
     register_visual_identity_routes(app, library, search)
+    queue.character_confirmation = app.state.character_confirmation
     app.state.audio_identity = register_audio_routes(app, library, characters,
         refresh=lambda asset_id: search.sync_asset(library.records(asset_id), asset_id=asset_id))
     queue.lrasd_previews = app.state.audio_identity.lrasd_previews
@@ -328,7 +354,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             config, _ = queue.deepen_config(asset_id, chunk_id, payload, settings())
             # A double click reuses the queued/running operation for this revision.
             existing = next((job for job in queue.list() if job.get("asset_id") == asset_id
-                and job["status"] in {"queued", "running", "pausing"}
+                and job["status"] in {"queued", "running", "pausing", "waiting_input"}
                 and job["config"].get("deepen_chunk_id") == chunk_id
                 and job["config"].get("deepen_revision") == config["deepen_revision"]), None)
             if existing:
@@ -415,8 +441,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 if not asset["source_available"]:
                     raise ValueError(f"「{asset['title']}」原视频离线或已变化，请先定位原文件再重新识别")
                 request = AnalysisInput(**{**current["defaults"], "asset_id": asset["id"],
+                    "analysis_strategy": ("content-keyframes-v1" if current["defaults"].get("analysis_strategy")
+                                          == "content-keyframes-v1" else None), "retrieval_mode": "complete",
                     "stages": ["vision"], "start_ms": 0, "end_ms": asset["duration_ms"], "force": True,
                     "keyframe_plan_id": payload.keyframe_plan_ids.get(asset["id"]),
+                    "model_bindings": payload.model_bindings,
                     "model_overrides": payload.model_overrides,
                     "execution": (payload.execution.model_dump() if payload.execution is not None
                                   else current["defaults"]["execution"]),
@@ -460,7 +489,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     async def retrieval_identity(asset_id: str, payload: RetrievalIdentityInput):
         with library.lock:
             active = [job for job in queue.list() if job.get("asset_id") == asset_id
-                      and job["status"] in {"queued", "running", "pausing", "cancelling"}]
+                      and job["status"] in {"queued", "running", "pausing", "cancelling", "waiting_input"}]
             existing = next((job for job in active
                              if job["config"].get("retrieval_operation") == "identity_only"), None)
             if existing is not None:
@@ -480,7 +509,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.post("/api/jobs/{job_id}/{action}")
     async def job_control(job_id: str, action: str, payload: dict | None = Body(default=None)):
-        return public_job(queue.control(job_id, action, payload))
+        # Continuing a task projects the work's full reference gallery before
+        # freezing it; keep those file reads away from the HTTP event loop.
+        result = (await asyncio.to_thread(queue.control, job_id, action, payload)
+                  if action == "continue" else queue.control(job_id, action, payload))
+        return public_job(result)
 
     @app.post("/api/search")
     async def query(payload: SearchInput):

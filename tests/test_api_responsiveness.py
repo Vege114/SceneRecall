@@ -44,3 +44,29 @@ async def test_health_responds_while_file_projection_is_waiting(tmp_path, monkey
             release.set()
             response = await pending
         assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_health_responds_while_task_continuation_reads_character_references(tmp_path, monkeypatch):
+    app = create_app(tmp_path / "library", start_worker=False, token="responsiveness-test")
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def slow_continuation(*args, **kwargs):
+        started.set()
+        release.wait(timeout=2)
+        finished.set()
+        return {"id": "job", "type": "analysis", "config": {}}
+
+    monkeypatch.setattr(app.state.jobs, "control", slow_continuation)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+        pending = asyncio.create_task(client.post("/api/jobs/job/continue",
+            headers={"authorization": "Bearer responsiveness-test"}))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            health = await asyncio.wait_for(client.get("/api/health"), timeout=1)
+            assert health.status_code == 200
+            assert not finished.is_set(), "health was blocked while continuing a task"
+        finally:
+            release.set()
+            response = await pending
+        assert response.status_code == 200

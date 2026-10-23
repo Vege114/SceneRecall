@@ -697,7 +697,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         request = AnalysisInput(asset_id=asset_id, analysis_strategy=STRATEGY,
                                 start_ms=chunk["start_ms"], end_ms=chunk["end_ms"],
                                 max_requests=payload.max_requests, max_cost=payload.max_cost,
-                                model_overrides=payload.model_overrides)
+                                model_overrides=payload.model_overrides, model_bindings=payload.model_bindings)
         # Manual deepening needs only vision; no new preparation work is performed.
         _, config = self.validate(request, settings, scene_deepening=True)
         config.update(analysis_strategy=STRATEGY, sampling_strategy=STRATEGY,

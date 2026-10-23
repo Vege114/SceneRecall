@@ -29,62 +29,53 @@ function mockFetch(handler: (url: string, body: any) => unknown | Promise<unknow
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
-describe('Parallel local scans', () => {
-  it('submits several episodes before the first response, limits in-flight requests, and isolates failures', async () => {
+describe('Unified task submission', () => {
+  it('creates every selected episode in one batch without separate scan requests', async () => {
     const selected = Array.from({ length: 6 }, (_, index) => ({ ...asset, id: `episode-${index + 1}`, episode: index + 1 }));
-    const pending = selected.map(() => deferred<unknown>());
-    const fetch = mockFetch((_url, body) => pending[selected.findIndex((entry) => entry.id === body.asset_id)].promise);
+    const fetch = mockFetch(() => ({ jobs: selected.map((entry) => ({ id: entry.id, status: 'queued' })) }));
     const user = userEvent.setup(); mount(<JobModal assets={selected} onClose={vi.fn()} />, context(selected));
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(4));
-    pending[0].resolve(response({ detail: '第一集读取失败' }, 500));
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(5));
-    pending[1].resolve(plan(selected[1].id));
-    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
-    pending.slice(2).forEach((request, index) => request.resolve(plan(selected[index + 2].id)));
-    await screen.findByText('第一集读取失败');
-    await waitFor(() => expect(screen.getAllByText(/选中 1 张关键帧/)).toHaveLength(5));
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(fetch.mock.calls.every(([url]) => url === '/api/keyframe-plans')).toBe(true);
-    expect(within(screen.getByRole('region', { name: '关键帧预扫描' })).getByText('少女歌剧 · 第 1 季 · 第 6 集')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '扫描关键帧' })).toBeNull();
+    expect((screen.getByLabelText('关键帧划分方式') as HTMLSelectElement).disabled).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    expect(fetch.mock.calls[0][0]).toBe('/api/jobs/batch');
+    const payload = JSON.parse(fetch.mock.calls[0][1]!.body as string);
+    expect(payload.items.map((item: { asset_id: string; task_pipeline: string }) => [item.asset_id, item.task_pipeline])).toEqual(selected.map((entry) => [entry.id, 'unified-v1']));
   });
 
-  it('polls other episodes while an earlier poll is still pending', async () => {
-    const firstPoll = deferred<unknown>();
-    const fetch = mockFetch((url, body) => url === '/api/keyframe-plans' ? { ...plan(body.asset_id), status: 'queued' } : url.endsWith('episode-1') ? firstPoll.promise : plan(second.id));
-    const user = userEvent.setup(); mount(<JobModal assets={[asset, second]} onClose={vi.fn()} />, context([asset, second]));
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await waitFor(() => expect(fetch.mock.calls.filter(([url]) => url.startsWith('/api/keyframe-plans/'))).toHaveLength(2), { timeout: 3000 });
-    expect(await screen.findByText(/选中 1 张关键帧/)).toBeTruthy();
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(true);
-    firstPoll.resolve(plan(asset.id));
-    await waitFor(() => expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false));
+  it('does not create hidden preliminary work while the settings dialog remains open', async () => {
+    const fetch = mockFetch(() => ({})); const user = userEvent.setup();
+    mount(<JobModal assets={[asset, second]} onClose={vi.fn()} />, context([asset, second]));
+    await user.type(screen.getByLabelText(/结束时间/), '5');
+    await user.selectOptions(screen.getByLabelText('台词整理执行方式'), 'serial');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: '开始角色确认' })).toBeNull();
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 
 describe('Optional estimates preserve submission validation', () => {
-  it('starts with the latest budget after scanning without ever requesting an estimate', async () => {
+  it('starts with the latest budget without scan or estimate prerequisites', async () => {
     const fetch = mockFetch((url, body) => url === '/api/keyframe-plans' ? plan(body.asset_id) : { id: 'job' });
     const user = userEvent.setup(); const close = vi.fn(); mount(<JobModal asset={asset} onClose={close} />);
-    const start = screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement;
-    expect(start.disabled).toBe(true);
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await waitFor(() => expect(start.disabled).toBe(false));
+    const start = screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement;
+    expect(start.disabled).toBe(false);
     await user.clear(screen.getByLabelText(/最多模型请求数/)); await user.type(screen.getByLabelText(/最多模型请求数/), '25');
     await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), '0.5');
     await user.click(start);
-    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/keyframe-plans']);
+    expect(fetch).not.toHaveBeenCalled();
     await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), '8');
     await user.click(start); await waitFor(() => expect(close).toHaveBeenCalledOnce());
-    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/keyframe-plans', '/api/jobs']);
-    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toMatchObject({ max_requests: 25, execution: { max_concurrency: 8 }, keyframe_plan_id: `plan-${asset.id}` });
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/jobs']);
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toMatchObject({ max_requests: 25, execution: { max_concurrency: 8 }, task_pipeline: 'unified-v1' });
   });
 
   it('starts subtitle-only work without a keyframe scan or estimate', async () => {
     const fetch = mockFetch(() => ({ id: 'job' })); const user = userEvent.setup();
     const embedded = { ...asset, subtitle_mode: 'embedded' as const }; mount(<JobModal asset={embedded} onClose={vi.fn()} />, context([embedded]));
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     expect(fetch.mock.calls[0][0]).toBe('/api/jobs');
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string).stages).toEqual(['subtitle']);

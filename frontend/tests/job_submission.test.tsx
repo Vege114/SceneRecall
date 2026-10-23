@@ -27,11 +27,6 @@ function deferred<T>() {
   const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 }
-async function scan(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-  await screen.findByRole('button', { name: '重新扫描关键帧' });
-}
-const completedPlan = { id: 'plan', status: 'completed', frames: [], frame_count: 1 };
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
 describe('Submission completion is independent of library refresh', () => {
@@ -39,12 +34,11 @@ describe('Submission completion is independent of library refresh', () => {
     const selected = kind === 'batch' ? [asset, { ...asset, id: 'two' }] : [asset];
     const path = kind === 'batch' ? '/api/jobs/batch' : '/api/jobs';
     const creation = deferred<unknown>(); const refresh = deferred<void>();
-    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? completedPlan : creation.promise);
+    const fetch = mockFetch((url) => creation.promise);
     const app = context(selected); vi.mocked(app.refresh).mockReturnValue(refresh.promise);
     const close = vi.fn(); const user = userEvent.setup();
     mount(<JobModal assets={selected} onClose={close} />, app);
-    await scan(user);
-    const start = screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement;
+    const start = screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement;
     await user.dblClick(start);
     expect(fetch.mock.calls.filter(([url]) => url === path)).toHaveLength(1);
     expect(start.disabled).toBe(true);
@@ -76,20 +70,19 @@ describe('Submission completion is independent of library refresh', () => {
     const path = kind === 'batch' ? '/api/jobs/batch' : '/api/jobs';
     let attempts = 0;
     const refresh = deferred<void>();
-    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? completedPlan : ++attempts === 1 ? response({ detail: '任务队列不可用' }, 503) : { id: 'job' });
+    const fetch = mockFetch((url) => ++attempts === 1 ? response({ detail: '任务队列不可用' }, 503) : { id: 'job' });
     const app = context(selected); vi.mocked(app.refresh).mockReturnValue(refresh.promise);
     const close = vi.fn(); const user = userEvent.setup();
     mount(<JobModal assets={selected} onClose={close} />, app);
-    await scan(user);
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await screen.findByText('任务队列不可用');
     expect(close).not.toHaveBeenCalled();
     expect(window.location.hash).toBe('');
     expect(app.notify).not.toHaveBeenCalled();
     expect(app.refresh).not.toHaveBeenCalled();
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
 
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(fetch.mock.calls.filter(([url]) => url === path)).toHaveLength(2);
     expect(window.location.hash).toBe('#/jobs');
@@ -99,23 +92,22 @@ describe('Submission completion is independent of library refresh', () => {
 
   it('shows a creation error immediately after saving defaults even if their refresh remains pending', async () => {
     const refresh = deferred<void>();
-    const fetch = mockFetch((url) => url === '/api/keyframe-plans' ? completedPlan : url === '/api/jobs' ? response({ detail: '任务队列不可用' }, 503) : {});
+    const fetch = mockFetch((url) => url === '/api/jobs' ? response({ detail: '任务队列不可用' }, 503) : {});
     const app = context(); vi.mocked(app.refresh).mockReturnValue(refresh.promise);
     const close = vi.fn(); const user = userEvent.setup();
     mount(<JobModal asset={asset} onClose={close} />, app);
-    await scan(user);
     await user.click(screen.getByRole('checkbox', { name: '设为默认值' }));
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
-    await screen.findByText(/默认执行方式已保存，但任务创建失败：任务队列不可用/);
-    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/keyframe-plans', '/api/settings', '/api/jobs']);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await screen.findByText(/默认任务配置已保存，但任务创建失败：任务队列不可用/);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/settings', '/api/jobs']);
     expect(app.refresh).toHaveBeenCalledOnce();
     expect(close).not.toHaveBeenCalled();
     expect(app.notify).not.toHaveBeenCalled();
     expect(screen.queryByText('正在提交')).toBeNull();
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
 
     await act(async () => { refresh.reject(new Error('默认设置刷新失败')); });
-    expect(screen.getByText(/默认执行方式已保存，但任务创建失败：任务队列不可用/)).toBeTruthy();
+    expect(screen.getByText(/默认任务配置已保存，但任务创建失败：任务队列不可用/)).toBeTruthy();
     expect(screen.queryByText('默认设置刷新失败')).toBeNull();
   });
 

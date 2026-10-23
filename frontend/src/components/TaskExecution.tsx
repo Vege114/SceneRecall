@@ -45,7 +45,7 @@ export default function TaskExecution({ value, onChange, stages, disabled = fals
     <Field label="并发请求上限" hint="自行设置正整数；实际并发取任务与模型连接上限中的较小值，还取决于剩余批次与服务响应。串行阶段最多同时 1 个请求。">
       <ConcurrencyInput label="并发请求上限" value={value.max_concurrency} disabled={disabled || (!defaults && !hasParallel && validConcurrency(value.max_concurrency))} onChange={(max_concurrency) => onChange({ ...value, max_concurrency })} />
     </Field>
-    {!defaults && <p className="helper">这里调整本次任务；长期设置在「模型与设置 → 执行与并发」集中管理。</p>}
+    {!defaults && <p className="helper">这里调整本次任务；长期设置在「模型与设置 → 默认任务配置」管理，连接并发上限在「执行与并发」管理。</p>}
     {onSaveDefaultChange && <><label className="check-line"><input type="checkbox" checked={saveDefault} disabled={disabled} onChange={(event) => onSaveDefaultChange(event.target.checked)} /><span>设为默认值</span></label><p className="helper">开始任务时，将本次并发上限与当前阶段的执行方式保存为后续任务的默认值。</p></>}
     {stages.some((stage) => stage === 'transcript' || stage === 'preparation') && <p className="helper">新任务的各集台词先独立并行整理，再按集理解画面；视觉分块参考此前记忆与相邻原始画面，结果按时间顺序合并。深入理解与连续理解更新依赖前序结果，始终串行。</p>}
     {stages.includes('subtitle') && <p className="helper">字幕 OCR 可并行识别图片，完成后按时间顺序合并与去重。</p>}

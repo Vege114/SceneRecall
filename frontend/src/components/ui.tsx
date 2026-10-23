@@ -41,7 +41,7 @@ export function Field({ label, hint, children, className = '' }: { label: string
   return <label className={`field ${className}`}><span className="field-label">{label}</span>{children}{hint && <span className="field-hint">{hint}</span>}</label>;
 }
 export function Status({ status }: { status?: string }) {
-  const text: Record<string, string> = { core_ready: '核心检索就绪', existing: '已在资料库', registered: '待分析', imported: '已导入', pending: '等待中', queued: '排队中', running: '处理中', paused: '已暂停', pausing: '暂停中', completed: '已完成', complete: '已完成', cancelling: '取消中', cancelled: '已取消', canceled: '已取消', failed: '失败', ready: '已就绪', analyzed: '已分析', partial: '部分完成', interrupted: '已中断', unreviewed: '待复核' };
+  const text: Record<string, string> = { core_ready: '核心检索就绪', existing: '已在资料库', registered: '待分析', imported: '已导入', pending: '等待中', queued: '排队中', waiting_input: '等待角色确认', running: '处理中', paused: '已暂停', pausing: '暂停中', completed: '已完成', complete: '已完成', cancelling: '取消中', cancelled: '已取消', canceled: '已取消', failed: '失败', ready: '已就绪', analyzed: '已分析', partial: '部分完成', interrupted: '已中断', unreviewed: '待复核' };
   return <span className={`status status-${status || 'registered'}`}><span />{text[status || 'registered'] || status}</span>;
 }
 export function Thumbnail({ src, title = '', className = '' }: { src?: string; title?: string; className?: string }) {

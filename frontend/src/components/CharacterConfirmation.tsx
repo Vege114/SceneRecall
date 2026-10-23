@@ -37,7 +37,7 @@ function CandidateCard({ candidate, role, busy, checked, error, onCheckedChange,
   </article>;
 }
 
-export default function CharacterConfirmation({ asset, onClose, onSaved }: { asset: Asset; onClose: () => void; onSaved: () => Promise<void> }) {
+export default function CharacterConfirmation({ asset, onClose, onSaved, onContinue }: { asset: Asset; onClose: () => void; onSaved: () => Promise<void>; onContinue?: () => Promise<void> }) {
   const endpoint = `/assets/${encodeURIComponent(asset.id)}/identity/confirmation`;
   const [data, setData] = useState<CharacterConfirmationResult | null>(null);
   const [selectedId, setSelectedId] = useState('');
@@ -171,6 +171,7 @@ export default function CharacterConfirmation({ asset, onClose, onSaved }: { ass
       if (action === 'skip' && result) { setNotice('已保存跳过状态，可以稍后继续。'); nextRole(result, characterId); }
       else if (action === 'reject') setNotice('已记住这个否定结果，不会再为该角色推荐这张候选。');
       else if (action === 'unclear') setNotice('已换过这组候选，新的候选会优先展示。');
+      refreshAfterSave();
     } catch (caught) { if (alive.current) setError(message(caught)); }
     finally { mutation.current = false; if (alive.current) setBusy(''); }
   };
@@ -192,10 +193,18 @@ export default function CharacterConfirmation({ asset, onClose, onSaved }: { ass
     } catch (caught) { if (alive.current) setError(message(caught)); }
     finally { mutation.current = false; if (alive.current) setBusy(''); }
   };
+  const continueTask = async () => {
+    if (!onContinue || !data || data.summary.pending > 0 || mutation.current || sampling?.status === 'running') return;
+    mutation.current = true; setBusy('continue'); setError('');
+    try { await onContinue(); }
+    catch (caught) { if (alive.current) setError(message(caught)); }
+    finally { mutation.current = false; if (alive.current) setBusy(''); }
+  };
   const close = () => { if (!mutation.current) onClose(); };
-  return <Modal title="开始分析前，确认角色" subtitle="将角色档案与正片中的实际形象对应起来 · 进度自动保存" onClose={close} wide>
+  return <Modal title={onContinue ? '任务中的角色确认' : '确认角色'} subtitle={`${asset.title} · 将角色档案与正片中的实际形象对应起来 · 进度自动保存`} onClose={close} wide>
     <div className="modal-body character-confirmation">
       <p className="confirmation-intro">先核对少量清晰的单人裁剪，再用作本作品后续集数的识别参考。候选来自已有分析；确认只作用于所选画面。未出场或暂时无法辨认的角色可以跳过。</p>
+      {onContinue && <Alert tone="info">任务已开始，目前等待这一步的人工判断。请逐个确认角色，或明确选择暂时跳过；完成后继续后续分析。关闭窗口会保留进度，任务仍在队列中等待。</Alert>}
       {error && <Alert tone="error">{error}<button type="button" className="text-button" disabled={!!busy} onClick={() => { setError(''); void load(); }}>重新读取确认进度</button></Alert>}
       {refreshError && <Alert>{refreshError}<button type="button" className="text-button" onClick={refreshAfterSave}>重试刷新外层列表</button></Alert>}
       {notice && <Alert tone="success">{notice}</Alert>}
@@ -225,8 +234,8 @@ export default function CharacterConfirmation({ asset, onClose, onSaved }: { ass
           </section>}
         </>}
       </>}
-      {busy && busy !== 'confirm' && <Spinner label={busy === 'sample' ? '正在启动少量采样' : busy === 'cache' ? '正在缓存 Bangumi 参考图' : '正在保存确认进度'} />}
+      {busy && busy !== 'confirm' && <Spinner label={busy === 'continue' ? '正在继续任务' : busy === 'sample' ? '正在启动少量采样' : busy === 'cache' ? '正在缓存 Bangumi 参考图' : '正在保存确认进度'} />}
     </div>
-    <footer className="modal-footer"><p className="helper">关闭后可从角色档案继续，确认不是开始分析的必填条件。</p><button type="button" className="button secondary" disabled={!!busy} onClick={close}>保存进度并返回</button></footer>
+    <footer className="modal-footer"><p className="helper">{onContinue ? data?.summary.pending ? `还有 ${data.summary.pending} 个角色等待确认或明确跳过。` : '已保存的确认和跳过结果会用于继续任务。' : '关闭后可从角色档案继续核对。'}</p><div className="button-row"><button type="button" className="button secondary" disabled={!!busy} onClick={close}>保存进度并返回</button>{onContinue && <button type="button" className="button primary" disabled={!!busy || loading || !data || data.summary.pending > 0 || sampling?.status === 'running'} onClick={() => void continueTask()}><Play size={15} />继续任务</button>}</div></footer>
   </Modal>;
 }

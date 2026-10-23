@@ -32,7 +32,7 @@ async function runEstimate(user: ReturnType<typeof userEvent.setup>, name = '估
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
 describe('Stage execution selection', () => {
-  it('uses parallel defaults for new tasks, shows connection limits, and invalidates estimates for mode and width changes', async () => {
+  it('uses parallel defaults and submits changed modes with the current connection ceiling', async () => {
     const app = context(); delete app.bootstrap.settings.defaults.execution;
     const fetch = mockFetch(); const user = userEvent.setup(); const close = vi.fn();
     const view = mount(<JobModal asset={asset} onClose={close} />, app);
@@ -41,58 +41,41 @@ describe('Stage execution selection', () => {
     expect(screen.queryByLabelText('字幕识别执行方式')).toBeNull();
     expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).value).toBe('16');
     expect(screen.getAllByText('连接并发上限 4；本次最多同时 4 个请求')).toHaveLength(2);
-    expect(screen.getByText(/各集台词先独立并行整理，再按集理解画面/)).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await screen.findByRole('button', { name: '重新扫描关键帧' });
-    await runEstimate(user);
-    expect(body(fetch, '/api/jobs/estimate').execution).toEqual(DEFAULT_EXECUTION);
     await user.selectOptions(screen.getByLabelText('台词整理执行方式'), 'serial');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
-    await runEstimate(user);
     await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), '5');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
-    expect(screen.getByText('连接并发上限 4；本次最多同时 4 个请求')).toBeTruthy();
-    await runEstimate(user);
     const updated = { ...app, bootstrap: { ...app.bootstrap, provider_profiles: [{ ...model, max_concurrency: 2 }] } };
     view.rerender(<AppContext.Provider value={updated}><JobModal asset={asset} onClose={close} /></AppContext.Provider>);
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
     expect(screen.getByText('连接并发上限 2；本次最多同时 2 个请求')).toBeTruthy();
-    await runEstimate(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     expect(body(fetch, '/api/jobs').execution).toEqual({ ...DEFAULT_EXECUTION, transcript: 'serial', max_concurrency: 5 });
-    expect(body(fetch, '/api/jobs').execution).toEqual(body(fetch, '/api/jobs/estimate').execution);
-    expect(fetch.mock.calls.some(([url]) => url === '/api/settings')).toBe(false);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['/api/jobs']);
   });
 
   it('shows only OCR execution for subtitle-only batches and snapshots choices on every item', async () => {
     const selected = [asset, { ...asset, id: 'two' }].map((entry) => ({ ...entry, subtitle_mode: 'embedded' as const }));
-    const fetch = mockFetch((url) => url.endsWith('/estimate') ? { ...estimate, items: selected.map((item) => ({ ...estimate, asset_id: item.id })) } : {});
-    const user = userEvent.setup(); mount(<JobModal assets={selected} onClose={vi.fn()} />);
+    const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal assets={selected} onClose={vi.fn()} />);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
     expect(screen.queryByLabelText('台词整理执行方式')).toBeNull();
     expect(screen.queryByLabelText('视觉分块执行方式')).toBeNull();
     await user.selectOptions(screen.getByLabelText('字幕识别执行方式'), 'serial');
     expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).disabled).toBe(true);
-    await runEstimate(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs/batch')).toBe(true));
     const items = body(fetch, '/api/jobs/batch').items;
-    expect(items).toEqual(body(fetch, '/api/jobs/batch/estimate').items);
     expect(items.map((item: { execution: ExecutionOptions; stages: string[] }) => ({ execution: item.execution, stages: item.stages }))).toEqual(selected.map(() => ({ execution: { ...DEFAULT_EXECUTION, subtitle: 'serial' }, stages: ['subtitle'] })));
   });
 
-  it.each(['0', '0.5', '9007199254740992'])('rejects invalid browser concurrency %s before estimating', async (value) => {
+  it.each(['0', '0.5', '9007199254740992'])('rejects invalid browser concurrency %s before starting', async (value) => {
     const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
     await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), value);
-    await user.click(screen.getByRole('button', { name: '估算用量' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     expect(fetch).not.toHaveBeenCalled();
     expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).validity.customError).toBe(true);
   });
 
-  it.each([32, 64])('accepts user-selected task concurrency %i and shows the lower connection ceiling', async (value) => {
+  it.each([32, 64])('accepts task concurrency %i while displaying the lower connection ceiling', async (value) => {
     const app = context(); app.bootstrap.provider_profiles = [{ ...model, max_concurrency: 32 }];
     const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />, app);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
@@ -101,13 +84,12 @@ describe('Stage execution selection', () => {
     await user.clear(input); await user.type(input, String(value));
     expect(input.validity.valid).toBe(true);
     expect(screen.getByText('连接并发上限 32；本次最多同时 32 个请求')).toBeTruthy();
-    await runEstimate(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
     expect(body(fetch, '/api/jobs').execution.max_concurrency).toBe(value);
-    expect(body(fetch, '/api/jobs/estimate').execution.max_concurrency).toBe(value);
   });
 
-  it('preserves saved task defaults and an unchecked preference affects only this task without invalidating the estimate', async () => {
+  it('preserves saved defaults and keeps unchecked edits local to this task', async () => {
     const old = { ...mixed, max_concurrency: 3 };
     const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />, context(old));
     expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).value).toBe('3');
@@ -116,104 +98,88 @@ describe('Stage execution selection', () => {
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
     await user.selectOptions(screen.getByLabelText('字幕识别执行方式'), 'parallel');
     await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), '12');
-    await runEstimate(user);
-    await user.click(checkbox);
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    await user.click(checkbox);
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(checkbox); await user.click(checkbox);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
     expect(body(fetch, '/api/jobs').execution.max_concurrency).toBe(12);
     expect(fetch.mock.calls.some(([url]) => url === '/api/settings')).toBe(false);
   });
 
-  it.each(['single', 'batch'])('saves only the active execution defaults before creating a checked %s task and the next modal inherits them', async (kind) => {
+  it.each(['single', 'batch'])('saves the full checked %s configuration before creation and inherits it next time', async (kind) => {
     const app = context({ ...DEFAULT_EXECUTION, subtitle: 'serial', max_concurrency: 3 });
     app.bootstrap.settings.defaults = { ...app.bootstrap.settings.defaults, max_requests: 37, max_cost: 0.25, subtitle_fps: 1 };
     let saved = app.bootstrap.settings;
     const selected = kind === 'batch' ? [asset, { ...asset, id: 'two' }] : [asset];
     const fetch = mockFetch((url, options) => {
-      if (url === '/api/settings') { const patch = JSON.parse(options!.body as string); saved = { ...saved, defaults: { ...saved.defaults, execution: { ...saved.defaults.execution!, ...patch.defaults.execution } } }; return saved; }
-      if (url === '/api/keyframe-plans') return { id: `plan-${JSON.parse(options!.body as string).asset_id}`, status: 'completed', frames: [] };
-      if (url.endsWith('/estimate')) return { ...estimate, items: selected.map((item) => ({ ...estimate, asset_id: item.id })) };
+      if (url === '/api/settings') { const patch = JSON.parse(options!.body as string); saved = { ...saved, defaults: { ...saved.defaults, ...patch.defaults } }; return saved; }
       return {};
     });
-    const original = structuredClone(saved);
     vi.mocked(app.refresh).mockImplementation(async () => { app.bootstrap = { ...app.bootstrap, settings: saved }; });
     const user = userEvent.setup(); const close = vi.fn(); const view = mount(<JobModal assets={selected} onClose={close} />, app);
     await user.selectOptions(screen.getByLabelText('台词整理执行方式'), 'serial');
     await user.clear(screen.getByLabelText('并发请求上限')); await user.type(screen.getByLabelText('并发请求上限'), '12');
-    await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-    await screen.findByRole('button', { name: '重新扫描关键帧' });
-    await runEstimate(user);
     await user.click(screen.getByRole('checkbox', { name: '设为默认值' }));
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
     const taskPath = kind === 'batch' ? '/api/jobs/batch' : '/api/jobs';
-    expect(body(fetch, '/api/settings')).toEqual({ defaults: { execution: { transcript: 'serial', preparation: 'parallel', max_concurrency: 12 } } });
+    expect(body(fetch, '/api/settings').defaults).toMatchObject({ analysis_strategy: 'scene-chunks-v1', stages: ['vision', 'subtitle'], max_requests: 37, max_cost: 0.25, subtitle_fps: 1, execution: { transcript: 'serial', preparation: 'parallel', subtitle: 'serial', max_concurrency: 12 } });
     expect(fetch.mock.calls.findIndex(([url]) => url === '/api/settings')).toBeLessThan(fetch.mock.calls.findIndex(([url]) => url === taskPath));
-    expect(saved).toEqual({ ...original, defaults: { ...original.defaults, execution: { ...original.defaults.execution!, transcript: 'serial', preparation: 'parallel', max_concurrency: 12 } } });
     const created = kind === 'batch' ? body(fetch, taskPath).items : [body(fetch, taskPath)];
     expect(created.map((item: { execution: ExecutionOptions }) => item.execution.max_concurrency)).toEqual(selected.map(() => 12));
-    view.unmount();
-    mount(<JobModal asset={asset} onClose={vi.fn()} />, app);
+    view.unmount(); mount(<JobModal asset={asset} onClose={vi.fn()} />, app);
     expect((screen.getByLabelText('并发请求上限') as HTMLInputElement).value).toBe('12');
     expect((screen.getByLabelText('台词整理执行方式') as HTMLSelectElement).value).toBe('serial');
     expect((screen.getByRole('checkbox', { name: '设为默认值' }) as HTMLInputElement).checked).toBe(false);
   });
 
-  it('stops before task creation if saving checked defaults fails and allows an unchecked retry', async () => {
-    const fetch = mockFetch((url) => url === '/api/settings' ? new Response(JSON.stringify({ detail: '设置写入失败' }), { status: 503 }) : url.endsWith('/estimate') ? estimate : {});
+  it('stops before creation if checked defaults fail to save and allows an unchecked retry', async () => {
+    const fetch = mockFetch((url) => url === '/api/settings' ? new Response(JSON.stringify({ detail: '设置写入失败' }), { status: 503 }) : {});
     const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
-    await runEstimate(user);
     await user.click(screen.getByRole('checkbox', { name: '设为默认值' }));
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
-    await screen.findByText(/保存默认执行方式失败：设置写入失败。任务尚未创建/);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await screen.findByText('设置写入失败');
     expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(false);
     await user.click(screen.getByRole('checkbox', { name: '设为默认值' }));
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
     expect(fetch.mock.calls.filter(([url]) => url === '/api/settings')).toHaveLength(1);
   });
 
-  it('refreshes saved defaults and reports the partial success when task creation fails after saving', async () => {
-    const fetch = mockFetch((url) => url === '/api/jobs' ? new Response(JSON.stringify({ detail: '任务队列不可用' }), { status: 503 }) : url.endsWith('/estimate') ? estimate : {});
+  it('refreshes saved defaults and reports partial success when task creation fails', async () => {
+    const fetch = mockFetch((url) => url === '/api/jobs' ? new Response(JSON.stringify({ detail: '任务队列不可用' }), { status: 503 }) : {});
     const app = context(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />, app);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
-    await runEstimate(user);
     await user.click(screen.getByRole('checkbox', { name: '设为默认值' }));
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
-    await screen.findByText(/默认执行方式已保存，但任务创建失败：任务队列不可用/);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await screen.findByText(/默认任务配置已保存，但任务创建失败：任务队列不可用/);
     expect(app.refresh).toHaveBeenCalledOnce();
-    expect(body(fetch, '/api/settings')).toEqual({ defaults: { execution: { subtitle: 'parallel', max_concurrency: 16 } } });
+    expect(body(fetch, '/api/settings').defaults).toMatchObject({ stages: ['subtitle'], execution: { subtitle: 'parallel', max_concurrency: 16 } });
   });
 
-  it('never duplicates a successfully created task when refreshing the queue fails', async () => {
+  it('never duplicates a successful creation when refreshing fails', async () => {
     const fetch = mockFetch(); const app = context(); vi.mocked(app.refresh).mockRejectedValue(new Error('刷新失败'));
     const user = userEvent.setup(); const close = vi.fn(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={close} />, app);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
-    await runEstimate(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(close).toHaveBeenCalledOnce());
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     expect(fetch.mock.calls.filter(([url]) => url === '/api/jobs')).toHaveLength(1);
     expect(app.notify).toHaveBeenCalledWith(expect.stringContaining('任务已创建，但列表刷新失败'), 'error');
   });
 
-  it('keeps an invalid ceiling correctable when the last parallel stage is changed to serial', async () => {
+  it('keeps an invalid ceiling correctable when the last parallel stage changes to serial', async () => {
     const fetch = mockFetch(); const user = userEvent.setup(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />);
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
     const input = screen.getByLabelText('并发请求上限') as HTMLInputElement;
     await user.clear(input); await user.type(input, '0');
     await user.selectOptions(screen.getByLabelText('字幕识别执行方式'), 'serial');
     expect(input.disabled).toBe(false);
-    await user.click(screen.getByRole('button', { name: '估算用量' }));
-    expect(fetch).not.toHaveBeenCalled();
-    await user.clear(input); await user.type(input, '3');
-    expect(input.disabled).toBe(true);
-    await runEstimate(user);
-    expect(body(fetch, '/api/jobs/estimate').execution.max_concurrency).toBe(3);
+    await user.click(screen.getByRole('button', { name: '开始任务' })); expect(fetch).not.toHaveBeenCalled();
+    await user.clear(input); await user.type(input, '3'); expect(input.disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs').execution.max_concurrency).toBe(3);
   });
 
   it('keeps reanalysis estimates current and passes the same execution choices into creation', async () => {

@@ -32,6 +32,21 @@ def response(data):
     return codex_cli.CodexCLIResult(json.dumps(data), {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3})
 
 
+def test_unified_retrieval_inherits_selected_profile_model_without_legacy_preset(api, monkeypatch):
+    from test_retrieval_jobs import Encoder
+    app, client = api
+    monkeypatch.setattr(app.state.search.visual_encoder, "identity", Encoder().identity)
+    inherited_effort = app.state.providers.get("codex").get("reasoning_effort")
+    for pipeline, model, effort in (("unified-v1", "connection-model", inherited_effort),
+                                    (None, "gpt-6.1-sol", "low")):
+        result = client.post("/api/jobs", json={"asset_id": "first", "analysis_strategy": "retrieval-first-v1",
+                                               "retrieval_mode": "complete", "task_pipeline": pipeline,
+                                               "model_bindings": {"vision": "codex"}})
+        assert result.status_code == 200, result.text
+        assert result.json()["task_models"]["vision"]["model"] == model
+        assert result.json()["task_models"]["vision"]["reasoning_effort"] == effort
+
+
 @pytest.fixture
 def api(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "empty-codex-home"))

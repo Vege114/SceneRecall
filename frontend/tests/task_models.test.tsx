@@ -28,178 +28,148 @@ function mockFetch(handler?: (url: string, options?: RequestInit) => unknown) {
 function body(fetch: ReturnType<typeof mockFetch>, path: string) {
   return JSON.parse(fetch.mock.calls.filter((entry) => entry[0] === path).at(-1)![1]!.body as string);
 }
-async function scan(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole('button', { name: '扫描关键帧' }));
-  await screen.findByRole('button', { name: '重新扫描关键帧' });
-}
-async function estimateJob(user: ReturnType<typeof userEvent.setup>, startName = '开始分析') {
+async function estimateJob(user: ReturnType<typeof userEvent.setup>, startName = '开始深入分析') {
   await user.click(screen.getByRole('button', { name: '估算用量' }));
   await waitFor(() => expect((screen.getByRole('button', { name: startName }) as HTMLButtonElement).disabled).toBe(false));
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
 describe('Task model selection by source', () => {
-  it('loads supported efforts, separates stages and invalidates the estimate when either selection changes', async () => {
+  it('loads supported efforts and submits the latest independent choices for every selected stage', async () => {
     const user = userEvent.setup(); const fetch = mockFetch(); const app = context(); const onClose = vi.fn();
     mount(<JobModal asset={asset} onClose={onClose} />, app);
     await screen.findByText(catalog.message!);
-    expect(screen.getByText(/模型列表来自本机 Codex 缓存/)).toBeTruthy();
     await user.selectOptions(screen.getByLabelText('分块与简要索引模型'), 'model:test-fast');
     await user.selectOptions(screen.getByLabelText('分块与简要索引思考等级'), 'low');
     await user.selectOptions(screen.getByLabelText('画面理解模型'), 'model:test-deep');
     await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'xhigh');
-    await scan(user); await estimateJob(user);
-    const firstOverrides = body(fetch, '/api/jobs/estimate').model_overrides;
-    expect(firstOverrides).toEqual({ preparation: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: 'low' }, vision: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-deep', reasoning_effort: 'xhigh' } });
     await user.selectOptions(screen.getByLabelText('画面理解模型'), 'model:test-fast');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
     expect((screen.getByLabelText('画面理解思考等级') as HTMLSelectElement).value).toBe('');
-    expect(screen.getByText('test-fast · 仅发送内容关键帧')).toBeTruthy();
-    expect(screen.getByText(/台词整理 → 视觉分块（test-fast）/)).toBeTruthy();
     expect(within(screen.getByLabelText('画面理解思考等级')).queryByRole('option', { name: /xhigh/ })).toBeNull();
-    await estimateJob(user);
     await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'medium');
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
-    await estimateJob(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
-    expect(body(fetch, '/api/jobs').model_overrides).toEqual(body(fetch, '/api/jobs/estimate').model_overrides);
-    expect(body(fetch, '/api/jobs').model_overrides.vision).toEqual({ provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: 'medium' });
+    expect(body(fetch, '/api/jobs').model_overrides).toEqual({
+      preparation: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: 'low' },
+      vision: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: 'medium' },
+    });
     expect(app.bootstrap.provider_profiles[0].model).toBe('test-deep');
-    expect(fetch.mock.calls.some(([url]) => url === '/api/settings' || url === '/api/profiles')).toBe(false);
+    expect(fetch.mock.calls.some(([url]) => url.includes('estimate') || url === '/api/settings' || url === '/api/profiles' || url.includes('keyframe-plans'))).toBe(false);
   });
 
-  it('does not override untouched Codex connections and explicitly supports the built-in default', async () => {
+  it.each(['untouched', 'built-in', 'effort', 'cleared'])('serializes %s Codex choices without modifying the connection', async (choice) => {
     const user = userEvent.setup(); const fetch = mockFetch(); mount(<JobModal asset={asset} onClose={vi.fn()} />);
-    await screen.findByText(catalog.message!); await scan(user); await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate')).not.toHaveProperty('model_overrides');
-    await user.selectOptions(screen.getByLabelText('画面理解模型'), 'model:');
-    expect(screen.getByText('Codex 内置默认 · 仅发送内容关键帧')).toBeTruthy();
-    await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate').model_overrides).toEqual({ vision: { provider_type: 'codex_cli', profile_id: codex.id, model: '', reasoning_effort: null } });
-    await user.selectOptions(screen.getByLabelText('画面理解模型'), 'inherit');
-    await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'high');
-    await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate').model_overrides).toEqual({ vision: { provider_type: 'codex_cli', profile_id: codex.id, reasoning_effort: 'high' } });
-    await user.selectOptions(screen.getByLabelText('画面理解思考等级'), '');
-    await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate')).not.toHaveProperty('model_overrides');
+    await screen.findByText(catalog.message!);
+    if (choice === 'built-in') await user.selectOptions(screen.getByLabelText('画面理解模型'), 'model:');
+    if (choice === 'effort' || choice === 'cleared') await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'high');
+    if (choice === 'cleared') await user.selectOptions(screen.getByLabelText('画面理解思考等级'), '');
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs').model_overrides).toEqual(choice === 'built-in' ? { vision: { provider_type: 'codex_cli', profile_id: codex.id, model: '', reasoning_effort: null } } : choice === 'effort' ? { vision: { provider_type: 'codex_cli', profile_id: codex.id, reasoning_effort: 'high' } } : {});
   });
 
-  it('keeps API routes unchanged without fetching a Codex catalog or showing selection controls', async () => {
+  it('keeps API routes unchanged without fetching a Codex catalog', async () => {
     const user = userEvent.setup(); const fetch = mockFetch(); mount(<JobModal asset={asset} onClose={vi.fn()} />, context([apiProfile]));
     expect(screen.queryByLabelText('画面理解模型')).toBeNull();
     expect(screen.queryByLabelText('画面理解思考等级')).toBeNull();
-    expect(screen.getAllByText('API · 我的 API')).toHaveLength(2);
     expect(fetch).not.toHaveBeenCalled();
-    await scan(user); await estimateJob(user); await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
-    expect(body(fetch, '/api/jobs')).not.toHaveProperty('model_overrides');
+    expect(body(fetch, '/api/jobs').model_overrides).toEqual({});
     expect(fetch.mock.calls.some(([url]) => url === '/api/codex/models')).toBe(false);
   });
 
-  it('shows a usable default path on catalog failure and can retry', async () => {
+  it('offers a usable built-in model after catalog failure and can retry the catalog', async () => {
     let catalogCalls = 0;
-    const user = userEvent.setup(); const fetch = mockFetch((url) => url === '/api/codex/models' ? ++catalogCalls === 1 ? new Response(JSON.stringify({ detail: 'Codex 缓存不存在' }), { status: 503 }) : catalog : url === '/api/keyframe-plans' ? { id: 'plan', status: 'completed', frames: [] } : estimate);
+    const user = userEvent.setup(); const fetch = mockFetch((url) => url === '/api/codex/models' ? ++catalogCalls === 1 ? new Response(JSON.stringify({ detail: 'Codex 缓存不存在' }), { status: 503 }) : catalog : {});
     mount(<JobModal asset={asset} onClose={vi.fn()} />);
     await screen.findByText(/无法读取 Codex 模型目录：Codex 缓存不存在/);
     expect((screen.getByLabelText(/^画面理解思考等级/) as HTMLSelectElement).disabled).toBe(true);
     await user.selectOptions(screen.getByLabelText('画面理解模型'), 'model:');
-    await scan(user); await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate').model_overrides.vision.model).toBe('');
+    expect((screen.getByRole('button', { name: '开始任务' }) as HTMLButtonElement).disabled).toBe(false);
     await user.click(screen.getByRole('button', { name: '重试读取模型' }));
     await screen.findByText(catalog.message!);
     expect((screen.getByLabelText('画面理解思考等级') as HTMLSelectElement).disabled).toBe(false);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs').model_overrides.vision.model).toBe('');
     expect(catalogCalls).toBe(2);
   });
 
-  it('applies per-stage overrides only to enabled stages and relevant batch items', async () => {
+  it('applies per-stage overrides only to relevant batch items', async () => {
     const user = userEvent.setup(); const embedded = { ...asset, id: 'embedded', subtitle_mode: 'embedded' as const };
-    const fetch = mockFetch((url, options) => url === '/api/codex/models' ? catalog : url === '/api/keyframe-plans' ? { id: `plan-${JSON.parse(options!.body as string).asset_id}`, status: 'completed', frames: [] } : url.endsWith('/estimate') ? { ...estimate, items: [asset, embedded].map((entry) => ({ ...estimate, asset_id: entry.id })) } : {});
-    mount(<JobModal assets={[asset, embedded]} onClose={vi.fn()} />);
+    const fetch = mockFetch(); mount(<JobModal assets={[asset, embedded]} onClose={vi.fn()} />);
     await screen.findByText(catalog.message!);
     await user.selectOptions(screen.getByLabelText('画面字幕 OCR模型'), 'model:test-fast');
     await user.selectOptions(screen.getByLabelText('画面字幕 OCR思考等级'), 'low');
-    await scan(user); await estimateJob(user);
-    const items = body(fetch, '/api/jobs/batch/estimate').items;
-    expect(items[0]).not.toHaveProperty('model_overrides');
-    expect(items[1].model_overrides).toEqual({ subtitle: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: 'low' } });
-    await user.click(screen.getByRole('button', { name: '开始分析' }));
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
     await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs/batch')).toBe(true));
-    expect(body(fetch, '/api/jobs/batch').items).toEqual(items);
+    const items = body(fetch, '/api/jobs/batch').items;
+    expect(items[0].model_overrides).toEqual({});
+    expect(items[1].model_overrides).toEqual({ subtitle: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: 'low' } });
   });
 
   it('reloads an empty catalog and clears an effort that a refreshed catalog no longer supports', async () => {
     let catalogCalls = 0;
     const user = userEvent.setup();
-    const fetch = mockFetch((url) => url === '/api/codex/models' ? ++catalogCalls === 1 ? { models: [], message: '尚未生成本机缓存' } : catalogCalls === 2 ? catalog : catalogCalls === 3 ? { models: [] } : { ...catalog, models: [{ ...catalog.models[0], reasoning_efforts: ['medium'] }] } : url === '/api/keyframe-plans' ? { id: 'plan', status: 'completed', frames: [] } : estimate);
+    const fetch = mockFetch((url) => url === '/api/codex/models' ? ++catalogCalls === 1 ? { models: [] } : catalogCalls === 2 ? catalog : catalogCalls === 3 ? { models: [] } : { ...catalog, models: [{ ...catalog.models[0], reasoning_efforts: ['medium'] }] } : {});
     mount(<JobModal asset={asset} onClose={vi.fn()} />);
     await screen.findByText('当前目录没有可选模型，可沿用连接或使用 Codex 内置默认。');
     await user.click(screen.getByRole('button', { name: '重新读取模型' }));
     await screen.findByText(catalog.message!);
     await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'high');
-    await scan(user); await estimateJob(user);
     await user.click(screen.getByRole('button', { name: '重新读取模型' }));
     await screen.findByText('当前目录没有可选模型，可沿用连接或使用 Codex 内置默认。');
     const unavailable = screen.getByLabelText(/^画面理解思考等级/) as HTMLSelectElement;
-    expect(unavailable.value).toBe('high');
-    expect(unavailable.disabled).toBe(true);
+    expect(unavailable.value).toBe('high'); expect(unavailable.disabled).toBe(true);
     expect(within(unavailable).getByRole('option', { name: /已选等级，目录暂不可验证/ }).textContent).toContain('high');
     await user.click(screen.getByRole('button', { name: '重新读取模型' }));
     await waitFor(() => expect((screen.getByLabelText('画面理解思考等级') as HTMLSelectElement).value).toBe(''));
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
-    await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate').model_overrides.vision.reasoning_effort).toBeNull();
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs').model_overrides.vision.reasoning_effort).toBeNull();
     expect(catalogCalls).toBe(4);
   });
 
   it('removes deselected stage overrides and keeps only subtitle choices in the request', async () => {
-    const user = userEvent.setup(); const fetch = mockFetch();
-    mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />);
+    const user = userEvent.setup(); const fetch = mockFetch(); mount(<JobModal asset={{ ...asset, subtitle_mode: 'embedded' }} onClose={vi.fn()} />);
     await screen.findByText(catalog.message!);
     await user.selectOptions(screen.getByLabelText('分块与简要索引模型'), 'model:test-deep');
     await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'high');
     await user.selectOptions(screen.getByLabelText('画面字幕 OCR模型'), 'model:test-fast');
     await user.click(screen.getByRole('checkbox', { name: /画面理解/ }));
     expect(screen.queryByLabelText('画面理解模型')).toBeNull();
-    await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate')).toMatchObject({ stages: ['subtitle'], model_overrides: { subtitle: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: null } } });
-    expect(Object.keys(body(fetch, '/api/jobs/estimate').model_overrides)).toEqual(['subtitle']);
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs')).toMatchObject({ stages: ['subtitle'], model_overrides: { subtitle: { provider_type: 'codex_cli', profile_id: codex.id, model: 'test-fast', reasoning_effort: null } } });
+    expect(Object.keys(body(fetch, '/api/jobs').model_overrides)).toEqual(['subtitle']);
   });
 
-  it('invalidates an untouched estimate when a connection model changes and does not guess default model efforts', async () => {
-    const user = userEvent.setup(); const app = context();
-    const fetch = mockFetch((url) => url === '/api/codex/models' ? { ...catalog, default_model: null } : url === '/api/keyframe-plans' ? { id: 'plan', status: 'completed', frames: [] } : estimate);
+  it('inherits a changed connection model without guessing unsupported default efforts', async () => {
+    const user = userEvent.setup(); const app = context(); const fetch = mockFetch((url) => url === '/api/codex/models' ? { ...catalog, default_model: null } : {});
     const view = mount(<JobModal asset={asset} onClose={vi.fn()} />, app);
-    await screen.findByText(catalog.message!); await scan(user); await estimateJob(user);
+    await screen.findByText(catalog.message!);
     const updated = { ...app, bootstrap: { ...app.bootstrap, provider_profiles: [{ ...codex, model: '' }] } };
     view.rerender(<AppContext.Provider value={updated}><JobModal asset={asset} onClose={vi.fn()} /></AppContext.Provider>);
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
     expect((screen.getByLabelText(/^画面理解思考等级/) as HTMLSelectElement).disabled).toBe(true);
-    await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate')).not.toHaveProperty('model_overrides');
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs').model_overrides).toEqual({});
   });
 
-  it('uses each stage bound connection and drops overrides when a binding changes to API', async () => {
+  it('uses each bound connection and drops stale overrides after its binding changes to API', async () => {
     const secondCodex = { ...codex, id: 'codex-two', name: '分块连接', model: 'test-fast' };
     const app = context([codex, secondCodex, apiProfile]); app.bootstrap.settings.bindings.preparation = secondCodex.id;
     const user = userEvent.setup(); const fetch = mockFetch(); const view = mount(<JobModal asset={asset} onClose={vi.fn()} />, app);
     await screen.findByText(catalog.message!);
-    expect(within(screen.getByLabelText('分块与简要索引模型设置')).getByText('Codex CLI · ChatGPT 订阅 · 分块连接')).toBeTruthy();
     await user.selectOptions(screen.getByLabelText('分块与简要索引思考等级'), 'low');
     await user.selectOptions(screen.getByLabelText('画面理解思考等级'), 'high');
-    await scan(user); await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate').model_overrides.preparation.profile_id).toBe(secondCodex.id);
     const updated = { ...app, bootstrap: { ...app.bootstrap, settings: { ...app.bootstrap.settings, bindings: { ...app.bootstrap.settings.bindings, vision: apiProfile.id } } } };
     view.rerender(<AppContext.Provider value={updated}><JobModal asset={asset} onClose={vi.fn()} /></AppContext.Provider>);
     expect(screen.queryByLabelText('画面理解思考等级')).toBeNull();
-    expect((screen.getByRole('button', { name: '开始分析' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.queryByText('重新估算')).toBeNull();
-    await estimateJob(user);
-    expect(body(fetch, '/api/jobs/estimate').model_overrides).toEqual({ preparation: { provider_type: 'codex_cli', profile_id: secondCodex.id, reasoning_effort: 'low' } });
+    await user.click(screen.getByRole('button', { name: '开始任务' }));
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url === '/api/jobs')).toBe(true));
+    expect(body(fetch, '/api/jobs').model_overrides).toEqual({ preparation: { provider_type: 'codex_cli', profile_id: secondCodex.id, reasoning_effort: 'low' } });
   });
 });
 

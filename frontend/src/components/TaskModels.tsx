@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, message } from '../api';
 import { useApp } from '../context';
-import { profileModelLabel, type CodexModelCatalog, type TaskModelOverride, type TaskModelOverrides, type TaskModelRole } from '../types';
+import { profileModelLabel, type CodexModelCatalog, type TaskModelOverride, type TaskModelOverrides, type TaskModelRole, type TaskModelBindings } from '../types';
 import { Alert, Field, Spinner } from './ui';
 
 const roleLabels: Record<TaskModelRole, string> = { preparation: '分块与简要索引', vision: '画面理解', subtitle: '画面字幕 OCR' };
@@ -35,18 +35,21 @@ export function useTaskModels(roles: TaskModelRole[]) {
   return { overrides: Object.keys(overrides).length ? overrides : undefined, change, sourceKey: JSON.stringify(sources) };
 }
 
-export default function TaskModels({ roles, value, onChange, disabled = false }: {
+export default function TaskModels({ roles, value, onChange, disabled = false, bindings, onBindingChange, defaults = false }: {
   roles: TaskModelRole[];
   value?: TaskModelOverrides;
   onChange: (role: TaskModelRole, value?: TaskModelOverride) => void;
   disabled?: boolean;
+  bindings?: TaskModelBindings;
+  onBindingChange?: (role: TaskModelRole, profileId?: string) => void;
+  defaults?: boolean;
 }) {
   const { bootstrap } = useApp();
   const [catalog, setCatalog] = useState<CodexModelCatalog | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
-  const stages = roles.map((role) => ({ role, profile: bootstrap.provider_profiles.find((entry) => entry.id === bootstrap.settings.bindings[role]) }));
+  const stages = roles.map((role) => ({ role, profile: bootstrap.provider_profiles.find((entry) => entry.id === (bindings?.[role] ?? bootstrap.settings.bindings[role])) }));
   const hasCodex = stages.some(({ profile }) => profile?.provider_type === 'codex_cli');
   const cacheTime = catalog?.fetched_at ? new Date(catalog.fetched_at) : null;
   useEffect(() => {
@@ -70,8 +73,8 @@ export default function TaskModels({ roles, value, onChange, disabled = false }:
   }, [catalog, value, onChange, stages]);
   if (!roles.length) return null;
   return <section className="task-models" aria-label="本次任务模型设置">
-    <h3>本次任务的模型</h3>
-    <p className="helper">按阶段选择模型与思考等级，仅用于本次任务。未调整时沿用连接设置。</p>
+    <h3>{defaults ? '默认任务模型' : '本次任务的模型'}</h3>
+    <p className="helper">按阶段选择模型连接与思考等级。{defaults ? '保存后用于新任务。' : '调整仅用于本次任务。'}未调整时沿用连接设置。</p>
     {stages.map(({ role, profile }) => {
       const label = roleLabels[role];
       const selection = value?.[role];
@@ -79,6 +82,11 @@ export default function TaskModels({ roles, value, onChange, disabled = false }:
       const model = catalog?.models.find((entry) => entry.id === effectiveModel);
       return <div className="task-model-stage" key={role} aria-label={`${label}模型设置`}>
         <div className="task-model-source"><strong>{label}</strong><span>{profile ? `${profile.provider_type === 'codex_cli' ? 'Codex CLI · ChatGPT 订阅' : 'API'} · ${profile.name}` : '尚未分配连接'}</span></div>
+        {onBindingChange && <Field label={`${label}连接`}><select disabled={disabled} value={bindings?.[role] || ''} onChange={(event) => onBindingChange(role, event.target.value || undefined)}>
+          <option value="">沿用能力分配{bootstrap.settings.bindings[role] ? '' : '（尚未配置）'}</option>
+          {bootstrap.provider_profiles.filter((entry) => entry.capabilities.includes(role)).map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {profileModelLabel(entry)}</option>)}
+          {bindings?.[role] && !bootstrap.provider_profiles.some((entry) => entry.id === bindings[role] && entry.capabilities.includes(role)) && <option value={bindings[role]} disabled>原连接已不可用，请重新选择</option>}
+        </select></Field>}
         {profile?.provider_type === 'codex_cli' ? <div className="form-grid">
           <Field label={`${label}模型`}>
             <select disabled={disabled} value={selection?.model === undefined ? 'inherit' : `model:${selection.model}`} onChange={(event) => {

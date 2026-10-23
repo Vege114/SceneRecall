@@ -69,6 +69,8 @@ class TaskModelOverride(Contract):
 
 
 class TaskModelSelection(Contract):
+    model_bindings: dict[Literal["preparation", "vision", "subtitle"],
+                         Annotated[str, Field(min_length=1, max_length=100, pattern=r"^[a-zA-Z0-9_-]+$")]] = Field(default_factory=dict)
     model_overrides: dict[Literal["preparation", "vision", "subtitle"], TaskModelOverride] = Field(default_factory=dict)
 
 
@@ -88,6 +90,7 @@ class ConcurrencyInput(Contract):
 
 class AnalysisInput(TaskModelSelection):
     asset_id: str
+    task_pipeline: Literal["unified-v1"] | None = None
     execution: ExecutionOptions = Field(default_factory=ExecutionOptions)
     analysis_strategy: Literal["scene-chunks-v1", "content-keyframes-v1", "retrieval-first-v1"] | None = None
     retrieval_mode: Literal["core", "complete"] = "complete"
