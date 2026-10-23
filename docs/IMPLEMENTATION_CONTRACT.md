@@ -2,6 +2,16 @@
 
 Internal records and REST use snake_case. Time is integer milliseconds relative to asset start. Source data are versioned JSON; all indexes disposable. Engineering tests use generated fixtures and provider doubles. Real media/model validation is recorded separately in `VALIDATION.md` and is not inferred from synthetic tests.
 
+## Completed episode reads and queue responsiveness (2026-10-23)
+
+`GET /api/assets/{id}` projects saved evidence against current annotations and identity decisions; it does not invoke a model. Scene dependency traversal reuses raw rows, semantic overlays, version digests and batched identity projection only within that traversal. The next request reads current corrections. The synchronous route constructs `JSONResponse` in its worker and reports `Server-Timing` durations for `asset`, `projection`, `assembly` and `json`; these exclude HTTP queueing, transfer and browser rendering.
+
+Identity-context allow-list checks use the current lightweight roster instead of rebuilding the work's appearance history. Character catalogs keep one derived appearance snapshot per store instance, guarded by source-file and directory metadata; roster, scope membership and policy are still read on each request. Active pointers, evidence, annotations, frame registry, identity decisions/settings and gallery changes invalidate reuse. Portrait requests validate the current owned frame before serving it. Public visual-review metadata omits local crop paths and serializes in its worker; pixel requests resolve and validate the requested crop path separately.
+
+Scene/transcript status, checkpoints, local projection, accounting and scheduler callbacks use cancellation-drained workers when they may wait for the library lock. A published scene transaction retains its lock on one worker thread. Budget waiters use loop-owned event generations so a late worker result cannot lose a wakeup; cancellation releases an unstarted reservation after its worker drains. A terminal provider failure closes parallel admission before asynchronous accounting, while expected split fallbacks remain eligible. Admitted paid calls still complete durable receipts before cleanup.
+
+Opening a detail page always starts its first request, even in a hidden tab. Each attempt has a 30-second abort timeout covering response-body parsing, with a retry action on initial failure; failed background refreshes retain existing detail. Visibility controls background polling only. These changes preserve the full detail/review payloads; they do not implement server-side pagination.
+
 ## Background startup and readiness (2026-10-23)
 
 `/api/health` reports HTTP availability. Lifespan schedules an owned `StartupPreparation` task without waiting for the source projection. `GET /api/bootstrap` returns only configuration and cached preparation results; it never expands the full library or hashes model weights in the request. `startup.index|statistics|encoder` each expose `{status: pending|running|ready|error, message?: string}`. `stats` is initially `{}`; existing cached values remain visible while refreshing. `visual_encoder.available` is meaningful after the encoder check completes. Unconfigured models remain a completed check with `available:false` and an explanation, not a failed index.

@@ -88,9 +88,11 @@ def _write_bytes(path: Path, content: bytes):
 def _allowed(library, asset_id, *, catalog=None):
     """Read the complete permitted roster without an appearance/recency limit."""
     characters = CharacterStore(library)
-    # Catalog performs the existing local roster upgrade and enforces current
-    # membership/animation restrictions before any reference is consulted.
-    catalog = characters.catalog(asset_id) if catalog is None else catalog
+    # Identity checks need current membership, names and roster restrictions,
+    # not every episode's appearance history. Rebuilding that history here
+    # holds the library lock through thousands of unrelated region reads and
+    # can stall browsing while a background scene request refreshes identity.
+    catalog = characters.roster(asset_id) if catalog is None else catalog
     return catalog, {row["id"]: row for row in catalog["profiles"]}
 
 
@@ -504,7 +506,7 @@ class VisualIdentityPipeline:
             version = backend.model_version
             metrics["model_load_ms"] = round((time.monotonic() - load_start) * 1000)
             catalog, profiles = _allowed(self.library, asset_id)
-            proposed_references = self.gallery.matching(asset_id)
+            proposed_references = self.gallery.matching(asset_id, _catalog=catalog)
             references = []
             # Read every permitted character's exemplars; there is no recency or
             # first-16 truncation before nearest-neighbour selection.
@@ -717,13 +719,13 @@ class VisualIdentityPipeline:
                                    and (row["status"] == "confirmed" or row["id"] in used_references)]
         return projected
 
-    def reviews(self, asset_id):
+    def reviews(self, asset_id, *, _crop_paths=True):
         self.library.get_asset(asset_id)
         latest = read_json(self._directory(asset_id) / "latest.json", {"asset_id": asset_id, "status": "not_run",
                            "regions": [], "metrics": {}, "degraded_reason": "尚未运行视觉身份识别"})
         # Include successful partial batches even if a later operation stopped.
         regions = [read_json(path) for path in sorted((self._directory(asset_id) / "regions").glob("*.json"))]
-        latest["regions"] = self._project(asset_id, regions)
+        latest["regions"] = self._project(asset_id, regions, _crop_paths=_crop_paths)
         return latest
 
     def review(self, asset_id, region_id, *, status, character_id=None, reason, _catalog=None):

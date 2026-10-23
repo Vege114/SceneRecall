@@ -68,6 +68,10 @@ def test_cast_appearance_projection_does_not_reread_catalog_per_entity(large_cat
     for count in (10, 1000):
         source = records(role, count)
         monkeypatch.setattr(library, "observations", lambda identity: source if identity == "asset_1" else [])
+        # The injected observation collection changes without real files;
+        # advance its source pointer just as publishing a real run would.
+        atomic_json(library.asset_dir("asset_1") / "active-analysis.json",
+                    {"observations": {}, "scenes": {}, "fixture_revision": count})
         reads.clear()
         cast = store.catalog("asset_1")
         counts.append(len(reads))

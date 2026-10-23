@@ -29,7 +29,12 @@ function deferred<T>() {
 function requests(handler: (url: string, count: number, options?: RequestInit) => unknown | Promise<unknown>) {
   const counts: Record<string, number> = {};
   const fetch = vi.fn(async (url: string, options?: RequestInit) => {
-    const value = await handler(url, counts[url] = (counts[url] || 0) + 1, options);
+    const response = Promise.resolve(handler(url, counts[url] = (counts[url] || 0) + 1, options));
+    const signal = options?.signal;
+    const value = await (signal ? Promise.race([response, new Promise<never>((_resolve, reject) => {
+      if (signal.aborted) reject(new DOMException('Aborted', 'AbortError'));
+      else signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    })]) : response);
     return new Response(JSON.stringify(value), { status: 200 });
   });
   vi.stubGlobal('fetch', fetch);
@@ -50,7 +55,7 @@ describe('Asset detail refresh under slow server projections', () => {
     const first = deferred<Detail>();
     const { counts } = requests((_url, count) => count === 1 ? first.promise : detail('Updated episode'));
     await mount();
-    await advance(60000);
+    await advance(29999);
     expect(counts['/api/assets/episode']).toBe(1);
     expect(screen.getByText('正在读取作品资料')).toBeTruthy();
     await act(async () => { first.resolve(detail()); });
@@ -70,7 +75,7 @@ describe('Asset detail refresh under slow server projections', () => {
     await act(async () => { view.rerender(<AppContext.Provider value={{ ...value, jobs: [] }}><AssetDetail id={asset.id} /></AppContext.Provider>); });
     hidden = true;
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    await advance(30000);
+    await advance(10000);
     hidden = false;
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     expect(counts['/api/assets/episode']).toBe(1);
@@ -96,6 +101,57 @@ describe('Asset detail refresh under slow server projections', () => {
     await act(async () => { second.resolve(detail('Response after unmount')); });
     await advance(30000);
     expect(counts['/api/assets/episode']).toBe(2);
+  });
+
+  it('loads an episode opened while hidden without waiting for a visibility event', async () => {
+    hidden = true;
+    const { counts } = requests(() => detail());
+    await mount(context(false));
+    expect(counts['/api/assets/episode']).toBe(1);
+    expect(screen.getByRole('heading', { name: asset.title })).toBeTruthy();
+    await advance(60000);
+    expect(counts['/api/assets/episode']).toBe(1);
+  });
+
+  it('ends a stalled first request with a recoverable error and ignores its late response after retry', async () => {
+    const first = deferred<Detail>();
+    const { counts, fetch } = requests((_url, count) => count === 1 ? first.promise : detail('Recovered episode'));
+    await mount(context(false));
+    await advance(30000);
+    expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(screen.queryByText('正在读取作品资料')).toBeNull();
+    expect(screen.getByText('读取作品资料超时，请重试。已保存的分析结果不会丢失。')).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新读取作品资料' })); });
+    expect(counts['/api/assets/episode']).toBe(2);
+    expect(screen.getByRole('heading', { name: 'Recovered episode' })).toBeTruthy();
+    await act(async () => { first.resolve(detail('Expired response')); });
+    expect(screen.queryByRole('heading', { name: 'Expired response' })).toBeNull();
+  });
+
+  it('keeps loaded records visible when a background refresh times out', async () => {
+    const pending = deferred<Detail>();
+    requests((_url, count) => count === 1 ? detail() : pending.promise);
+    await mount();
+    await advance(35000);
+    expect(screen.getByRole('heading', { name: asset.title })).toBeTruthy();
+    expect(screen.queryByText('正在读取作品资料')).toBeNull();
+    expect(screen.getByText('读取作品资料超时，请重试。已保存的分析结果不会丢失。')).toBeTruthy();
+  });
+
+  it('handles timeout while the response body is still streaming after successful headers', async () => {
+    const fetch = vi.fn(async (_url: string, options?: RequestInit) => ({
+      ok: true, status: 200,
+      json: () => new Promise<never>((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+      }),
+    }));
+    vi.stubGlobal('fetch', fetch);
+    await mount(context(false));
+    await advance(30000);
+    expect(fetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(screen.queryByText('正在读取作品资料')).toBeNull();
+    expect(screen.getByText('读取作品资料超时，请重试。已保存的分析结果不会丢失。')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '重新读取作品资料' })).toBeTruthy();
   });
 
   it('aborts the previous asset GET and ignores its late response after navigation', async () => {

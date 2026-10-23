@@ -12,7 +12,7 @@ import math
 import time
 
 from .library import atomic_json, digest, read_json, uid
-from .execution import bounded_map, execution_width, finish_on_cancel, yield_to_io
+from .execution import bounded_map, execution_width, finish_on_cancel, run_in_thread, stop_admission, yield_to_io
 from .scene_checkpoints import SceneCheckpointMixin
 from .scene_resume import SceneResumeMixin
 
@@ -382,9 +382,9 @@ def subtitle_context(cues, segments, start, end):
 class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
     async def _scene_local_context(self, job_id, method, *args):
         """Drain local projection work before honoring pause/cancel/shutdown."""
-        self.checkpoint(job_id)
-        result = await finish_on_cancel(asyncio.to_thread(method, *args))
-        self.checkpoint(job_id)
+        await run_in_thread(self.checkpoint, job_id)
+        result = await run_in_thread(method, *args)
+        await run_in_thread(self.checkpoint, job_id)
         return result
 
     def _scene_progress(self, job_id, stage, **changes):
@@ -421,6 +421,15 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
 
     def _scene_metric(self, job_id, stage, *, elapsed=0, requests=0, cache=0, usage=None, wall_elapsed=None,
                       failure_code=None, fallback=0, degraded_reason=None):
+        # Receipt/accounting workers may finish concurrently. Keep the metric
+        # read-modify-write atomic with their updates.
+        with self.library.lock:
+            self._update_scene_metric(job_id, stage, elapsed=elapsed, requests=requests, cache=cache,
+                usage=usage, wall_elapsed=wall_elapsed, failure_code=failure_code, fallback=fallback,
+                degraded_reason=degraded_reason)
+
+    def _update_scene_metric(self, job_id, stage, *, elapsed, requests, cache, usage, wall_elapsed,
+                             failure_code, fallback, degraded_reason):
         metrics = copy.deepcopy(self.get(job_id).get("stage_metrics", {}))
         item = metrics.setdefault(stage, {"request_count": 0, "elapsed_ms": 0, "cache_hits": 0, "usage": {}})
         item["elapsed_ms"] += round(elapsed * 1000)
@@ -499,7 +508,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         await yield_to_io()
         from .jobs import model_identity
         from .models import normalize_observation_evidence
-        job = self.checkpoint(job_id)
+        job = await run_in_thread(self.checkpoint, job_id)
         versions = prompt_versions(job["config"])
         from .scenes import SceneStore
         root = self.library.asset_dir(job["asset_id"])
@@ -530,8 +539,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             if matches:
                 receipt = read_json(matches[-1])
         if receipt is not None:
-            self._account_scene_receipt(job_id, receipt)
-            self._scene_metric(job_id, stage, cache=1)
+            await run_in_thread(self._account_scene_receipt, job_id, receipt)
+            await run_in_thread(self._scene_metric, job_id, stage, cache=1)
             return observation_data(receipt["data"])
         # Preserve paid successes above. An unsuccessful frozen input must not
         # overrule a later human correction on the next actual model request.
@@ -557,15 +566,16 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 if matches:
                     refreshed_receipt = read_json(matches[-1])
             if refreshed_receipt is not None:
-                self._account_scene_receipt(job_id, refreshed_receipt)
-                self._scene_metric(job_id, stage, cache=1)
+                await run_in_thread(self._account_scene_receipt, job_id, refreshed_receipt)
+                await run_in_thread(self._scene_metric, job_id, stage, cache=1)
                 return observation_data(refreshed_receipt["data"])
             old_split = (read_json(run / "scene-splits" / f"{previous_key}.json")
                          if stage in {"preparation", "deep_analysis"} else None)
             if old_split is not None:
                 atomic_json(run / "scene-splits" / f"{key}.json", old_split)
         if independent:
-            self.check_transcript_dependencies(job["asset_id"], job["config"])
+            await self._scene_local_context(job_id, self.check_transcript_dependencies,
+                job["asset_id"], job["config"])
         else:
             await self._scene_local_context(job_id, self._check_scene_dependencies,
                 job["asset_id"], job["config"], SceneStore(self.library))
@@ -574,7 +584,10 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         if split is not None:
             return await self._split_scene_call(job_id, stage, unit, profile, method, args,
                                                 split["index"], key, output)
-        self.update(job_id, stage=stage, pending_scene_receipt=output.relative_to(root).as_posix())
+        # A sibling local identity job may own the library lock. Waiting for
+        # status/accounting writes must not freeze every HTTP request.
+        await run_in_thread(self.update, job_id, stage=stage,
+                            pending_scene_receipt=output.relative_to(root).as_posix())
         call_id = uid("call")
         await self.reserve_call(job_id, profile, call_id=call_id, stage=stage, frames=images,
                                 receipt_path=output.relative_to(self.library.root).as_posix(),
@@ -587,27 +600,30 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 with scope:
                     result = await self.invoke_profile(profile, method, *args)
             except Exception as exc:
-                self.account(job_id, exc, call_id)
-                self._scene_metric(job_id, stage, elapsed=time.monotonic() - started,
-                                   requests=getattr(exc, "request_count", 0), usage=getattr(exc, "usage", {}),
-                                   failure_code=getattr(exc, "code", None))
                 context_too_large = (getattr(exc, "request_count", 0) == 0
                                      and getattr(exc, "code", None) == "character_context_too_large")
+                index = None
                 if ((stage in {"preparation", "deep_analysis"} and context_too_large) or
                         (stage == "preparation" and getattr(exc, "request_count", 0) > 0
                          and getattr(exc, "code", None) in {"timeout", "invalid_output"})):
                     index = visual_split_index(args[0], min_frames=1 if context_too_large else MIN_VISUAL_FRAMES)
-                    if index is not None:
-                        # Freeze the fallback decision before any child admission.
-                        # Resuming this run never resubmits the exhausted parent.
-                        atomic_json(split_path, {"index": index, "code": exc.code})
-                        self._scene_metric(job_id, stage, fallback=1)
+                if index is None:
+                    stop_admission(exc)
+                await run_in_thread(self.account, job_id, exc, call_id)
+                await run_in_thread(self._scene_metric, job_id, stage, elapsed=time.monotonic() - started,
+                                   requests=getattr(exc, "request_count", 0), usage=getattr(exc, "usage", {}),
+                                   failure_code=getattr(exc, "code", None))
+                if index is not None:
+                    # Freeze the fallback decision before any child admission.
+                    # Resuming this run never resubmits the exhausted parent.
+                    atomic_json(split_path, {"index": index, "code": exc.code})
+                    await run_in_thread(self._scene_metric, job_id, stage, fallback=1)
                 raise
             receipt = {"receipt_id": key, "call_id": call_id, "job_id": job_id, "stage": stage, "data": result.data,
                        "usage": result.usage, "request_count": result.request_count, "cost": result.cost,
                        "elapsed_ms": round((time.monotonic() - started) * 1000)}
             atomic_json(output, receipt)
-            self._account_scene_receipt(job_id, receipt)
+            await run_in_thread(self._account_scene_receipt, job_id, receipt)
             return observation_data(result.data)
         try:
             return await finish_on_cancel(perform())
@@ -619,15 +635,15 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                                                 split["index"], key, output)
 
     async def _split_scene_call(self, job_id, stage, unit, profile, method, args, index, key, output):
-        self.checkpoint(job_id)
+        await run_in_thread(self.checkpoint, job_id)
         deep = stage == "deep_analysis"
-        self.update(job_id, message=(f"深入理解输入过大，细分为较小批次（原 {len(args[0])} 帧）" if deep else
+        await run_in_thread(self.update, job_id, message=(f"深入理解输入过大，细分为较小批次（原 {len(args[0])} 帧）" if deep else
                                     f"视觉分块请求过大或输出无效，细分为较小批次（原 {len(args[0])} 帧）"))
         results = []
         for number, child in enumerate(split_deep_args(args, index) if deep else split_visual_args(args, index)):
             # Child calls own normal reservations, frozen inputs and receipts.
             # Controls/budgets are checked before each sequential admission.
-            self.checkpoint(job_id)
+            await run_in_thread(self.checkpoint, job_id)
             results.append(await self._scene_call(job_id, stage, [unit, "split", number], profile, method, child,
                 images=(len(child[0]) + len((child[3] or {}).get("reference_frames", [])) if deep
                         else math.ceil((len(child[0]) + len(child[1])) / 16))))
@@ -635,7 +651,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         receipt = {"receipt_id": key, "job_id": job_id, "stage": stage, "data": data,
                    "usage": {}, "request_count": 0, "cost": 0, "elapsed_ms": 0, "split": True}
         atomic_json(output, receipt)
-        self._account_scene_receipt(job_id, receipt)
+        await run_in_thread(self._account_scene_receipt, job_id, receipt)
         return copy.deepcopy(data)
 
     def estimate_scenes(self, config, plan):
@@ -964,10 +980,10 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
     async def analyze_scenes(self, job_id):
         from .scenes import SceneStore
         store = SceneStore(self.library)
-        job = self.checkpoint(job_id)
+        job = await run_in_thread(self.checkpoint, job_id)
         if self.independent_transcript(job["config"]) and not job.get("transcript_prefetched"):
             await self.prepare_episode_inputs(job_id)
-            job = self.update(job_id, transcript_prefetched=True)
+            job = await run_in_thread(self.update, job_id, transcript_prefetched=True)
         config, asset_id, run_id = job["config"], job["asset_id"], job["run_id"]
         if (self.independent_transcript(config) and job.get("transcript_prefetched")
                 and not config.get("scene_dependencies")):
@@ -993,7 +1009,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 stage_progress[stage] = copy.deepcopy(saved)
         if config.get("scene_dependencies") and job.get("stage_progress", {}).get("visual_identity"):
             stage_progress["visual_identity"] = copy.deepcopy(job["stage_progress"]["visual_identity"])
-        self.update(job_id, stage_progress=stage_progress)
+        await run_in_thread(self.update, job_id, stage_progress=stage_progress)
         self._check_scene_range(asset_id, config, store)
         # Inspect every preceding active block, since prompt-facing gap lists
         # are bounded and could omit an older unfinished deep analysis. The
@@ -1004,7 +1020,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             raise ValueError(f"前序片段 {pending['start_ms'] / 1000:g}–{pending['end_ms'] / 1000:g} 秒尚待深入理解，"
                              "请先完成该片段的深入分析，再分析后续范围")
         self.library.require_source(asset_id)
-        self._scene_context(asset_id, config)
+        await run_in_thread(self._scene_context, asset_id, config)
         for profile in config["profile_snapshots"].values():
             if not self.profile_source_unchanged(config, profile):
                 raise ValueError("模型配置已变化，请创建新任务")
@@ -1017,9 +1033,9 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         if not config.get("deepen_chunk_id") and not config.get("keyframe_plan_id"):
             started = time.monotonic()
             plan = await self.scan_plan(job_id, asset_id=asset_id, start_ms=config["start_ms"], end_ms=config["end_ms"])
-            self._scene_metric(job_id, "keyframes", elapsed=time.monotonic() - started)
+            await run_in_thread(self._scene_metric, job_id, "keyframes", elapsed=time.monotonic() - started)
             config["keyframe_plan_id"] = plan["id"]
-            self.update(job_id, config=config)
+            await run_in_thread(self.update, job_id, config=config)
         prior = store.prior_memory(asset_id, config["start_ms"])
         dependencies = {"fingerprint": self.library.get_asset(asset_id)["fingerprint"],
                         "subtitle_digest": store.subtitle_digest(asset_id),
@@ -1037,7 +1053,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         if config.get("scene_dependencies") and config["scene_dependencies"] != dependencies:
             raise ValueError("字幕或前序记忆已改变，请创建新任务；已保存的结果仍然保留")
         config["scene_dependencies"] = dependencies
-        self.update(job_id, config=config)
+        await run_in_thread(self.update, job_id, config=config)
         cues = [c for c in store.subtitle_records(asset_id)
                 if c["end_ms"] > config["start_ms"] and c["start_ms"] < config["end_ms"]]
         def memory_for(chunks):
@@ -1053,7 +1069,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             self._check_deepen_content(original)
             frames = self._scene_frames(asset_id, original["frame_ids"])
             await self.prepare_scene_identity(job_id, frames, cues)
-            self._scene_progress(job_id, "deep_analysis",
+            await run_in_thread(self._scene_progress, job_id, "deep_analysis",
                 total=math.ceil(len(frames) / deep_batch_size(config["profile_snapshots"]["vision"])))
             chunk = {**original, "dependencies": dependencies, "run_id": run_id,
                      "subtitle_ids": [c["id"] for c in cues]}
@@ -1063,16 +1079,19 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             committed = self._load_manual_scene_commit(asset_id, run_id, config, original, state, state_path, store)
             if committed is None:
                 chunk = await self._deepen_scene(job_id, chunk, frames, cues, bounded_memory(prior, []))
-                self.checkpoint(job_id)
-                self._check_scene_dependencies(asset_id, config, store)
-                with self.library.lock:
-                    chunk = store.upgrade(asset_id, run_id, chunk)
-                state["deepen_committed"] = {"relative": store._relative(chunk),
-                                             "revision_digest": store.revision_digest(chunk)}
-                state["index_dirty"] = True
-                atomic_json(state_path, state)
+                await run_in_thread(self.checkpoint, job_id)
+                await run_in_thread(self._check_scene_dependencies, asset_id, config, store)
+                def commit_deepen():
+                    with self.library.lock:
+                        saved = store.upgrade(asset_id, run_id, chunk)
+                    state["deepen_committed"] = {"relative": store._relative(saved),
+                                                 "revision_digest": store.revision_digest(saved)}
+                    state["index_dirty"] = True
+                    atomic_json(state_path, state)
+                    return saved
+                chunk = await run_in_thread(commit_deepen)
             else:
-                self._scene_progress(job_id, "deep_analysis", completed=math.ceil(len(frames) /
+                await run_in_thread(self._scene_progress, job_id, "deep_analysis", completed=math.ceil(len(frames) /
                     deep_batch_size(config["profile_snapshots"]["vision"])), status="completed")
             self._repair_scene_index(job_id, asset_id, state, state_path)
         else:
@@ -1081,7 +1100,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         start_ms=config["start_ms"], end_ms=config["end_ms"]))
             if not config.get("keyframe_plan_id"):
                 config["keyframe_plan_id"] = plan["id"]
-                self.update(job_id, config=config)
+                await run_in_thread(self.update, job_id, config=config)
             paths = self.library.frame_paths(asset_id, [frame["id"] for frame in plan["frames"]])
             frames = [{**frame, "path": str(paths[frame["id"]])} for frame in plan["frames"]]
             await self.prepare_scene_identity(job_id, frames, cues)
@@ -1089,22 +1108,22 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             batches = list(cue_batches(cues))
             batch_size = visual_batch_size(config)
             total = math.ceil(len(frames) / batch_size)
-            self._scene_progress(job_id, "transcript", total=len(batches))
-            self._scene_progress(job_id, "preparation", total=total)
+            await run_in_thread(self._scene_progress, job_id, "transcript", total=len(batches))
+            await run_in_thread(self._scene_progress, job_id, "preparation", total=total)
             frame_lookup = {f["id"]: f for f in frames}
             restored = self._load_scene_preparation(asset_id, run_id, config, plan, state, len(batches), total)
             if restored is not None:
                 chunks = restored["chunks"]
-                self._scene_progress(job_id, "transcript", completed=len(batches), status="completed")
-                self._scene_progress(job_id, "preparation", completed=total, status="completed")
-                self.update(job_id, message="已恢复完整分块方案，继续深入理解", progress=max(.5, job.get("progress", 0)))
+                await run_in_thread(self._scene_progress, job_id, "transcript", completed=len(batches), status="completed")
+                await run_in_thread(self._scene_progress, job_id, "preparation", completed=total, status="completed")
+                await run_in_thread(self.update, job_id, message="已恢复完整分块方案，继续深入理解", progress=max(.5, job.get("progress", 0)))
             else:
                 segments, unresolved = await self.prepare_transcript_stage(
                     job_id, config, prior, cues, batches, prep_profile)
                 chunks, assembled = self._load_partial_scene_preparation(
                     asset_id, run_id, config, plan, batch_size, len(batches))
-                self._scene_progress(job_id, "preparation", total=total, completed=assembled)
-                self.update(job_id, total=total, completed=assembled, progress=assembled / max(total, 1) * .5)
+                await run_in_thread(self._scene_progress, job_id, "preparation", total=total, completed=assembled)
+                await run_in_thread(self.update, job_id, total=total, completed=assembled, progress=assembled / max(total, 1) * .5)
                 preparation_started = time.monotonic()
                 offsets = list(range(0, len(frames), batch_size))
                 prepared = None
@@ -1124,7 +1143,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         context_frames = frames[max(0, offset - CONTEXT_FRAMES):offset]
                         a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
                         b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
-                        self.update(job_id, message=f"并行视觉分块与简要索引：第 {index + 1}/{total} 组")
+                        await run_in_thread(self.update, job_id, message=f"并行视觉分块与简要索引：第 {index + 1}/{total} 组")
                         audio_context = await self._scene_local_context(job_id, self.scene_audio_context,
                             job_id, subtitle_context(cues, segments, a, b), a, b)
                         character_context = await self._scene_local_context(job_id, self.scene_identity_context,
@@ -1140,16 +1159,17 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         finished = assembled + sum(value is not None for value in prepared[assembled:])
                         self._scene_progress(job_id, "preparation", completed=finished)
                         self.update(job_id, completed=finished, progress=finished / max(total, 1) * .5)
-                    self._scene_progress(job_id, "preparation", status="running")
-                    preparation_done(0, None)
+                    await run_in_thread(self._scene_progress, job_id, "preparation", status="running")
+                    await run_in_thread(preparation_done, 0, None)
                     await bounded_map(pending, prepare_batch,
                         execution_width(config, "preparation", self.providers.get(prep_profile["id"])),
-                        lambda: self.checkpoint(job_id), preparation_done)
+                        lambda: run_in_thread(self.checkpoint, job_id),
+                        lambda index, result: run_in_thread(preparation_done, index, result))
 
                 for index in range(assembled, len(offsets)):
                     offset = offsets[index]
                     await yield_to_io()
-                    self.checkpoint(job_id)
+                    await run_in_thread(self.checkpoint, job_id)
                     core, context_frames = frames[offset:offset + batch_size], frames[max(0, offset - CONTEXT_FRAMES):offset]
                     a = config["start_ms"] if offset == 0 else core[0]["at_ms"]
                     b = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else config["end_ms"]
@@ -1157,11 +1177,11 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     sub_context = await self._scene_local_context(job_id, self.scene_audio_context,
                         job_id, subtitle_context(cues, segments, a, b), a, b)
                     if prepared is not None:
-                        self.update(job_id, message=f"整理已完成的视觉分块：{index + 1}/{total}")
+                        await run_in_thread(self.update, job_id, message=f"整理已完成的视觉分块：{index + 1}/{total}")
                         result = prepared[index]
                     else:
-                        self._scene_progress(job_id, "preparation", status="running")
-                        self.update(job_id, message=f"视觉分块与简要索引：{index + 1}/{total}")
+                        await run_in_thread(self._scene_progress, job_id, "preparation", status="running")
+                        await run_in_thread(self.update, job_id, message=f"视觉分块与简要索引：{index + 1}/{total}")
                         version = prompt_versions(config)["preparation"]
                         frozen = read_json(directory / "scene-inputs" / f"{digest(['preparation', version, str(index)])}.json")
                         if frozen is not None:
@@ -1228,28 +1248,30 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         chunks.append(chunk)
                     self._save_partial_scene_preparation(asset_id, run_id, config, chunks, len(batches), index + 1)
                     if prepared is None:
-                        self._scene_progress(job_id, "preparation", completed=index + 1)
-                        self.update(job_id, completed=index + 1, progress=(index + 1) / max(total, 1) * .5)
-                self._scene_metric(job_id, "preparation", wall_elapsed=time.monotonic() - preparation_started)
+                        await run_in_thread(self._scene_progress, job_id, "preparation", completed=index + 1)
+                        await run_in_thread(self.update, job_id, completed=index + 1, progress=(index + 1) / max(total, 1) * .5)
+                await run_in_thread(self._scene_metric, job_id, "preparation", wall_elapsed=time.monotonic() - preparation_started)
                 if not chunks:
                     raise ValueError("此范围没有可分析的关键帧")
                 link_similar_scenes(chunks)
                 self._save_scene_preparation(asset_id, run_id, config, plan, chunks, len(batches), total)
             if not state.get("published"):
-                self._check_scene_dependencies(asset_id, config, store)
-                with self.library.lock:
-                    self._scene_context(asset_id, config)
-                    published = []
-                    for chunk in chunks:
-                        if chunk.get("entities"):
-                            chunk = self.characters.apply_observation(asset_id,
-                                {**chunk, "window_id": chunk["id"], "shot_id": "scene"},
-                                config["character_snapshot"]["revision"])
-                        published.append(chunk)
-                    store.publish(asset_id, run_id, published, config["start_ms"], config["end_ms"])
-                state["published"] = True
-                state["index_dirty"] = True
-                atomic_json(state_path, state)
+                await run_in_thread(self._check_scene_dependencies, asset_id, config, store)
+                def publish():
+                    with self.library.lock:
+                        self._scene_context(asset_id, config)
+                        published = []
+                        for chunk in chunks:
+                            if chunk.get("entities"):
+                                chunk = self.characters.apply_observation(asset_id,
+                                    {**chunk, "window_id": chunk["id"], "shot_id": "scene"},
+                                    config["character_snapshot"]["revision"])
+                            published.append(chunk)
+                        store.publish(asset_id, run_id, published, config["start_ms"], config["end_ms"])
+                    state["published"] = True
+                    state["index_dirty"] = True
+                    atomic_json(state_path, state)
+                await run_in_thread(publish)
             await self.prepare_scene_lrasd(job_id, chunks, cues, frames, plan.get("shots", []))
             self._repair_scene_index(job_id, asset_id, state, state_path)
             batch_size = deep_batch_size(config["profile_snapshots"]["vision"])
@@ -1266,26 +1288,26 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             self._repair_scene_index(job_id, asset_id, state, state_path)
             context_changed = cursor["context_changed"]
             refresh_completed = cursor["refresh_completed"]
-            self._scene_progress(job_id, "deep_analysis", total=deep_total,
+            await run_in_thread(self._scene_progress, job_id, "deep_analysis", total=deep_total,
                                  completed=cursor["deep_completed"])
-            self._scene_progress(job_id, "context_refresh", total=refresh_total,
+            await run_in_thread(self._scene_progress, job_id, "context_refresh", total=refresh_total,
                                  completed=refresh_completed)
-            self.update(job_id, deep_request_count=deep_total, total=len(chunks),
+            await run_in_thread(self.update, job_id, deep_request_count=deep_total, total=len(chunks),
                         completed=cursor["completed"], progress=.5 + .5 * cursor["completed"] / len(chunks))
             for index in range(cursor["completed"], len(chunks)):
                 chunk = copy.deepcopy(active_chunks[chunks[index]["id"]])
                 await yield_to_io()
-                self.checkpoint(job_id)
+                await run_in_thread(self.checkpoint, job_id)
                 memory = bounded_memory(prior, completed_chunks)
                 kind = self._understanding_kind(chunk, config, context_changed)
                 if kind == "deep_analysis":
                     selected_ids = deep_frame_ids(chunk, all_frames=config.get("character_reanalysis"))
                     chunk = await self._deepen_scene(job_id, chunk, [frame_lookup[fid] for fid in selected_ids], cues, memory)
-                    self._check_scene_dependencies(asset_id, config, store)
+                    await run_in_thread(self._check_scene_dependencies, asset_id, config, store)
                     chunk = store.upgrade(asset_id, run_id, chunk, invalidate_dependents=False)
                     context_changed = True
                 elif kind == "context_refresh":
-                    self._scene_progress(job_id, "context_refresh", status="running")
+                    await run_in_thread(self._scene_progress, job_id, "context_refresh", status="running")
                     prepared = {key: chunk[key] for key in ("chunk_id", "start_ms", "end_ms", "summary", "visual_facts", "dialogue_facts", "inferences")}
                     for field in ("visual_facts", "dialogue_facts", "inferences"):
                         prepared[field] = prepared[field][-16:]
@@ -1294,16 +1316,16 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     chunk = {**chunk, "summary": result["summary"], "inferences": result["inferences"],
                              "uncertainties": result.get("unresolved", []), "memory_before": memory}
                     chunk["memory_after"] = bounded_memory({}, [chunk])
-                    self._check_scene_dependencies(asset_id, config, store)
+                    await run_in_thread(self._check_scene_dependencies, asset_id, config, store)
                     chunk = store.publish(asset_id, run_id + "_context", [chunk], chunk["start_ms"], chunk["end_ms"])[0]
                     refresh_completed += 1
-                    self._scene_progress(job_id, "context_refresh", completed=refresh_completed)
+                    await run_in_thread(self._scene_progress, job_id, "context_refresh", completed=refresh_completed)
                 self._commit_scene_understanding(cursor, chunk, kind,
                     self.get(job_id)["stage_progress"]["deep_analysis"]["completed"], state, state_path, store)
                 self._repair_scene_index(job_id, asset_id, state, state_path)
                 completed_chunks.append(store._project_semantics(asset_id, chunk))
                 completed_chunks = completed_chunks[-8:]
-                self.update(job_id, completed=index + 1, progress=.5 + .5 * (index + 1) / len(chunks))
+                await run_in_thread(self.update, job_id, completed=index + 1, progress=.5 + .5 * (index + 1) / len(chunks))
         embedding = config.get("bindings", {}).get("embedding")
         if embedding:
             await self.reindex(job_id, embedding_profile_id=embedding)
@@ -1333,16 +1355,16 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
 
     async def _deepen_scene(self, job_id, chunk, frames, cues, memory):
         from .models import Observation, normalize_observation_evidence
-        job = self.checkpoint(job_id)
+        job = await run_in_thread(self.checkpoint, job_id)
         config, asset_id = job["config"], job["asset_id"]
         profile = config["profile_snapshots"]["vision"]
         batch_size = deep_batch_size(profile)
         progress_base = self.get(job_id).get("stage_progress", {}).get("deep_analysis", {}).get("completed", 0)
-        self._scene_progress(job_id, "deep_analysis", status="running")
+        await run_in_thread(self._scene_progress, job_id, "deep_analysis", status="running")
         target = self.library.asset_dir(asset_id) / "analyses" / job["run_id"] / "scene-deep" / f"{chunk['id']}.json"
         completed = read_json(target)
         if completed:
-            self._scene_progress(job_id, "deep_analysis", completed=progress_base + math.ceil(len(frames) / batch_size))
+            await run_in_thread(self._scene_progress, job_id, "deep_analysis", completed=progress_base + math.ceil(len(frames) / batch_size))
             return completed
         parts = []
 
@@ -1399,7 +1421,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
 
         for index, offset in enumerate(range(0, len(frames), batch_size)):
             await yield_to_io()
-            self.checkpoint(job_id)
+            await run_in_thread(self.checkpoint, job_id)
             current = frames[offset:offset + batch_size]
             start = chunk["start_ms"] if offset == 0 else current[0]["at_ms"]
             end = frames[offset + batch_size]["at_ms"] if offset + batch_size < len(frames) else chunk["end_ms"]
@@ -1413,13 +1435,13 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                         or part.get("input_frame_ids") != [frame["id"] for frame in current]):
                     raise ValueError("已保存的深入理解分批与当前任务不一致")
                 parts.append(part)
-                self._scene_progress(job_id, "deep_analysis", completed=progress_base + index + 1)
+                await run_in_thread(self._scene_progress, job_id, "deep_analysis", completed=progress_base + index + 1)
                 continue
             local_subtitles = await self._scene_local_context(job_id, self.scene_audio_context,
                 job_id, subtitle_context(cues, [], start, end), start, end)
             context = await self._scene_local_context(job_id, context_with_parts)
             context = await self._scene_local_context(job_id, self.scene_identity_context, job_id, context, current)
-            self.update(job_id, message=f"深入理解 {start / 1000:.1f}–{end / 1000:.1f} 秒")
+            await run_in_thread(self.update, job_id, message=f"深入理解 {start / 1000:.1f}–{end / 1000:.1f} 秒")
             part = await self._scene_call(job_id, "deep_analysis", [chunk["id"], index], profile,
                 self.providers.analyze, [current, start, end, context, local_subtitles, memory],
                 images=len(current) + len(context["reference_frames"]))
@@ -1451,8 +1473,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             # Do not let a pause discard the part between accounting and saving.
             part = await finish_on_cancel(asyncio.to_thread(save_part))
             parts.append(part)
-            self._scene_progress(job_id, "deep_analysis", completed=progress_base + index + 1)
-            self.checkpoint(job_id)
+            await run_in_thread(self._scene_progress, job_id, "deep_analysis", completed=progress_base + index + 1)
+            await run_in_thread(self.checkpoint, job_id)
         result = {**chunk, "run_id": job["run_id"], "summary": "；".join(p["summary"] for p in parts),
                   "understanding_level": "deep", "needs_deep": False, "needs_action_deep": False, "reason": "",
                   "memory_before": memory, "window_id": chunk["id"], "shot_id": "scene"}

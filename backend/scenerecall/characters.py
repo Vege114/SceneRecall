@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import re
 import unicodedata
 from pathlib import Path
 
-from .library import SCHEMA, atomic_json, digest, now, read_json, safe_id
+from .library import SCHEMA, atomic_json, confined_path, digest, now, read_json, safe_id
 from .models import Observation
 
 
@@ -115,6 +116,7 @@ def named_identity(value) -> str | None:
 class CharacterStore:
     def __init__(self, library):
         self.library = library
+        self._appearance_snapshot = None
 
     def _path(self, scope: str) -> Path:
         return self.library.root / "works" / checked_id(scope) / "characters.json"
@@ -468,6 +470,61 @@ class CharacterStore:
                     "assets": self._assets(scope, catalog=organization), "cast_policy": policy,
                     "membership_revision": asset.get("membership_revision", 0)}
 
+    @staticmethod
+    def _file_signature(path):
+        try:
+            info = path.stat()
+            return (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        except FileNotFoundError:
+            return None
+
+    def _appearance_signature(self, files, directories):
+        """Check evidence changes without reopening every JSON/region file."""
+        values = [self._file_signature(path) for path in files]
+        for path in directories:
+            try:
+                with os.scandir(path) as entries:
+                    # scandir supplies regular-file metadata without one open
+                    # per region on Windows. Follow links so changing their
+                    # target also invalidates the derived identity projection.
+                    values.append((self._file_signature(path), tuple(sorted(
+                        (entry.name, self._file_signature(entry)) for entry in entries))))
+            except FileNotFoundError:
+                values.append(None)
+        return tuple(values)
+
+    def _appearance_dependencies(self, scope, assets):
+        files = {self.library.organization.path, self.library.organization.journal, self._path(scope),
+                 self.library.root / "private" / "media-locations.json"}
+        directories = {self._path(scope).parent / "reference-images"}
+        for asset in assets:
+            root = self.library.asset_dir(asset["id"])
+            files.update(root / relative for relative in (
+                "manifest.json", "active-analysis.json", "retrieval/active.json", "frames/registry.json",
+                "identity/visual/decisions.json", "identity/visual/settings.json"))
+            directories.update(root / relative for relative in ("annotations", "identity/visual/regions"))
+        files = tuple(sorted(files))
+        # Capture pointers before opening them. If an external publisher switches
+        # runs during dependency discovery, this result must not become reusable.
+        pointer_signature = self._appearance_signature(files, ())
+        for asset in assets:
+            root = self.library.asset_dir(asset["id"])
+            active = self.library.active(asset["id"])
+            references = list(active.get("observations", {}).values()) + list(active.get("scenes", {}).values())
+            retrieval = read_json(root / "retrieval" / "active.json", {"units": {}})
+            for entry in retrieval["units"].values():
+                references.append(entry["path"])
+                references.extend(entry[key]["path"] for key in ("observation", "identity") if entry.get(key))
+            # The active pointer is checked on every reuse. A new run or a
+            # replaced pointer rebuilds this set before any cached result wins.
+            parents = {str(Path(relative.replace("\\", "/")).parent) for relative in references}
+            for relative in parents:
+                confined_path(root, relative)
+                # Preserve the original path after confinement validation so a
+                # later directory-link change is observed on the next request.
+                directories.add(root / relative)
+        return files, tuple(sorted(directories)), pointer_signature
+
     def catalog(self, asset_id: str) -> dict:
         with self.library.lock:
             organization = self.library.organization._read()
@@ -488,12 +545,27 @@ class CharacterStore:
             policy = self.cast_policy(registry, asset.get("anime_profile"))
             profiles = {identity: copy.deepcopy(profile) for identity, profile in registry["profiles"].items()
                         if self.profile_allowed(profile, policy)}
+            cache_key = (scope, tuple(sorted(profiles)), tuple(asset["id"] for asset in assets))
+            snapshot = self._appearance_snapshot
+            if snapshot and snapshot["key"] == cache_key:
+                signature = self._appearance_signature(snapshot["files"], snapshot["directories"])
+                if signature == snapshot["signature"]:
+                    for identity, profile in profiles.items():
+                        profile.update(copy.deepcopy(snapshot["profiles"][identity]))
+                    return {"scope_id": scope, "revision": registry["revision"], "profiles": list(profiles.values()),
+                            "assets": assets, "cast_policy": policy, "membership_revision": membership_revision}
+            files, directories, pointer_signature = self._appearance_dependencies(scope, assets)
+            signature = self._appearance_signature(files, directories)
+            dependencies_stable = pointer_signature == signature[:len(files)]
             current_representatives = {}
             for profile in profiles.values():
                 profile["appearances"] = []
             for asset in assets:
                 from .scenes import SceneStore
-                scenes = SceneStore(self.library).list(asset["id"])
+                # Staleness describes narrative inference, not whether a saved
+                # entity still supplies this character's current appearance.
+                # Identity decisions are projected below for these raw records.
+                scenes = SceneStore(self.library)._raw(asset["id"])
                 deep_coverage = []
                 for scene in sorted(scenes, key=lambda row: (row["start_ms"], row["end_ms"])):
                     if scene.get("understanding_level") != "deep":
@@ -508,9 +580,15 @@ class CharacterStore:
                                            for start, end in deep_coverage)]
                 from .retrieval_store import RetrievalStore
                 retrieval = RetrievalStore(self.library).records(asset["id"])
+                from .identity_bindings import uses_policy
                 from .visual_identity import decorate_identity_records
-                active_records = decorate_identity_records(self.library, asset["id"], sorted(
-                    observations + scenes + retrieval, key=lambda row: (row["start_ms"], row["end_ms"], row["id"])))
+                # RetrievalStore already resolves current v2 bindings. Keep
+                # legacy records on their original projection path without
+                # rereading every v2 region a second time under the library lock.
+                active_records = sorted(decorate_identity_records(self.library, asset["id"],
+                    observations + scenes + [row for row in retrieval if not uses_policy(row)])
+                    + [row for row in retrieval if uses_policy(row)],
+                    key=lambda row: (row["start_ms"], row["end_ms"], row["id"]))
                 for record in active_records:
                     for entity in record.get("entities", []):
                         resolved = self.library.organization.resolve_reference(
@@ -532,6 +610,15 @@ class CharacterStore:
                 # Episode/shot order is authoritative; a reanalysis can remove the
                 # latest old association, in which case an earlier active image wins.
                 profile["representative"] = current_representatives.get(profile["id"])
+            # Keep only derived appearance metadata, bounded to this one work.
+            # Names, membership and allow-list policy are reread above. An
+            # external writer during collection prevents reuse on the next read.
+            if dependencies_stable and signature == self._appearance_signature(files, directories):
+                self._appearance_snapshot = {"key": cache_key, "files": files, "directories": directories,
+                    "signature": signature, "profiles": {identity: copy.deepcopy({key: profile[key] for key in (
+                        "appearances", "appearance_count", "representative")}) for identity, profile in profiles.items()}}
+            else:
+                self._appearance_snapshot = None
             return {"scope_id": scope, "revision": registry["revision"],
                     "profiles": list(profiles.values()), "assets": assets,
                     "cast_policy": policy,

@@ -152,6 +152,40 @@ def test_multiple_people_are_cropped_with_frame_local_ids_never_cross_shot_merge
     assert all(Image.open(row["crop_path"]).size == (128, 192) for row in regions)
 
 
+def test_public_reviews_skip_discarded_crop_paths_but_images_validate_them(visual, monkeypatch):
+    import scenerecall.visual_identity as identity_module
+    import scenerecall.visual_identity_api as routes
+
+    library, characters, gallery = visual
+    add_reference(gallery, add_role(characters))
+    pipeline = VisualIdentityPipeline(library, FakeCCIP())
+    pipeline.run("asset_one", [frame(library)], {"enabled": True})
+    expected = routes._public_reviews(pipeline.reviews("asset_one"))
+    original = identity_module.confined_path
+
+    def no_discarded_crop_paths(base, relative):
+        assert not relative.startswith("crops/"), "metadata should not resolve every crop file"
+        return original(base, relative)
+
+    monkeypatch.setattr(identity_module, "confined_path", no_discarded_crop_paths)
+    app = FastAPI()
+    register_visual_identity_routes(app, library, None)
+    with TestClient(app) as client:
+        response = client.get("/api/assets/asset_one/identity/reviews")
+        assert response.status_code == 200
+        assert response.json() == expected
+        assert "crop_path" not in response.json()["regions"][0]
+        image_url = response.json()["regions"][0]["crop_url"]
+        assert client.get(image_url).status_code == 200
+
+        def reject_crop(base, relative):
+            raise ValueError("crop escaped its asset")
+
+        monkeypatch.setattr(routes, "confined_path", reject_crop)
+        with pytest.raises(ValueError, match="crop escaped"):
+            client.get(image_url)
+
+
 def test_overlapping_detection_crop_does_not_enter_ccip(visual):
     library, characters, gallery = visual
     add_reference(gallery, add_role(characters))

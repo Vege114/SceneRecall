@@ -75,7 +75,11 @@ def scene_app(tmp_path):
 
 def test_scene_search_and_detail_only_project_current_records_without_model_work(scene_app):
     app, client, _, scene = scene_app
-    detail = client.get("/api/assets/scene_asset").json()
+    detail_response = client.get("/api/assets/scene_asset")
+    timings = dict(part.strip().split(";dur=") for part in detail_response.headers["server-timing"].split(","))
+    assert set(timings) == {"asset", "projection", "assembly", "json"}
+    assert all(float(value) >= 0 for value in timings.values())
+    detail = detail_response.json()
     assert detail["observations"] == []
     assert len(detail["scenes"]) == 1
     current = detail["scenes"][0]

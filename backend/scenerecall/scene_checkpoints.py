@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import time
 
-from .execution import bounded_map, execution_width, yield_to_io
+from .execution import bounded_map, execution_width, run_in_thread, yield_to_io
 from .library import atomic_json, digest, read_json, safe_id
 from .scene_preparation import validate_subtitle_preparation
 
@@ -79,10 +79,10 @@ class SceneCheckpointMixin:
         from .jobs import model_identity
         from .scene_jobs import bounded_memory, canonical, prompt_versions
 
-        job = self.checkpoint(job_id)
+        job = await run_in_thread(self.checkpoint, job_id)
         independent = self.independent_transcript(config)
         if independent:
-            self.check_transcript_dependencies(job["asset_id"], config)
+            await run_in_thread(self.check_transcript_dependencies, job["asset_id"], config)
             prior = {}
         directory = self.library.asset_dir(job["asset_id"]) / "analyses" / safe_id(job["run_id"])
         target = directory / "scene-transcript.json"
@@ -132,16 +132,17 @@ class SceneCheckpointMixin:
             if not parallel and any(previous is None for previous in results[:index]):
                 break
             await yield_to_io()
-            self.checkpoint(job_id)
+            await run_in_thread(self.checkpoint, job_id)
             story = self._transcript_story(index, batches, frozen_prior, results, parallel)
-            result = self._transcript_receipt(job, config, prep_profile, batches, index, story, directory)
+            result = await run_in_thread(self._transcript_receipt, job, config, prep_profile,
+                                         batches, index, story, directory)
             if result is not None:
                 results[index] = result
                 imported = True
         if imported or not target.exists():
             persist()
         completed = sum(result is not None for result in results)
-        self._scene_progress(job_id, "transcript", total=len(batches), completed=completed,
+        await run_in_thread(self._scene_progress, job_id, "transcript", total=len(batches), completed=completed,
                              status="completed" if completed == len(batches) else "running")
         if completed == len(batches):
             return self._transcript_outputs(results, parallel)
@@ -151,7 +152,7 @@ class SceneCheckpointMixin:
         async def prepare(_position, index):
             story = self._transcript_story(index, batches, frozen_prior, results, parallel)
             prefix = "并行台词预理解" if parallel else "台词预理解"
-            self.update(job_id, message=f"{prefix}：第 {index + 1}/{len(batches)} 组")
+            await run_in_thread(self.update, job_id, message=f"{prefix}：第 {index + 1}/{len(batches)} 组")
             result = await self._scene_call(job_id, "transcript", str(index), prep_profile,
                 self.providers.prepare_subtitles, [batches[index], story])
             results[index] = validate_subtitle_preparation(result, batches[index])
@@ -165,12 +166,13 @@ class SceneCheckpointMixin:
 
         if parallel:
             await bounded_map(pending, prepare, execution_width(config, "transcript", self.providers.get(prep_profile["id"])),
-                              lambda: self.checkpoint(job_id), done)
+                              lambda: run_in_thread(self.checkpoint, job_id),
+                              lambda position, result: run_in_thread(done, position, result))
         else:
             for position, index in enumerate(pending):
                 await yield_to_io()
-                self.checkpoint(job_id)
+                await run_in_thread(self.checkpoint, job_id)
                 result = await prepare(position, index)
-                done(position, result)
-        self._scene_metric(job_id, "transcript", wall_elapsed=time.monotonic() - started)
+                await run_in_thread(done, position, result)
+        await run_in_thread(self._scene_metric, job_id, "transcript", wall_elapsed=time.monotonic() - started)
         return self._transcript_outputs(results, parallel)

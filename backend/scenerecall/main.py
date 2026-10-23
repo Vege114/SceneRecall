@@ -11,6 +11,7 @@ import zipfile
 from contextlib import nullcontext
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 
 from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
@@ -362,15 +363,29 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.get("/api/assets/{asset_id}")
     def asset_detail(asset_id: str):
+        started = perf_counter()
         asset = asset_view(library.get_asset(asset_id))
+        asset_ready = perf_counter()
         projection = {r["id"]: r for r in library.records(asset_id, compact_subtitles=False)}
+        projected = perf_counter()
         observations = [{**r, "model_summary": r["summary"],
                          **{k: projection[r["id"]][k] for k in ("summary", "entities", "review_status", "note", "favorite") if r["id"] in projection},
                          "asset_id": asset_id} for r in library.observations(asset_id) if r["id"] in projection]
-        return {"asset": asset, "observations": [enrich(r) for r in observations], "subtitles": library.subtitles(asset_id),
+        content = {"asset": asset, "observations": [enrich(r) for r in observations], "subtitles": library.subtitles(asset_id),
                 "retrieval_windows": [enrich(r) for r in projection.values() if r.get("evidence_type") == "retrieval_window"],
                 "scenes": [enrich(r) for r in projection.values() if r.get("kind") == "scene"],
                 "annotations": library.annotations(asset_id), "runs": library.runs(asset_id)}
+        assembled = perf_counter()
+        # These persisted records already contain JSON primitives. Serialize in
+        # this worker, avoiding FastAPI's second recursive conversion on the
+        # event loop for multi-megabyte episode evidence.
+        response = JSONResponse(content)
+        serialized = perf_counter()
+        response.headers["Server-Timing"] = ", ".join(
+            f"{name};dur={(end - start) * 1000:.1f}" for name, start, end in (
+                ("asset", started, asset_ready), ("projection", asset_ready, projected),
+                ("assembly", projected, assembled), ("json", assembled, serialized)))
+        return response
 
     @app.post("/api/assets/{asset_id}/chunks/{chunk_id}/deepen/estimate")
     async def scene_deepen_estimate(asset_id: str, chunk_id: str, payload: DeepenInput):

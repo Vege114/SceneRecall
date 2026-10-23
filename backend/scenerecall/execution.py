@@ -3,6 +3,23 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextvars import ContextVar
+from inspect import isawaitable
+
+
+_batch_failure = ContextVar("batch_failure", default=None)
+
+
+def stop_admission(error):
+    """Stop a parallel batch immediately while its failed call drains accounting."""
+    failure = _batch_failure.get()
+    if failure is not None and failure[0] is None:
+        failure[0] = error
+
+
+async def _invoke_callback(callback, *args):
+    result = callback(*args)
+    return await result if isawaitable(result) else result
 
 
 class ReservationBusy(Exception):
@@ -70,10 +87,19 @@ async def bounded_map(items, operation, width, checkpoint, on_result=None):
     results = [None] * len(values)
     pending = {}
     cursor = 0
+    failure = [None]
+    token = _batch_failure.set(failure)
     try:
         while cursor < len(values) or pending:
             while cursor < len(values) and len(pending) < width:
-                checkpoint()
+                if failure[0] is not None:
+                    raise failure[0]
+                await _invoke_callback(checkpoint)
+                # A worker-backed control check can yield while a sibling
+                # fails. Recheck immediately before task creation; no await
+                # separates this guard from admission.
+                if failure[0] is not None:
+                    raise failure[0]
                 task = asyncio.create_task(operation(cursor, values[cursor]))
                 pending[task] = cursor
                 cursor += 1
@@ -86,8 +112,8 @@ async def bounded_map(items, operation, width, checkpoint, on_result=None):
                 index = pending.pop(task)
                 results[index] = task.result()
                 if on_result:
-                    on_result(index, results[index])
-        checkpoint()
+                    await _invoke_callback(on_result, index, results[index])
+        await _invoke_callback(checkpoint)
         return results
     except BaseException:
         if pending:
@@ -98,3 +124,5 @@ async def bounded_map(items, operation, width, checkpoint, on_result=None):
             except asyncio.CancelledError:
                 await drain
         raise
+    finally:
+        _batch_failure.reset(token)

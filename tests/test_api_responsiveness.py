@@ -9,6 +9,48 @@ from scenerecall.main import create_app
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("identity_reviews", [False, True])
+async def test_detail_json_serialization_does_not_block_health(tmp_path, monkeypatch, identity_reviews):
+    import scenerecall.main as main
+    import scenerecall.visual_identity_api as identity_api
+
+    app = create_app(tmp_path / "library", start_worker=False, token="responsiveness-test")
+    library = app.state.library
+    monkeypatch.setattr(library, "get_asset", lambda *args, **kwargs: {"id": "asset_one"})
+    for name in ("records", "observations", "subtitles", "annotations", "runs"):
+        monkeypatch.setattr(library, name, lambda *args, **kwargs: [])
+    monkeypatch.setattr(app.state.visual_identity, "reviews", lambda *args, **kwargs: {"regions": []})
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    module = identity_api if identity_reviews else main
+    original = module.JSONResponse
+
+    def slow_json(content, *args, **kwargs):
+        if isinstance(content, dict) and ("asset" in content or "regions" in content):
+            started.set()
+            release.wait(2)
+            finished.set()
+        return original(content, *args, **kwargs)
+
+    monkeypatch.setattr(module, "JSONResponse", slow_json)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+        route = "/api/assets/asset_one" + ("/identity/reviews" if identity_reviews else "")
+        pending = asyncio.create_task(client.get(route,
+            headers={"authorization": "Bearer responsiveness-test"}))
+        try:
+            assert await asyncio.to_thread(started.wait, 1)
+            assert (await asyncio.wait_for(client.get("/api/health"), 1)).status_code == 200
+            assert not finished.is_set(), "large episode serialization blocked the event loop"
+        finally:
+            release.set()
+            response = await pending
+        assert response.status_code == 200
+        if identity_reviews:
+            assert response.json()["regions"] == []
+        else:
+            assert response.json()["asset"]["id"] == "asset_one"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("route,store,method", [
     ("/api/bootstrap", "providers", "list"),
     ("/api/assets", "library", "list_assets"),

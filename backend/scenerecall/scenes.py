@@ -76,15 +76,24 @@ class SceneStore:
         if not rows:
             return []
         annotations = self._annotations(asset_id)
-        cache = {(asset_id, "annotations"): annotations, (asset_id, "asset_info"): asset}
+        cache = {(asset_id, "annotations"): annotations, (asset_id, "asset_info"): asset,
+                 (asset_id, "rows"): {row["id"]: row for row in rows}}
         result = []
         for row in rows:
-            row = self._project_semantics(asset_id, row, annotations)
+            row = self._cached_semantics(asset_id, row, cache)
             reasons = self._stale_reasons(asset_id, row, cache, set())
             value = {**row, "stale": bool(reasons), "context_stale": bool(reasons), "stale_reasons": reasons}
             if include_stale or not reasons:
                 result.append(value)
         return result
+
+    def _cached_semantics(self, asset_id, row, cache):
+        key = (asset_id, "semantics", row["id"])
+        if key not in cache:
+            if (asset_id, "annotations") not in cache:
+                cache[asset_id, "annotations"] = self._annotations(asset_id)
+            cache[key] = self._project_semantics(asset_id, row, cache[asset_id, "annotations"])
+        return cache[key]
 
     def _stale_reasons(self, asset_id, row, cache, visiting):
         identity = (asset_id, row["id"])
@@ -96,7 +105,9 @@ class SceneStore:
         if (asset_id, "dependencies") not in cache:
             cache[asset_id, "dependencies"] = self.dependencies(asset_id)
         current = cache[asset_id, "dependencies"]
-        marked = self.library.active(asset_id).get("scene_staleness", {})
+        if (asset_id, "staleness") not in cache:
+            cache[asset_id, "staleness"] = self.library.active(asset_id).get("scene_staleness", {})
+        marked = cache[asset_id, "staleness"]
         labels = {"fingerprint": "视频来源已变化", "subtitle_digest": "字幕来源或时间轴已变化",
                   "character_revision": "角色人工档案已变化", "character_semantic_revision": "角色人工档案已变化",
                   "membership_revision": "所属项目已变化"}
@@ -109,8 +120,20 @@ class SceneStore:
             changed_identity = False
             if regions:
                 from .visual_identity import decorate_identity_records
-                projected = decorate_identity_records(self.library, asset_id, [row])[0]
-                current_entities = {entity["id"]: entity.get("character_id") for entity in projected.get("entities", [])}
+                # One projection per asset in this dependency walk. Reopening
+                # the cast/gallery for every scene dominates completed-episode
+                # reads. Keep this snapshot local so the next read sees edits.
+                if (asset_id, "visual_identity") not in cache:
+                    if (asset_id, "rows") not in cache:
+                        cache[asset_id, "rows"] = {item["id"]: item for item in self._raw(asset_id)}
+                    candidates = [self._cached_semantics(asset_id, item, cache)
+                                  for item in cache[asset_id, "rows"].values()
+                                  if (item.get("inferences") or item.get("memory_after"))
+                                  and any(entity.get("identity_region_id") for entity in item.get("entities", []))]
+                    cache[asset_id, "visual_identity"] = {
+                        item["id"]: {entity["id"]: entity.get("character_id") for entity in item.get("entities", [])}
+                        for item in decorate_identity_records(self.library, asset_id, candidates)}
+                current_entities = cache[asset_id, "visual_identity"].get(row["id"], {})
                 changed_identity = any(entity.get("character_id") != current_entities.get(entity["id"]) for entity in regions)
             if row.get("audio_evidence"):
                 if (asset_id, "audio_identity") not in cache:
@@ -141,9 +164,9 @@ class SceneStore:
                 sources = cache[source_asset, "rows"]
                 source = sources.get(source_id)
                 if source is not None:
-                    if (source_asset, "annotations") not in cache:
-                        cache[source_asset, "annotations"] = self._annotations(source_asset)
-                    source = self._project_semantics(source_asset, source, cache[source_asset, "annotations"])
+                    source = self._cached_semantics(source_asset, source, cache)
+                    if (source_asset, "revision", source_id) not in cache:
+                        cache[source_asset, "revision", source_id] = self.revision_digest(source)
                 for info_asset_id in (source_asset, asset_id):
                     if (info_asset_id, "asset_info") not in cache:
                         cache[info_asset_id, "asset_info"] = self.library.get_asset(info_asset_id, include_deleted=True)
@@ -151,7 +174,8 @@ class SceneStore:
                 target_info = cache[asset_id, "asset_info"]
                 if source_info.get("deleted"):
                     raise FileNotFoundError("前序视频已在回收站")
-                if (source is None or (dependency.get("revision_digest") and dependency["revision_digest"] != self.revision_digest(source))
+                if (source is None or (dependency.get("revision_digest")
+                        and dependency["revision_digest"] != cache[source_asset, "revision", source_id])
                         or source_info.get("anime_id") != target_info.get("anime_id")
                         or self._stale_reasons(source_asset, source, cache, visiting)):
                     reasons.append("前序场景上下文已变化")

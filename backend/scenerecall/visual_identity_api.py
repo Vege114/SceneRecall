@@ -5,11 +5,11 @@ import asyncio
 from typing import Literal
 
 from fastapi import File, Form, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import Field
 
 from .characters import CharacterStore
-from .library import read_json, safe_id
+from .library import confined_path, read_json, safe_id
 from .models import Contract
 from .visual_identity import MAX_IMAGE_BYTES, ReferenceGallery, VisualIdentityPipeline
 
@@ -139,7 +139,9 @@ def register_visual_identity_routes(app, library, search):
 
     @app.get("/api/assets/{asset_id}/identity/reviews")
     def identity_reviews(asset_id: str):
-        return _public_reviews(pipeline.reviews(asset_id))
+        # The public payload only exposes image URLs. Resolve owned pixel paths
+        # when the image is requested, not thousands of times for discarded fields.
+        return JSONResponse(_public_reviews(pipeline.reviews(asset_id, _crop_paths=False)))
 
     @app.post("/api/assets/{asset_id}/identity/reviews/{region_id}")
     def review_identity(asset_id: str, region_id: str, payload: IdentityReview):
@@ -160,4 +162,4 @@ def register_visual_identity_routes(app, library, search):
         location = pipeline._directory(asset_id)
         if read_json(location / "regions" / f"{safe_id(region_id)}.json") is None:
             raise FileNotFoundError("人物区域不存在")
-        return FileResponse(location / "crops" / f"{safe_id(region_id)}.png", media_type="image/png")
+        return FileResponse(confined_path(location, f"crops/{safe_id(region_id)}.png"), media_type="image/png")

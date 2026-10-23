@@ -17,7 +17,7 @@ from .providers import (AIResult, CHARACTER_INSTRUCTION_TOKENS, MAX_CHARACTER_RE
                         PROMPT_VERSION, SUBTITLE_PROMPT_VERSION, ProviderManager)
 from .workflows import WorkflowQueueMixin
 from .scene_jobs import CODEX_CORE_FRAMES, CORE_FRAMES, SceneJobMixin
-from .execution import ReservationBusy, bounded_map, execution_width, finish_on_cancel
+from .execution import ReservationBusy, bounded_map, execution_width, finish_on_cancel, run_in_thread
 from .pipeline import EpisodePipelineMixin
 from .identity_jobs import IdentityJobMixin
 from .retrieval_jobs import RetrievalJobMixin
@@ -94,6 +94,7 @@ class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodeP
         self.task = None
         self.closed = False
         self._reservation_events = {}
+        self._reservation_loops = {}
         self._executing_jobs = set()
         self.scan_concurrency = max(1, min(4, os.cpu_count() or 1))
         self._scan_slots = asyncio.Semaphore(self.scan_concurrency)
@@ -473,15 +474,31 @@ class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodeP
             return call_id
 
     async def reserve_call(self, job_id, profile, **options):
-        event = self._reservation_events.setdefault(job_id, asyncio.Event())
+        self._reservation_loops[job_id] = asyncio.get_running_loop()
+        options.setdefault("call_id", uid("call"))
         while True:
             if self.closed:
                 raise StopJob()
-            event.clear()
+            # A worker may report ReservationBusy after accounting has already
+            # signalled this attempt. Never let a later waiter clear its wakeup.
+            event = self._reservation_events.setdefault(job_id, asyncio.Event())
             try:
-                return self.before_call(job_id, profile, wait_for_budget=True, **options)
+                return await run_in_thread(self.before_call, job_id, profile, wait_for_budget=True, **options)
             except ReservationBusy:
                 await event.wait()
+            except asyncio.CancelledError:
+                # The owned worker has drained, but may have persisted its
+                # reservation before cancellation arrived. No provider was
+                # started, so release it without charging attempts or tokens.
+                await run_in_thread(self._cancel_unstarted_reservation, job_id, options["call_id"])
+                raise
+
+    def _cancel_unstarted_reservation(self, job_id, call_id):
+        with self.library.lock:
+            job = self.get(job_id)
+            if call_id in job.get("inflight_calls", {}):
+                self.update(job_id, **self._release_reservation(job, call_id))
+        self._wake_reservations(job_id)
 
     def _release_reservation(self, job, call_id=None):
         active = dict(job.get("inflight_calls", {}))
@@ -492,8 +509,16 @@ class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodeP
                 "inflight_attempts": sum(call["attempts"] for call in active.values())}
 
     def _wake_reservations(self, job_id):
+        loop = self._reservation_loops.get(job_id)
+        if loop and not loop.is_closed():
+            # Accounting also runs in local workers; asyncio.Event is not
+            # thread safe, so signal it on the loop that owns the waiters.
+            loop.call_soon_threadsafe(self._signal_reservations, job_id)
+
+    def _signal_reservations(self, job_id):
         event = self._reservation_events.get(job_id)
-        if event:
+        if event is not None:
+            self._reservation_events[job_id] = asyncio.Event()
             event.set()
 
     def account(self, job_id: str, result, call_id=None):

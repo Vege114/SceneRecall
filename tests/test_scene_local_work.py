@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from scenerecall import providers as provider_module
+from scenerecall.execution import ReservationBusy
+from scenerecall.jobs import StopJob
 from scenerecall.library import atomic_json
+from scenerecall.providers import AIResult, ProviderError
 from scenerecall.scene_jobs import SceneJobMixin
 from test_identity_scenes import region
 from test_scene_jobs import enqueue
@@ -18,6 +21,181 @@ from test_scene_providers import chunk, images, manager, reply
 
 async def worker_entered(event):
     assert await asyncio.wait_for(asyncio.to_thread(event.wait, 2), 3)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["status", "reservation", "receipt", "cache", "split", "progress"])
+async def test_scene_call_lock_contention_keeps_request_loop_responsive(scene_worker, monkeypatch, operation):
+    worker = scene_worker(60 if operation == "progress" else 2)
+    if operation == "cache":
+        initial = enqueue(worker)
+        await worker.queue.execute(initial["id"])
+        assert worker.queue.get(initial["id"])["status"] == "completed"
+    if operation == "split":
+        prepare = worker.provider.prepare_visual
+
+        async def split_large(identity, frames, *args):
+            if len(frames) > 1:
+                raise ProviderError("Synthetic context overflow", code="character_context_too_large", request_count=0)
+            return await prepare(identity, frames, *args)
+
+        monkeypatch.setattr(worker.provider, "prepare_visual", split_large)
+    name = {"status": "update", "reservation": "before_call", "receipt": "_account_scene_receipt",
+            "cache": "_scene_metric", "split": "update", "progress": "_scene_progress"}[operation]
+    original = getattr(worker.queue, name)
+    entered, proceed, attempting = threading.Event(), threading.Event(), threading.Event()
+    locked, release = threading.Event(), threading.Event()
+    calling_threads = []
+
+    def guarded(*args, **kwargs):
+        selected = (kwargs.get("pending_scene_receipt") is not None if operation == "status" else
+                    "细分" in kwargs.get("message", "") if operation == "split" else
+                    args[1] == "preparation" and kwargs.get("completed", 0) > 0 if operation == "progress" else
+                    kwargs.get("cache") == 1 if operation == "cache" else True)
+        if selected and not calling_threads:
+            calling_threads.append(threading.get_ident())
+            entered.set()
+            assert proceed.wait(4), "scene metadata blocked the request event loop"
+            attempting.set()
+        return original(*args, **kwargs)
+
+    def hold_library_lock():
+        with worker.library.lock:
+            locked.set()
+            assert release.wait(4), "request loop could not release the contended library lock"
+
+    monkeypatch.setattr(worker.queue, name, guarded)
+    job = enqueue(worker, **({"execution": {"preparation": "parallel"}} if operation == "progress" else {}))
+    task = asyncio.create_task(worker.queue.execute(job["id"]))
+    holder = None
+    try:
+        await worker_entered(entered)
+        assert len(calling_threads) == 1 and calling_threads[0] != threading.get_ident()
+        holder = asyncio.create_task(asyncio.to_thread(hold_library_lock))
+        await worker_entered(locked)
+        proceed.set()
+        await worker_entered(attempting)
+        # A request-like loop operation still executes while the scene job is
+        # waiting on the same lock as local character/identity work.
+        assert worker.queue.get(job["id"])["status"] == "running"
+        assert not task.done()
+    finally:
+        proceed.set()
+        release.set()
+        if holder is not None:
+            await holder
+        await task
+    done = worker.queue.get(job["id"])
+    assert done["status"] == "completed", done.get("error")
+    assert done.get("inflight_calls", {}) == {}
+    assert done["request_count"] == (0 if operation == "cache" else 2 if operation in {"split", "progress"} else 1)
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_reservation_drains_worker_and_releases_unstarted_call(scene_worker, monkeypatch):
+    worker = scene_worker(2)
+    job = enqueue(worker)
+    original = worker.queue.before_call
+    entered, release = threading.Event(), threading.Event()
+
+    def reserve(*args, **kwargs):
+        call_id = original(*args, **kwargs)
+        entered.set()
+        assert release.wait(4)
+        return call_id
+
+    monkeypatch.setattr(worker.queue, "before_call", reserve)
+    task = asyncio.create_task(worker.queue.reserve_call(job["id"], worker.provider.get("fast")))
+    try:
+        await worker_entered(entered)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert len(worker.queue.get(job["id"])["inflight_calls"]) == 1
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    state = worker.queue.get(job["id"])
+    assert state["inflight_calls"] == {} and state["inflight_attempts"] == 0
+    assert state["request_count"] == 0 and not worker.provider.calls
+
+
+@pytest.mark.asyncio
+async def test_worker_accounting_wakes_budget_waiter_on_its_event_loop(scene_worker, monkeypatch):
+    worker = scene_worker(2)
+    job = enqueue(worker, max_requests=3)
+    profile = worker.provider.get("fast")
+    first = await worker.queue.reserve_call(job["id"], profile)
+    original = worker.queue.before_call
+    waiting = threading.Event()
+
+    def reserve(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except ReservationBusy:
+            waiting.set()
+            raise
+
+    monkeypatch.setattr(worker.queue, "before_call", reserve)
+    loop = asyncio.get_running_loop()
+    previous_debug = loop.get_debug()
+    loop.set_debug(True)
+    waiter = asyncio.create_task(worker.queue.reserve_call(job["id"], profile))
+    try:
+        await worker_entered(waiting)
+        await asyncio.to_thread(worker.queue.account, job["id"], AIResult({}, {}, 1, 0), first)
+        # Once the first call spent one request, this tight budget can no
+        # longer cover three retries. The awakened waiter must pause normally.
+        with pytest.raises(StopJob):
+            await asyncio.wait_for(waiter, 3)
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+        loop.set_debug(previous_debug)
+    state = worker.queue.get(job["id"])
+    assert state["status"] == "paused" and state["request_count"] == 1
+    assert state["inflight_calls"] == {}
+
+
+@pytest.mark.asyncio
+async def test_late_busy_result_keeps_wakeup_when_another_waiter_exhausts_budget(scene_worker, monkeypatch):
+    worker = scene_worker(2)
+    job = enqueue(worker, max_requests=3)
+    profile = worker.provider.get("fast")
+    first = await worker.queue.reserve_call(job["id"], profile)
+    original = worker.queue.before_call
+    busy, deliver_busy = threading.Event(), threading.Event()
+
+    def delayed_busy(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except ReservationBusy:
+            busy.set()
+            assert deliver_busy.wait(4)
+            raise
+
+    monkeypatch.setattr(worker.queue, "before_call", delayed_busy)
+    waiter = asyncio.create_task(worker.queue.reserve_call(job["id"], profile))
+    try:
+        await worker_entered(busy)
+        generation = worker.queue._reservation_events[job["id"]]
+        await asyncio.to_thread(worker.queue.account, job["id"], AIResult({}, {}, 1, 0), first)
+        await asyncio.wait_for(generation.wait(), 3)
+        # A new admission discovers the permanently exhausted budget while
+        # the first worker's old ReservationBusy result is still in transit.
+        with pytest.raises(StopJob):
+            await worker.queue.reserve_call(job["id"], profile)
+        deliver_busy.set()
+        with pytest.raises(StopJob):
+            await asyncio.wait_for(waiter, 3)
+    finally:
+        deliver_busy.set()
+        if not waiter.done():
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+    assert worker.queue.get(job["id"])["inflight_calls"] == {}
 
 
 @pytest.mark.asyncio

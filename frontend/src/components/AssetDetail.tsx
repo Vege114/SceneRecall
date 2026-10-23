@@ -17,6 +17,8 @@ import { DeepenSceneButton, RelatedScenes, SceneBadges, SceneFacts, SceneFrames 
 import { RetrievalFrames, RetrievalState } from './RetrievalEvidence';
 import WorkEntities from './WorkEntities';
 
+const DETAIL_REQUEST_TIMEOUT_MS = 30000;
+
 function AnnotationModal({ assetId, record, existing, onClose, onSaved }: { assetId: string; record: Observation | SceneChunk | Subtitle; existing?: Annotation; onClose: () => void; onSaved: () => Promise<void> }) {
   const { notify } = useApp();
   const isObservation = 'summary' in record;
@@ -97,12 +99,18 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
       try {
         do {
           flight.dirty = false;
+          flight.controller = new AbortController();
+          let timedOut = false;
+          const timeout = window.setTimeout(() => { timedOut = true; flight.controller.abort(); }, DETAIL_REQUEST_TIMEOUT_MS);
           try {
             const next = await api<AssetDetailType>(`/assets/${encodeURIComponent(id)}`, { signal: flight.controller.signal });
+            // api() can recover an unreadable response body as {}. An aborted
+            // body must not replace valid detail after headers already arrived.
+            if (timedOut) throw new Error('Detail response timed out');
             if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) { setDetail(next); setError(''); }
           } catch (error) {
-            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) setError(message(error));
-          }
+            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) setError(timedOut ? '读取作品资料超时，请重试。已保存的分析结果不会丢失。' : message(error));
+          } finally { window.clearTimeout(timeout); }
         } while (flight.dirty && !flight.cancelled);
       } finally {
         if (!flight.cancelled && detailFlight.current === flight) setLoading(false);
@@ -113,11 +121,14 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
   }, [id]);
   useEffect(() => {
     setDetail(null); setLoading(true); setError(''); setIdentitySubmitted(null); identityFlight.current = false;
+    // Opening an episode must always start its first request. Visibility only
+    // suspends background polling, including when navigation happens offscreen.
+    void load();
     return () => {
       const flight = detailFlight.current;
       if (flight?.assetId === id) { flight.cancelled = true; flight.controller.abort(); detailFlight.current = null; }
     };
-  }, [id]);
+  }, [id, load]);
   useEffect(() => { pendingSeek.current = initialTime; setCurrentTime(initialTime); if (video.current && video.current.readyState > 0) video.current.currentTime = initialTime / 1000; }, [initialTime]);
   useEffect(() => {
     if (!initialCue) { appliedCue.current = ''; return; }
@@ -197,7 +208,7 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
     try { await post(`/assets/${encodeURIComponent(id)}/proxy`); await refresh(); notify('播放代理任务已创建；任务完成后点击重新加载播放器'); } catch (error) { notify(message(error), 'error'); } finally { setProxyBusy(false); }
   };
   if (loading) return <div className="page-loading"><Spinner label="正在读取作品资料" /></div>;
-  if (!detail) return <><a className="back-link" href="#/library"><ArrowLeft size={16} />返回资料库</a><Alert tone="error">{error || '无法读取作品资料'}</Alert><p className="helper">如果视频已被删除，可以到<a href="#/trash">回收站</a>查看或恢复。</p></>;
+  if (!detail) return <><a className="back-link" href="#/library"><ArrowLeft size={16} />返回资料库</a><Alert tone="error">{error || '无法读取作品资料'}</Alert><button className="button secondary" onClick={() => { setError(''); setLoading(true); void load(); }}>重新读取作品资料</button><p className="helper">如果视频已被删除，可以到<a href="#/trash">回收站</a>查看或恢复。</p></>;
   const { asset, subtitles, runs } = detail;
   const retrievalWindows: Observation[] = (detail.retrieval_windows || []).map((record) => ({ ...record, evidence_type: 'retrieval_window', window_id: record.id, shot_id: '', summary: record.summary || '', entities: record.entities || [], events: record.events || [], uncertainties: record.uncertainties || [], evidence_frame_ids: record.evidence_frame_ids || record.ordered_frames?.map((frame) => frame.id) || [], run_id: record.run_id || '' }));
   const observations: (Observation | SceneChunk)[] = [...(detail.scenes || []), ...detail.observations, ...retrievalWindows].sort((a, b) => a.start_ms - b.start_ms);

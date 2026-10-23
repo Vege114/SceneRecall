@@ -2,6 +2,7 @@
 import asyncio
 import copy
 import os
+import threading
 
 import pytest
 
@@ -49,7 +50,9 @@ async def test_transcript_overlaps_and_merges_in_chronological_order(scene_worke
 
     async def delayed(identity, cues, story_context):
         nonlocal active, peak, entered
-        index = entered
+        # Local preparation workers may reach the provider out of order; the
+        # transcript's evidence position, not thread scheduling, names a unit.
+        index = cues[0]["start_ms"] // 5000
         entered += 1
         active += 1
         peak = max(peak, active)
@@ -90,11 +93,11 @@ async def test_parallel_visual_reverse_completion_preserves_boundaries_and_conti
     worker.provider.continue_batches = continue_batches
     original = worker.provider.prepare_visual
     second_done = asyncio.Event()
-    memories, contexts = [], []
+    memories, contexts = [], {}
 
     async def delayed(identity, frames, context_frames, subtitles, memory, characters):
         memories.append(copy.deepcopy(memory))
-        contexts.append(copy.deepcopy(context_frames))
+        contexts[frames[0]["at_ms"]] = copy.deepcopy(context_frames)
         if frames[0]["at_ms"] == 250:
             await asyncio.wait_for(second_done.wait(), 2)
         result = await original(identity, frames, context_frames, subtitles, memory, characters)
@@ -107,7 +110,7 @@ async def test_parallel_visual_reverse_completion_preserves_boundaries_and_conti
     assert result["status"] == "completed", result
     assert len(memories) == 3 and all(memory == memories[0] for memory in memories)
     assert memories[0]["recent"] == []
-    assert [len(context) for context in contexts] == [0, 8, 8]
+    assert [len(contexts[at]) for at in sorted(contexts)] == [0, 8, 8]
     scenes = worker.store.list(worker.asset["id"])
     assert len(scenes) == (1 if continue_batches else 3)
     assert scenes[0]["start_ms"] == 0 and scenes[-1]["end_ms"] == 120000
@@ -204,6 +207,7 @@ async def test_terminal_control_status_waits_until_all_paid_calls_drain(scene_wo
     gates = [asyncio.Event(), asyncio.Event()]
     original = fixture.provider.prepare_visual
     account = fixture.queue._account_scene_receipt
+    loop = asyncio.get_running_loop()
     entered = 0
 
     async def blocked(*args):
@@ -217,7 +221,7 @@ async def test_terminal_control_status_waits_until_all_paid_calls_drain(scene_wo
 
     def signal_account(*args):
         account(*args)
-        accounted.set()
+        loop.call_soon_threadsafe(accounted.set)
 
     monkeypatch.setattr(fixture.provider, "prepare_visual", blocked)
     monkeypatch.setattr(fixture.queue, "_account_scene_receipt", signal_account)
@@ -359,22 +363,50 @@ async def test_error_drains_sibling_success_and_retry_only_repeats_failed_unit(s
     worker = scene_worker(120)
     original = worker.provider.prepare_visual
     second_started = asyncio.Event()
+    failure_accounting, sibling_accounted = asyncio.Event(), asyncio.Event()
+    release_accounting = threading.Event()
+    loop = asyncio.get_running_loop()
+    account = worker.queue.account
+    receipt = worker.queue._account_scene_receipt
+    admitted = []
     failed = False
 
     async def failure(identity, frames, *args):
         nonlocal failed
+        admitted.append(frames[0]["at_ms"])
         if frames[0]["at_ms"] == 56250:
             second_started.set()
-            await asyncio.sleep(.01)
+            await failure_accounting.wait()
         if frames[0]["at_ms"] == 250 and not failed:
             failed = True
             await second_started.wait()
             raise ProviderError("合成失败", request_count=1, cost=.001)
         return await original(identity, frames, *args)
 
+    def blocked_account(*args):
+        loop.call_soon_threadsafe(failure_accounting.set)
+        assert release_accounting.wait(_BARRIER_TIMEOUT)
+        return account(*args)
+
+    def signal_receipt(*args):
+        result = receipt(*args)
+        loop.call_soon_threadsafe(sibling_accounted.set)
+        return result
+
     monkeypatch.setattr(worker.provider, "prepare_visual", failure)
+    monkeypatch.setattr(worker.queue, "account", blocked_account)
+    monkeypatch.setattr(worker.queue, "_account_scene_receipt", signal_receipt)
     job = enqueue(worker, execution=options())
-    failed_job = await execute(worker, job)
+    running = asyncio.create_task(execute(worker, job))
+    try:
+        await asyncio.wait_for(failure_accounting.wait(), _BARRIER_TIMEOUT)
+        await asyncio.wait_for(sibling_accounted.wait(), _BARRIER_TIMEOUT)
+        await asyncio.sleep(.01)
+        assert sorted(admitted) == [250, 56250]
+        assert not running.done()  # Failure bookkeeping still owns its worker.
+    finally:
+        release_accounting.set()
+        failed_job = await running
     assert failed_job["status"] == "failed", failed_job
     assert failed_job["request_count"] == 2 and failed_job["inflight_calls"] == {}
     worker.queue.control(job["id"], "retry")

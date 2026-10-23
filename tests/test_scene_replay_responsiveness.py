@@ -29,7 +29,7 @@ async def test_cached_parallel_preparation_yields_between_assembly_batches(scene
             if len(snapshots) == 1:
                 # This callback stands for other ready work, such as a local
                 # HTTP request. It must run before the next assembly batch.
-                loop.call_soon(serviced.append, True)
+                loop.call_soon_threadsafe(serviced.append, True)
         return update(job_id, **changes)
 
     monkeypatch.setattr(worker.queue, "update", observe_assembly)
