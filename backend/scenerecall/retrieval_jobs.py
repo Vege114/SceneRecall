@@ -125,8 +125,8 @@ class RetrievalJobMixin:
                 check()
                 current = missing[offset:offset + 128]
                 outputs = [root / "frames" / f"{f['id']}.jpg" for f in current]
-                for frame in extract_keyframes(source, current, outputs, checkpoint=check):
-                    self.library.register_frame(asset_id, frame)
+                self.library.register_frames(asset_id,
+                    extract_keyframes(source, current, outputs, checkpoint=check))
             check()
             self.library.require_source(asset_id)
             return {"id": identity, "sampling_version": VERSION, "parameters": config["sampling_parameters"],

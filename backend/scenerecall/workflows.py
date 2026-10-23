@@ -7,10 +7,14 @@ import threading
 import time
 from pathlib import Path
 
+from .keyframes import ALGORITHM_PARAMETERS
 from .library import atomic_json, digest, now, read_json, safe_id, uid
 from .models import AssetInput
 
 KEYFRAME_ALGORITHM = "content-keyframes-v1"
+LEGACY_KEYFRAME_DECODER_PROFILE = "ffmpeg-v1"
+DEFAULT_KEYFRAME_DECODER_PROFILE = "pyav-libavfilter-v1"
+KEYFRAME_DECODER_PROFILES = {"ffmpeg-v1": "ffmpeg", "pyav-libavfilter-v1": "pyav"}
 
 
 class RequestConflict(ValueError):
@@ -233,6 +237,72 @@ class WorkflowQueueMixin:
     def _plan_path(self, asset_id, plan_id):
         return self.library.asset_dir(asset_id) / "keyframe-plans" / f"{safe_id(plan_id)}.json"
 
+    @staticmethod
+    def _keyframe_decoder_profile(value):
+        if not isinstance(value, str) or value not in KEYFRAME_DECODER_PROFILES:
+            raise ValueError("不支持的关键帧解码配置")
+        return value
+
+    def _plan_decoder_profile(self, plan):
+        return self._keyframe_decoder_profile(plan.get("decoder_profile", LEGACY_KEYFRAME_DECODER_PROFILE))
+
+    def _keyframe_plan_id(self, asset, start_ms, end_ms, decoder_profile):
+        profile = self._keyframe_decoder_profile(decoder_profile)
+        identity = [asset["id"], asset["fingerprint"], start_ms, end_ms, KEYFRAME_ALGORITHM]
+        if profile != LEGACY_KEYFRAME_DECODER_PROFILE:
+            identity.append(profile)
+        return "plan_" + digest(identity)
+
+    def freeze_keyframe_decoder_profile(self, config):
+        """New jobs snapshot their decoder; persisted jobs never call this on resume."""
+        config = dict(config)
+        if config.get("analysis_strategy") == "retrieval-first-v1":
+            profile = LEGACY_KEYFRAME_DECODER_PROFILE
+        elif config.get("keyframe_plan_id"):
+            profile = self._plan_decoder_profile(self.load_plan(config["keyframe_plan_id"]))
+            if "keyframe_decoder_profile" in config and config["keyframe_decoder_profile"] != profile:
+                raise ValueError("任务的关键帧计划与冻结的解码配置不一致")
+        elif "keyframe_decoder_profile" in config:
+            profile = config["keyframe_decoder_profile"]
+        elif config.get("plan_id"):
+            plan = self.load_plan(config["plan_id"])
+            profile = self._plan_decoder_profile(plan)
+        else:
+            profile = DEFAULT_KEYFRAME_DECODER_PROFILE
+        config["keyframe_decoder_profile"] = self._keyframe_decoder_profile(profile)
+        return config
+
+    def _job_keyframe_decoder_profile(self, config, asset, start_ms, end_ms):
+        profile = config.get("keyframe_decoder_profile")
+        if profile is not None:
+            self._keyframe_decoder_profile(profile)
+        supplied_plan = config.get("keyframe_plan_id") or config.get("plan_id")
+        if supplied_plan:
+            matching = [candidate for candidate in KEYFRAME_DECODER_PROFILES
+                        if supplied_plan == self._keyframe_plan_id(asset, start_ms, end_ms, candidate)]
+            if not matching or profile is not None and profile != matching[0]:
+                raise ValueError("任务的关键帧计划与冻结的解码配置不一致")
+            profile = matching[0]
+        return profile or LEGACY_KEYFRAME_DECODER_PROFILE
+
+    def _keyframe_selection_cache(self, asset, plan_id, start_ms, end_ms,
+                                 decoder_profile=LEGACY_KEYFRAME_DECODER_PROFILE):
+        profile = self._keyframe_decoder_profile(decoder_profile)
+        path = self.library.asset_dir(asset["id"]) / "keyframe-work" / safe_id(plan_id) / "selection.json"
+        identity = digest([asset["id"], asset["fingerprint"], start_ms, end_ms,
+                           KEYFRAME_ALGORITHM, ALGORITHM_PARAMETERS, 1, profile])
+        return path, identity
+
+    def _save_keyframe_selection(self, asset, plan_id, start_ms, end_ms, data):
+        path, identity = self._keyframe_selection_cache(asset, plan_id, start_ms, end_ms,
+                                                       self._plan_decoder_profile(data))
+        atomic_json(path, {"identity": identity, "selection_digest": digest(data), "selection": data})
+
+    @staticmethod
+    def _keyframe_selection_data(plan):
+        return {key: plan[key] for key in ("algorithm", "algorithm_parameters", "decoder_profile",
+                "source_start_time_seconds", "shots", "frames", "batches") if key in plan}
+
     def load_plan(self, plan_id):
         safe_id(plan_id)
         paths = list((self.library.root / "assets").glob(f"*/keyframe-plans/{plan_id}.json"))
@@ -243,42 +313,79 @@ class WorkflowQueueMixin:
             raise ValueError("关键帧计划身份无效")
         return plan
 
-    def ensure_plan(self, asset_id, start_ms=0, end_ms=None):
+    def ensure_plan(self, asset_id, start_ms=0, end_ms=None, *, decoder_profile=None):
         with self.library.lock:
             asset = self.library.get_asset(asset_id)
             self.library.require_source(asset_id)
             end = asset["duration_ms"] if end_ms is None else end_ms
             if not 0 <= start_ms < end <= asset["duration_ms"]:
                 raise ValueError("关键帧扫描范围超出视频")
-            plan_id = "plan_" + digest([asset_id, asset["fingerprint"], start_ms, end, KEYFRAME_ALGORITHM])
+            if decoder_profile is None:
+                # Existing completed plans remain useful when the new-job default changes.
+                preferred = dict.fromkeys([LEGACY_KEYFRAME_DECODER_PROFILE, DEFAULT_KEYFRAME_DECODER_PROFILE,
+                                          *KEYFRAME_DECODER_PROFILES])
+                repair_profile = None
+                for candidate in preferred:
+                    candidate_id = self._keyframe_plan_id(asset, start_ms, end, candidate)
+                    try:
+                        return self.validated_plan(asset_id, start_ms, end, candidate_id)
+                    except FileNotFoundError:
+                        # A decoder-default change must not throw away an older
+                        # completed selection merely because its previews are lost.
+                        try:
+                            damaged = self.load_plan(candidate_id)
+                            self._validate_keyframe_plan_header(asset, start_ms, end, candidate_id, damaged)
+                            if damaged.get("status") == "completed":
+                                self.library.validate_keyframe_selection(asset_id, damaged, candidate_id)
+                                repair_profile = repair_profile or candidate
+                        except (FileNotFoundError, ValueError):
+                            pass
+                    except ValueError:
+                        continue
+                decoder_profile = repair_profile or DEFAULT_KEYFRAME_DECODER_PROFILE
+            decoder_profile = self._keyframe_decoder_profile(decoder_profile)
+            plan_id = self._keyframe_plan_id(asset, start_ms, end, decoder_profile)
             path = self._plan_path(asset_id, plan_id)
             plan = read_json(path)
             if plan and plan.get("status") == "completed":
                 try:
-                    self.library.frame_paths(asset_id, [frame["id"] for frame in plan.get("frames", [])])
-                    return plan
+                    return self.validated_plan(asset_id, start_ms, end, plan_id)
                 except FileNotFoundError:
                     # Missing generated previews can be repaired from the source.
-                    pass
+                    # Preserve pre-upgrade plans before replacing their public state
+                    # with pending; those plans may not have a selection cache yet.
+                    self.library.validate_keyframe_selection(asset_id, plan, plan_id)
+                    if (plan.get("algorithm") != KEYFRAME_ALGORITHM
+                            or self._plan_decoder_profile(plan) != decoder_profile):
+                        raise ValueError("关键帧计划算法不匹配")
+                    self._save_keyframe_selection(asset, plan_id, start_ms, end,
+                                                  self._keyframe_selection_data(plan))
             job = next((job for job in self.list() if job["type"] == "keyframe_scan"
                         and job["config"].get("plan_id") == plan_id), None)
             if job is None or job["status"] == "completed":
-                job = self.add("keyframe_scan", {"plan_id": plan_id, "start_ms": start_ms, "end_ms": end}, asset_id)
+                job = self.add("keyframe_scan", {"plan_id": plan_id, "start_ms": start_ms, "end_ms": end,
+                                                "keyframe_decoder_profile": decoder_profile}, asset_id)
             elif job["status"] in {"failed", "partial", "cancelled", "paused"}:
                 job = self.control(job["id"], "resume" if job["status"] == "paused" else "retry")
             plan = {"id": plan_id, "plan_id": plan_id, "asset_id": asset_id, "fingerprint": asset["fingerprint"],
                     "start_ms": start_ms, "end_ms": end, "algorithm": KEYFRAME_ALGORITHM,
+                    "decoder_profile": decoder_profile,
                     "status": "pending", "job_id": job["id"], "created_at": now()}
             atomic_json(path, plan)
             return {**plan, "status": job["status"]}
 
+    def _validate_keyframe_plan_header(self, asset, start_ms, end_ms, plan_id, plan):
+        profile = self._plan_decoder_profile(plan)
+        if (plan.get("asset_id") != asset["id"] or plan.get("fingerprint") != asset["fingerprint"]
+                or plan.get("start_ms") != start_ms or plan.get("end_ms") != end_ms
+                or plan.get("algorithm") != KEYFRAME_ALGORITHM
+                or plan_id != self._keyframe_plan_id(asset, start_ms, end_ms, profile)):
+            raise ValueError("关键帧计划与当前视频或分析范围不一致，请重新扫描")
+
     def validated_plan(self, asset_id, start_ms, end_ms, plan_id):
         plan = self.load_plan(plan_id)
         asset = self.library.get_asset(asset_id)
-        if (plan.get("asset_id") != asset_id or plan.get("fingerprint") != asset["fingerprint"]
-                or plan.get("start_ms") != start_ms or plan.get("end_ms") != end_ms
-                or plan.get("algorithm") != KEYFRAME_ALGORITHM):
-            raise ValueError("关键帧计划与当前视频或分析范围不一致，请重新扫描")
+        self._validate_keyframe_plan_header(asset, start_ms, end_ms, plan_id, plan)
         if plan.get("status") != "completed":
             raise ValueError("关键帧尚未扫描完成，请等待本地扫描后估算或分析")
         self.library.validate_keyframe_plan(asset_id, plan, expected_id=plan_id)
@@ -301,56 +408,153 @@ class WorkflowQueueMixin:
         return result
 
     async def scan_plan(self, job_id, *, asset_id=None, start_ms=None, end_ms=None):
-        from .media import scan_keyframes, extract_keyframes
+        from .media import scan_keyframes, extract_keyframes, probe
         job = self.checkpoint(job_id)
         asset_id = asset_id or job["asset_id"]
         start_ms = job["config"]["start_ms"] if start_ms is None else start_ms
         end_ms = job["config"]["end_ms"] if end_ms is None else end_ms
         source = self.library.require_source(asset_id)
         asset = self.library.get_asset(asset_id)
-        plan_id = "plan_" + digest([asset_id, asset["fingerprint"], start_ms, end_ms, KEYFRAME_ALGORITHM])
+        decoder_profile = self._job_keyframe_decoder_profile(job["config"], asset, start_ms, end_ms)
+        plan_id = self._keyframe_plan_id(asset, start_ms, end_ms, decoder_profile)
         path = self._plan_path(asset_id, plan_id)
         existing = read_json(path)
         if existing and existing.get("status") == "completed":
-            return self.validated_plan(asset_id, start_ms, end_ms, plan_id)
-        self.update(job_id, stage="keyframes", message="正在本地扫描内容关键帧")
+            try:
+                return self.validated_plan(asset_id, start_ms, end_ms, plan_id)
+            except FileNotFoundError:
+                # A valid selection survives lost previews. Repair only the missing pictures.
+                self.library.validate_keyframe_selection(asset_id, existing, plan_id)
+        directory = self.library.asset_dir(asset_id)
+        cache_path, cache_identity = self._keyframe_selection_cache(asset, plan_id, start_ms, end_ms, decoder_profile)
+        self.update(job_id, stage="keyframes", message="正在本地扫描内容关键帧", progress=0)
 
         def progress(done, total):
-            self.update(job_id, completed=done, total=total, progress=done / max(1, total),
+            self.update(job_id, completed=done, total=total, progress=.75 * done / max(1, total),
                         message=f"本地关键帧扫描 {done / 1000:.1f} / {total / 1000:.1f} 秒")
 
-        def work(check):
-            data = scan_keyframes(source, start_ms, end_ms, checkpoint=check, progress=progress)
-            rename = {}
+        def selection_plan(data):
+            return {**data, "id": plan_id, "plan_id": plan_id, "asset_id": asset_id,
+                    "fingerprint": asset["fingerprint"], "start_ms": start_ms, "end_ms": end_ms,
+                    "decoder_profile": decoder_profile,
+                    "status": "completed", "job_id": job_id, "created_at": now()}
+
+        def validate_selection(data):
+            if (data.get("algorithm") != KEYFRAME_ALGORITHM
+                    or self._plan_decoder_profile(data) != decoder_profile):
+                raise ValueError("关键帧选择缓存算法不匹配")
+            self.library.validate_keyframe_selection(asset_id, selection_plan(data), plan_id)
             for frame in data["frames"]:
-                frame_id = "kf_" + digest([asset_id, asset["fingerprint"], frame["pts"], frame["time_base"]])
-                rename[frame["id"]] = frame_id
-                frame["id"] = frame_id
-            for batch in data["batches"]:
-                batch["frame_ids"] = [rename[value] for value in batch["frame_ids"]]
-            outputs = [self.library.asset_dir(asset_id) / "frames" / f"{frame['id']}.jpg" for frame in data["frames"]]
-            self.update(job_id, stage="keyframes", message=f"正在保存 {len(outputs)} 张关键帧预览")
-            for offset in range(0, len(outputs), 128):
+                expected = "kf_" + digest([asset_id, asset["fingerprint"], frame["pts"], frame["time_base"]])
+                if frame["id"] != expected:
+                    raise ValueError("关键帧选择缓存身份不匹配")
+
+        def work(check):
+            attempt_started = time.perf_counter()
+            metrics = {"selection_ms": 0, "extraction_ms": 0, "registration_ms": 0,
+                       "validation_ms": 0, "elapsed_ms": 0,
+                       "selected_frames": 0, "reused_frames": 0, "extracted_frames": 0,
+                       "selection_cache_hit": False, "decoder_profile": decoder_profile}
+
+            def report_metrics():
+                metrics["elapsed_ms"] = round((time.perf_counter() - attempt_started) * 1000)
+                self.update(job_id, keyframe_metrics=dict(metrics))
+
+            try:
+                check()
+                metadata = probe(source)
+                data = None
+                if existing and existing.get("status") == "completed":
+                    data = self._keyframe_selection_data(existing)
+                    validate_selection(data)
+                else:
+                    try:
+                        cached = read_json(cache_path)
+                        if cached and cached.get("identity") == cache_identity:
+                            candidate = cached["selection"]
+                            if cached.get("selection_digest") == digest(candidate):
+                                validate_selection(candidate)
+                                data = candidate
+                    except (ValueError, KeyError, TypeError, AttributeError):
+                        # Disposable metadata never bypasses the source/PTS validation contract.
+                        data = None
+                metrics["selection_cache_hit"] = data is not None
+                if data is None:
+                    started = time.perf_counter()
+                    try:
+                        data = scan_keyframes(source, start_ms, end_ms, checkpoint=check, progress=progress,
+                                              metadata=metadata, decoder=KEYFRAME_DECODER_PROFILES[decoder_profile])
+                    finally:
+                        metrics["selection_ms"] = round((time.perf_counter() - started) * 1000)
+                    rename = {}
+                    data["decoder_profile"] = decoder_profile
+                    for frame in data["frames"]:
+                        frame_id = "kf_" + digest([asset_id, asset["fingerprint"], frame["pts"], frame["time_base"]])
+                        rename[frame["id"]] = frame_id
+                        frame["id"] = frame_id
+                    for batch in data["batches"]:
+                        batch["frame_ids"] = [rename[value] for value in batch["frame_ids"]]
+                    validate_selection(data)
+                    self._save_keyframe_selection(asset, plan_id, start_ms, end_ms, data)
+                frames = data["frames"]
+                metrics["selected_frames"] = len(frames)
+                registry = read_json(directory / "frames" / "registry.json", {})
+                missing = []
+                for frame in frames:
+                    output = directory / "frames" / f"{frame['id']}.jpg"
+                    entry = registry.get(frame["id"])
+                    if (entry != {"path": output.relative_to(directory).as_posix(), "at_ms": frame["at_ms"]}
+                            or not output.is_file()):
+                        missing.append((frame, output))
+                metrics["reused_frames"] = len(frames) - len(missing)
+
+                def extraction_progress():
+                    done = metrics["reused_frames"] + metrics["extracted_frames"]
+                    self.update(job_id, completed=done, total=len(frames),
+                                progress=.75 + .24 * done / max(1, len(frames)),
+                                message=f"正在保存关键帧预览 {done} / {len(frames)} 张")
+                    report_metrics()
+
+                extraction_progress()
+                for offset in range(0, len(missing), 128):
+                    check()
+                    self.library.require_source(asset_id)
+                    current = missing[offset:offset + 128]
+                    started = time.perf_counter()
+                    try:
+                        extracted = extract_keyframes(source, [item[0] for item in current],
+                                                      [item[1] for item in current], checkpoint=check,
+                                                      metadata=metadata)
+                    finally:
+                        metrics["extraction_ms"] += round((time.perf_counter() - started) * 1000)
+                    started = time.perf_counter()
+                    try:
+                        self.library.register_frames(asset_id, extracted)
+                    finally:
+                        metrics["registration_ms"] += round((time.perf_counter() - started) * 1000)
+                    metrics["extracted_frames"] += len(extracted)
+                    extraction_progress()
                 check()
                 self.library.require_source(asset_id)
-                extracted = extract_keyframes(source, data["frames"][offset:offset + 128],
-                                              outputs[offset:offset + 128], checkpoint=check)
-                for frame in extracted:
-                    self.library.register_frame(asset_id, frame)
-            check()
-            self.library.require_source(asset_id)
-            return data
+                self.update(job_id, progress=.99, message="正在验证并发布关键帧计划")
+                plan = selection_plan(data)
+                with self.library.lock:
+                    self.checkpoint(job_id)
+                    started = time.perf_counter()
+                    try:
+                        self.library.validate_keyframe_plan(asset_id, plan, expected_id=plan_id)
+                        atomic_json(path, plan)
+                    finally:
+                        metrics["validation_ms"] = round((time.perf_counter() - started) * 1000)
+                self.update(job_id, completed=len(frames), total=len(frames), progress=1,
+                            message=f"关键帧计划已保存，共 {len(frames)} 张")
+                return plan
+            finally:
+                report_metrics()
 
         async with self._scan_slots:
             self.checkpoint(job_id)
-            data = await self._local_work(job_id, work)
-        plan = {**data, "id": plan_id, "plan_id": plan_id, "asset_id": asset_id,
-                "fingerprint": asset["fingerprint"], "start_ms": start_ms, "end_ms": end_ms,
-                "status": "completed", "job_id": job_id, "created_at": now()}
-        with self.library.lock:
-            self.checkpoint(job_id)
-            atomic_json(path, plan)
-        return plan
+            return await self._local_work(job_id, work)
 
     def estimate_batch(self, items, settings):
         from .timing import batch_timing

@@ -124,7 +124,7 @@ def scene_worker(tmp_path, monkeypatch):
             result.append({"id": output.stem, "path": str(output), "at_ms": at})
         return result
 
-    def scan(path, start_ms, end_ms, checkpoint=None, progress=None):
+    def scan(path, start_ms, end_ms, checkpoint=None, progress=None, *, metadata=None, decoder="ffmpeg"):
         scans.append((str(path), start_ms, end_ms))
         frames, shots, batches = [], [], []
         for at in range(start_ms, end_ms, 1000):
@@ -144,7 +144,7 @@ def scene_worker(tmp_path, monkeypatch):
             progress(end_ms - start_ms, end_ms - start_ms)
         return {"algorithm": "content-keyframes-v1", "shots": shots, "frames": frames, "batches": batches}
 
-    def extract_keyframes(path, frames, output_paths, checkpoint=None):
+    def extract_keyframes(path, frames, output_paths, checkpoint=None, *, metadata=None):
         if checkpoint:
             checkpoint()
         actual = extract_frames(path, [frame["at_ms"] for frame in frames], output_paths)

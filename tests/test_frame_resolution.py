@@ -131,10 +131,11 @@ def test_completed_plan_reuse_reads_registry_once_and_never_schedules_scan(tmp_p
     def unexpected(*args, **kwargs):
         pytest.fail("A completed plan must not schedule or inspect scan jobs")
 
-    queue = SimpleNamespace(library=library, _plan_path=lambda _asset, _plan: path,
-                            list=unexpected, add=unexpected, control=unexpected)
+    queue = workflows.WorkflowQueueMixin()
+    queue.library = library
+    queue.list = queue.add = queue.control = unexpected
     reads = registry_reads(monkeypatch)
-    assert workflows.WorkflowQueueMixin.ensure_plan(queue, asset_id) == plan
+    assert queue.ensure_plan(asset_id) == plan
     assert len(reads) == 1
 
 

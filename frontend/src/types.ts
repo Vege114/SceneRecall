@@ -373,6 +373,17 @@ export interface AssetDetail {
   retrieval?: RetrievalProgress;
 }
 export interface Job {
+  keyframe_metrics?: {
+    selection_ms: number;
+    extraction_ms: number;
+    registration_ms: number;
+    validation_ms?: number;
+    elapsed_ms: number;
+    selected_frames: number;
+    reused_frames: number;
+    extracted_frames: number;
+    selection_cache_hit: boolean;
+  };
   retrieval?: RetrievalProgress;
   retrieval_mode?: 'core' | 'complete';
   execution?: ExecutionOptions;

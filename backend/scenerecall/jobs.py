@@ -145,6 +145,8 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
         return job
 
     def _new_job(self, job_type: str, config: dict, asset_id=None) -> dict:
+        if job_type in {"analysis", "keyframe_scan"}:
+            config = self.freeze_keyframe_decoder_profile(config)
         job = {"id": uid("job"), "type": job_type, "asset_id": asset_id, "status": "queued", "stage": "queued",
                "progress": 0, "completed": 0, "total": 0, "message": "等待处理", "error": None,
                "request_count": 0, "cost": None, "known_cost": 0.0, "cost_incomplete": False,
@@ -250,7 +252,7 @@ class JobQueue(RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJ
         if audio_identity.get("enabled") and audio_identity.get("sync_enabled") and audio_identity.get("sync_model_type") == "lrasd":
             from .scene_lrasd import VERSION
             config["lrasd_scene_sampling_version"] = VERSION
-        return asset, config
+        return asset, self.freeze_keyframe_decoder_profile(config)
 
     def estimate(self, request: AnalysisInput, settings: dict) -> dict:
         _, config = self.validate(request, settings)

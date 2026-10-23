@@ -248,7 +248,8 @@ def test_codex_estimate_keeps_subscription_cost_unknown(worker):
     queue.providers.profile.update(provider_type="codex_cli", base_url="", model="")
     frame = {"id": "estimate_frame", "at_ms": 1000, "pts": 1, "time_base": [1, 1],
              "source_pts": 1, "source_time_base": [1, 1], "shot_id": "estimate_shot", "reason": "stable_pose"}
-    plan = {"id": "plan_estimate", "plan_id": "plan_estimate", "asset_id": asset["id"],
+    plan_id = queue._keyframe_plan_id(asset, 0, asset["duration_ms"], "ffmpeg-v1")
+    plan = {"id": plan_id, "plan_id": plan_id, "asset_id": asset["id"],
             "fingerprint": asset["fingerprint"], "start_ms": 0, "end_ms": asset["duration_ms"],
             "status": "completed", "algorithm": "content-keyframes-v1", "frames": [frame],
             "shots": [{"id": "estimate_shot", "start_ms": 0, "end_ms": 4000}],

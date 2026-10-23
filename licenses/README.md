@@ -20,6 +20,7 @@
 | [keyring-MIT.txt](keyring-MIT.txt) | `keyring-25.7.0.dist-info/licenses/LICENSE` |
 | [Pillow-MIT-CMU.txt](Pillow-MIT-CMU.txt) | `pillow-12.3.0.dist-info/licenses/LICENSE` |
 | [PySceneDetect-BSD-3-Clause.txt](PySceneDetect-BSD-3-Clause.txt) | `scenedetect-0.7.1.dist-info/licenses/LICENSE` |
+| [PyAV-BSD-3-Clause.txt](PyAV-BSD-3-Clause.txt) | `av-18.1.0.dist-info/licenses/LICENSE.txt`，2026-10-23 逐字节复制；[上游项目](https://github.com/PyAV-Org/PyAV) |
 | [LanceDB-Apache-2.0.txt](LanceDB-Apache-2.0.txt) | `lancedb-0.39.0.dist-info/licenses/LICENSE` |
 | [pysubs2-MIT.txt](pysubs2-MIT.txt) | `pysubs2-1.9.0.dist-info/licenses/LICENSE.txt` |
 | [psutil-BSD-3-Clause.txt](psutil-BSD-3-Clause.txt) | `psutil-7.2.2.dist-info/LICENSE` |

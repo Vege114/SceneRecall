@@ -44,7 +44,7 @@ def cast_worker(tmp_path, monkeypatch):
 
     monkeypatch.setattr("scenerecall.media.extract_frames", extract)
 
-    def scan_keyframes(path, start, end, checkpoint=None, progress=None):
+    def scan_keyframes(path, start, end, checkpoint=None, progress=None, *, metadata=None, decoder="ffmpeg"):
         # Three explicit content batches isolate identity behavior from detection.
         # Real decoding/selection is covered by test_keyframes, never this fake file.
         shots, frames, batches = [], [], []
@@ -63,7 +63,7 @@ def cast_worker(tmp_path, monkeypatch):
             checkpoint()
         return {"algorithm": "content-keyframes-v1", "shots": shots, "frames": frames, "batches": batches}
 
-    def extract_keyframes(path, frames, outputs, checkpoint=None):
+    def extract_keyframes(path, frames, outputs, checkpoint=None, *, metadata=None):
         result = extract(path, [frame["at_ms"] for frame in frames], outputs)
         return [{**planned, **actual} for planned, actual in zip(frames, result, strict=True)]
 

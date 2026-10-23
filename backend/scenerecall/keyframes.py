@@ -7,6 +7,7 @@ The precise source PTS is retained separately from rounded UI milliseconds.
 from __future__ import annotations
 
 import hashlib
+import math
 import queue
 import re
 import shutil
@@ -21,7 +22,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .media import MediaError, _bounds, _source, _temp_output, _tool, probe
+from .media import MediaError, _bounds, _metadata_for_source, _source, _temp_output, _tool
 from .file_io import atomic_replace
 
 ALGORITHM = "content-keyframes-v1"
@@ -106,7 +107,7 @@ def _decode(path, start_ms, end_ms, metadata, checkpoint):
         "-ss", _seconds(seek), "-t", _seconds(Fraction(end_ms, 1000) - seek), "-i", str(path),
         "-map", f"0:{metadata['video_stream_index']}", "-an", "-sn", "-dn",
         "-vf", (f"trim=end={_seconds(stop)},scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
-                 f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,showinfo"),
+                 f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,showinfo=checksum=0"),
         "-fps_mode", "passthrough", "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1",
     ]
     if checkpoint:
@@ -181,6 +182,109 @@ def _decode(path, start_ms, end_ms, metadata, checkpoint):
                 stream.close()
         for reader in readers:
             reader.join(timeout=2)
+
+
+def _rotation_filters(metadata):
+    """Mirror FFmpeg autorotation, including the display matrix's flip signs."""
+    stream = next((item for item in metadata.get("streams", [])
+                   if item.get("index") == metadata["video_stream_index"]), {})
+    side = next((item for item in stream.get("side_data_list", []) if "rotation" in item), {})
+    try:
+        angle = -float(side.get("rotation", stream.get("tags", {}).get("rotate", 0))) % 360
+    except (TypeError, ValueError) as exc:
+        raise MediaError("PyAV 解码后端无法读取视频旋转信息。") from exc
+    if not math.isfinite(angle):
+        raise MediaError("PyAV 解码后端无法读取视频旋转信息。")
+    matrix = [int(value) for row in re.findall(
+        r"^\s*[0-9a-fA-F]+:\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)",
+        side.get("displaymatrix", ""), re.MULTILINE) for value in row]
+    if matrix and len(matrix) != 9:
+        raise MediaError("PyAV 解码后端无法读取视频显示矩阵。")
+    if abs(angle - 90) < 1:
+        return [("transpose", "cclock_flip" if matrix and matrix[3] > 0 else "clock")]
+    if abs(angle - 180) < 1:
+        return [(name, None) for name, negative in (
+            ("hflip", not matrix or matrix[0] < 0), ("vflip", not matrix or matrix[4] < 0)) if negative]
+    if abs(angle - 270) < 1:
+        return [("transpose", "clock_flip" if matrix and matrix[3] < 0 else "cclock")]
+    if abs(angle) > 1:
+        return [("rotate", f"{angle:.6f}*PI/180")]
+    return [("vflip", None)] if matrix and matrix[4] < 0 else []
+
+
+def _pyav_filter_graph(av, frame, metadata):
+    # Use libavfilter instead of a separate OpenCV resize implementation. Different
+    # bundled FFmpeg versions can still produce different pixels: this is an
+    # explicitly selected decoder, never an automatic fallback to another backend.
+    graph = av.filter.Graph()
+    nodes = [graph.add_buffer(template=frame)]
+    for name, args in _rotation_filters(metadata):
+        nodes.append(graph.add(name, args))
+    nodes.extend([
+        graph.add("scale", f"{WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease"),
+        graph.add("pad", f"{WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2"),
+        graph.add("format", "pix_fmts=bgr24"),
+        graph.add("buffersink"),
+    ])
+    graph.link_nodes(*nodes)
+    graph.configure()
+    return graph
+
+
+def _decode_pyav(path, start_ms, end_ms, metadata, checkpoint):
+    """Decode every picture with native PTS and a bounded cancellation checkpoint."""
+    try:
+        import av
+    except ImportError as exc:
+        raise MediaError("PyAV 解码后端未安装，请修复应用依赖后重试。") from exc
+    if checkpoint:
+        checkpoint()
+    origin = _origin(metadata)
+    seek = max(Fraction(0), Fraction(start_ms, 1000) - 1)
+    stop = origin + Fraction(end_ms, 1000)
+    container = None
+    try:
+        container = av.open(str(path), timeout=(30.0, 30.0))
+        # metadata stores the global stream index, not its ordinal among videos.
+        stream = next((item for item in container.streams
+                       if item.index == metadata["video_stream_index"] and item.type == "video"), None)
+        if stream is None:
+            raise MediaError("PyAV 解码后端找不到计划指定的视频流。")
+        stream.thread_type = "AUTO"
+        if seek:
+            ticks = (origin + seek) / Fraction(stream.time_base)
+            container.seek(ticks.numerator // ticks.denominator, stream=stream,
+                           backward=True, any_frame=False)
+        graph, layout, checked = None, None, 0.0
+        for frame in container.decode(stream):
+            current = time.monotonic()
+            if current - checked >= .2:
+                if checkpoint:
+                    checkpoint()
+                checked = current
+            if frame.pts is None or frame.time_base is None:
+                raise MediaError("关键帧扫描缺少实际媒体时间戳。")
+            base = Fraction(frame.time_base)
+            pts = frame.pts
+            source_time = pts * base
+            if source_time >= stop:
+                break
+            if source_time < origin + seek:
+                continue
+            current_layout = (frame.width, frame.height, frame.format.name, base)
+            if current_layout != layout:
+                graph = _pyav_filter_graph(av, frame, metadata)
+                layout = current_layout
+            graph.push(frame)
+            filtered = graph.pull()
+            if filtered.pts is None or filtered.pts * Fraction(filtered.time_base) != source_time:
+                raise MediaError("PyAV 解码后端改变了画面时间戳。")
+            yield filtered.to_ndarray(), pts, (base.numerator, base.denominator), source_time - origin
+    except av.error.FFmpegError as exc:
+        raise MediaError("PyAV 解码后端无法解码视频。") from exc
+    finally:
+        if container is not None:
+            container.close()
 
 
 def _difference(left, right):
@@ -290,13 +394,15 @@ class _Selector:
 
 
 def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, progress=None,
-                   *, sample_collector=None) -> dict:
+                   *, sample_collector=None, metadata: dict | None = None, decoder: str = "ffmpeg") -> dict:
     from scenedetect import FrameTimecode
     from scenedetect.detectors import ContentDetector
 
     _bounds(start_ms, end_ms)
     source = _source(path)
-    metadata = probe(source)
+    if decoder not in {"ffmpeg", "pyav"}:
+        raise MediaError("未知关键帧解码后端。")
+    metadata = _metadata_for_source(source, metadata)
     if end_ms > metadata["duration_ms"]:
         raise MediaError("分析结束时间超出视频时长。")
     if progress:
@@ -336,7 +442,8 @@ def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, prog
             sample_collector.observe(frame)
         selector.add(frame)
 
-    decoded = _decode(source, start_ms, end_ms, metadata, checkpoint)
+    decode = _decode if decoder == "ffmpeg" else _decode_pyav
+    decoded = decode(source, start_ms, end_ms, metadata, checkpoint)
     try:
         for pixels, pts, base, timestamp in decoded:
             # Earlier decoding exists only for accurate seeks. Public evidence stays
@@ -399,14 +506,15 @@ def _select_expression(timestamps: list[int]) -> str:
     return f"({_select_expression(timestamps[:middle])}+{_select_expression(timestamps[middle:])})"
 
 
-def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None) -> list[dict]:
+def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None,
+                      *, metadata: dict | None = None) -> list[dict]:
     source = _source(path)
     if not 1 <= len(frames) <= 256 or len(frames) != len(out_paths):
         raise MediaError("关键帧提取需要 1–256 个计划画面及相同数量的输出路径。")
     outputs = [Path(output).resolve() for output in out_paths]
     if source in outputs or len(set(outputs)) != len(outputs):
         raise MediaError("抽帧输出路径必须唯一，且不能覆盖原视频。")
-    metadata = probe(source)
+    metadata = _metadata_for_source(source, metadata)
     origin = _origin(metadata)
     targets = []
     for frame in frames:
@@ -437,7 +545,7 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
             _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "info", "-y", "-copyts",
             "-ss", _seconds(max(Fraction(0), targets[0] - origin - 1)), "-i", str(source),
             "-map", f"0:{metadata['video_stream_index']}", "-an", "-sn", "-dn",
-            "-vf", f"select='{select}',showinfo", "-frames:v", str(len(frames)),
+            "-vf", f"select='{select}',showinfo=checksum=0", "-frames:v", str(len(frames)),
             "-fps_mode", "passthrough", "-q:v", "2", "-start_number", "0", str(temporary_dir / "%08d.jpg"),
         ]
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

@@ -39,6 +39,8 @@ DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", 
 
 
 def create_app(data_dir: Path | None = None, start_worker=True, providers=None, token=None, allowed_ports=None):
+    from .opencv_runtime import configure_opencv_threads
+    configure_opencv_threads()
     root = data_dir or Path(os.environ.get("SCENERECALL_DATA", str(Path.home() / "SceneRecallLibrary")))
     library = Library(Path(root))
     characters = CharacterStore(library)

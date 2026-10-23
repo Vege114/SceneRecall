@@ -48,6 +48,7 @@
 | keyring 25.7.0 | 系统凭据存储 | [MIT](licenses/keyring-MIT.txt) |
 | Pillow 12.3.0 | 图片读取与裁剪 | [MIT-CMU / PIL 与 Pillow 声明](licenses/Pillow-MIT-CMU.txt) |
 | PySceneDetect 0.7.1 | 镜头检测 | [BSD-3-Clause](licenses/PySceneDetect-BSD-3-Clause.txt) |
+| [PyAV 18.1.0](https://github.com/PyAV-Org/PyAV) | 关键帧扫描的原生 PTS 解码与 libavfilter 图像转换（2026-10-23 新增核查） | [BSD-3-Clause 原文](licenses/PyAV-BSD-3-Clause.txt)；wheel 携带或链接的 FFmpeg 库保留其各自许可，不能用 PyAV 的代码许可替代 |
 | LanceDB 0.39.0 | 本地检索索引 | [Apache-2.0](licenses/LanceDB-Apache-2.0.txt) |
 | jieba 0.42.1 | 中文分词 | [MIT](licenses/jieba-MIT.txt) |
 | pysubs2 1.9.0 | 字幕解析 | [MIT](licenses/pysubs2-MIT.txt) |

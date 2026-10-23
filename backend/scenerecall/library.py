@@ -303,7 +303,10 @@ class Library:
             work_id = "work_" + digest(identity)
             work = {"schema_version": SCHEMA, "id": work_id, "title": title, "kind": payload.kind,
                     "series": payload.series, "season": payload.season, "episode": payload.episode}
-            asset = {**work, **metadata, "id": asset_id, "work_id": work_id,
+            # Probe reuse tokens describe this local path and belong only to the
+            # in-memory operation, not portable manifests, API assets or backups.
+            persisted_metadata = {key: value for key, value in metadata.items() if not key.startswith("_")}
+            asset = {**work, **persisted_metadata, "id": asset_id, "work_id": work_id,
                      "version": payload.version, "fingerprint": checksum, "file_name": source.name,
                      "subtitle_mode": mode, "subtitle_import_mode": payload.subtitle_mode,
                      "subtitle_offset_ms": payload.subtitle_offset_ms, "subtitle_tracks": tracks,
@@ -547,15 +550,34 @@ class Library:
             atomic_json(self.asset_dir(asset_id) / "active-analysis.json", active)
 
     def register_frame(self, asset_id: str, frame: dict) -> dict:
-        path = Path(frame["path"]).resolve()
+        self.register_frames(asset_id, [frame])
+        return frame
+
+    def register_frames(self, asset_id: str, frames: list[dict]) -> list[dict]:
+        """Commit one extracted batch without rereading and syncing per picture."""
         directory = self.asset_dir(asset_id).resolve()
-        relative = path.relative_to(directory)
+        entries = {}
+        for frame in frames:
+            identity = safe_id(frame["id"])
+            path = Path(frame["path"]).resolve()
+            relative = path.relative_to(directory)
+            if not path.is_file():
+                raise FileNotFoundError("证据帧不存在")
+            if type(frame["at_ms"]) is not int or frame["at_ms"] < 0:
+                raise ValueError("证据帧时间戳无效")
+            entry = {"path": relative.as_posix(), "at_ms": frame["at_ms"]}
+            if identity in entries and entries[identity] != entry:
+                raise ValueError("同批证据帧 ID 存在冲突")
+            entries[identity] = entry
+        if not entries:
+            return frames
         with self.lock:
             registry_path = directory / "frames" / "registry.json"
             registry = read_json(registry_path, {})
-            registry[safe_id(frame["id"])] = {"path": relative.as_posix(), "at_ms": frame["at_ms"]}
-            atomic_json(registry_path, registry)
-        return frame
+            if any(registry.get(identity) != entry for identity, entry in entries.items()):
+                registry.update(entries)
+                atomic_json(registry_path, registry)
+        return frames
 
     def frame_path(self, asset_id: str, frame_id: str) -> Path:
         return self.frame_paths(asset_id, [frame_id])[frame_id]
@@ -578,6 +600,13 @@ class Library:
 
     def validate_keyframe_plan(self, asset_id: str, plan: dict, expected_id: str | None = None) -> dict:
         """Validate saved plans without opening the source video or invoking a model."""
+        return self._validate_keyframe_plan(asset_id, plan, expected_id, require_registered=True)
+
+    def validate_keyframe_selection(self, asset_id: str, plan: dict, expected_id: str) -> dict:
+        """Validate unpublished selection metadata; this does not make a plan usable."""
+        return self._validate_keyframe_plan(asset_id, plan, expected_id, require_registered=False)
+
+    def _validate_keyframe_plan(self, asset_id, plan, expected_id, *, require_registered):
         from fractions import Fraction
         asset = self.get_asset(asset_id, include_deleted=True)
         try:
@@ -618,8 +647,9 @@ class Library:
                     raise ValueError("关键帧计划与视频的精确起始时间不一致")
             elif round(origin * 1000) != asset.get("start_time_ms", 0):
                 raise ValueError("关键帧计划与视频的起始时间不一致")
-            registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
-            self.frame_paths(asset_id, [frame["id"] for frame in plan["frames"]], registry=registry)
+            if require_registered:
+                registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
+                self.frame_paths(asset_id, [frame["id"] for frame in plan["frames"]], registry=registry)
             for frame in plan["frames"]:
                 identity = safe_id(frame["id"])
                 if identity in frames or frame["shot_id"] not in shots:
@@ -638,7 +668,7 @@ class Library:
                         or not shot["start_ms"] <= frame["at_ms"] < shot["end_ms"]
                         or (previous_time is not None and timestamp <= previous_time)):
                     raise ValueError("关键帧时间戳与镜头不一致")
-                if registry[identity].get("at_ms") != frame["at_ms"]:
+                if require_registered and registry[identity].get("at_ms") != frame["at_ms"]:
                     raise ValueError("关键帧计划与已保存证据帧不一致")
                 frames[identity] = frame
                 previous_time = timestamp

@@ -1,0 +1,4008 @@
+{
+  "schema_version": "1.0",
+  "validation": "keyframe-performance-and-equivalence",
+  "date": "2026-10-23",
+  "generated_at": "2026-10-23T17:45:07.038513+08:00",
+  "timezone": "Asia/Shanghai",
+  "candidate": "C",
+  "baseline_revision": "c3c5b77dfed1b29de54c3e52da7eed2050926b04",
+  "status": "completed_measured_gates_passed",
+  "method": {
+    "variants": {
+      "A": "Frozen baseline with default OpenCV threads and per-frame registration",
+      "B": "Current FFmpeg path with selected threads, metadata reuse and batch registration",
+      "C": "Current PyAV path with the same selection algorithm and original-PTS extraction"
+    },
+    "cache": "Fresh process and empty isolated outputs per trial; OS file caches uncontrolled. Trials were sequential with alternating order; no disk-cold claim.",
+    "elapsed": "processing_wall_ms includes probe, scan, preview extraction, registry writes and plan validation/publication. Imports, isolated-library setup, verification hashes and report writes are excluded. trial_wall_ms also includes setup, hash verification and output-size enumeration. No job-queue progress/checkpoint persistence or model inference is measured.",
+    "cpu": "Parent process CPU is measured directly; child CPU is sampled every 100ms and can miss short-lived children or their last interval. These are separate columns, not exact total CPU. Resource measurements include setup and verification hashes, beyond processing_wall_ms.",
+    "memory": "sampled_peak_tree_rss_bytes is the maximum sampled sum of process-tree RSS at 100ms intervals, not a kernel high-water mark or unique physical memory; shared pages may be counted twice.",
+    "pts": "Extraction verifies decoded source PTS before image publication, and plans pass timestamp and registry validation. Exact comparisons require all plan fields and every image hash to match. Saved final comparisons rehashed existing image files; summary generation does not rehash them.",
+    "frame_count": "yielded_frames_including_preroll excludes frames discarded internally while seeking from an earlier GOP; legacy decoded_frames_including_preroll fields have the same meaning.",
+    "source_check": "Source metadata hashes and file size/mtime snapshots remain unchanged; no claim of an additional whole-video content hash during each trial.",
+    "image_review": "Contact sheets are local inspection samples, not an assertion of human review of every frame.",
+    "speed_statistics": "Short clips use 3 runs per variant and paired reduction diagnostics. Full episodes use one run per variant with opposite order between the two episodes; no confidence interval is claimed.",
+    "background_activity": "No other scan/model jobs were active; the idle application service and ordinary desktop/OS background processes were not isolated."
+  },
+  "environments_by_variant": {
+    "A": [
+      {
+        "python_version": "3.12.6",
+        "opencv_version": "5.0.0",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "dependencies": {
+          "numpy": "2.5.3",
+          "scenedetect": "0.7.1",
+          "av": "18.1.0",
+          "psutil": "7.2.2",
+          "Pillow": "12.3.0",
+          "ffmpeg": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+        },
+        "core_code_sha256": {
+          "keyframes.py": "f086ed78121cb20b501e217333a52566010ef79bb2f7d82bc5319e0dadb0c6c7",
+          "media.py": "ca45b3320aeda81dfec1e98844ae82267b9421ad48849bb8f88c657c3fe009a3",
+          "library.py": "27d4e1f036cfa385fa61b7d044d4b67500d49f616deee2a14d893d9eb0897f53"
+        }
+      }
+    ],
+    "B": [
+      {
+        "python_version": "3.12.6",
+        "opencv_version": "5.0.0",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "dependencies": {
+          "numpy": "2.5.3",
+          "scenedetect": "0.7.1",
+          "av": "18.1.0",
+          "psutil": "7.2.2",
+          "Pillow": "12.3.0",
+          "ffmpeg": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+        },
+        "core_code_sha256": {
+          "keyframes.py": "f6ff96fa66db26bd0d32676e99745e3c05230feedd6d9c5e928026f9e95c4736",
+          "media.py": "e722c87b8bba5764fdb6997330919cc048ad3b6c79645fa20131fc06b97177a8",
+          "library.py": "5c058beabaab986025c300d293512b348e1e5308f516c7da7f219e311a286196"
+        }
+      }
+    ],
+    "C": [
+      {
+        "python_version": "3.12.6",
+        "opencv_version": "5.0.0",
+        "platform": "Windows-11-10.0.26200-SP0",
+        "dependencies": {
+          "numpy": "2.5.3",
+          "scenedetect": "0.7.1",
+          "av": "18.1.0",
+          "psutil": "7.2.2",
+          "Pillow": "12.3.0",
+          "ffmpeg": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+        },
+        "core_code_sha256": {
+          "keyframes.py": "f6ff96fa66db26bd0d32676e99745e3c05230feedd6d9c5e928026f9e95c4736",
+          "media.py": "e722c87b8bba5764fdb6997330919cc048ad3b6c79645fa20131fc06b97177a8",
+          "library.py": "5c058beabaab986025c300d293512b348e1e5308f516c7da7f219e311a286196"
+        }
+      }
+    ]
+  },
+  "thread_selection": {
+    "selected_threads": 1,
+    "runs_ms": {
+      "1": [
+        18325.388,
+        17872.58,
+        18189.949
+      ],
+      "2": [
+        19014.326,
+        17951.442,
+        18214.393
+      ],
+      "4": [
+        17801.78,
+        18043.652,
+        18231.198
+      ]
+    },
+    "median_ms": {
+      "1": 18189.949,
+      "2": 18214.393,
+      "4": 18043.652
+    },
+    "rule": "Use one thread if within 5% of the fastest median; otherwise use the fastest."
+  },
+  "short_clip_matrix": {
+    "clips": [
+      {
+        "episode": 4,
+        "position_percent": 10,
+        "start_ms": 144565,
+        "end_ms": 234565,
+        "variants": {
+          "A": {
+            "runs": [
+              {
+                "processing_wall_ms": 22087.621,
+                "trial_wall_ms": 22497.255,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9961.413,
+                  "extract": 8883.378,
+                  "register": 2840.593,
+                  "validate_and_publish": 389.934,
+                  "setup": 65.842,
+                  "verification_hashes": 291.656
+                },
+                "parent_cpu_seconds": 43.34375,
+                "sampled_child_cpu_seconds": 91.328125,
+                "sampled_peak_tree_rss_bytes": 832389120,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 390,
+                "preview_bytes": 51525501,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 22758.94,
+                "trial_wall_ms": 23159.35,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 10283.475,
+                  "extract": 9285.835,
+                  "register": 2807.387,
+                  "validate_and_publish": 368.356,
+                  "setup": 74.199,
+                  "verification_hashes": 277.345
+                },
+                "parent_cpu_seconds": 47.125,
+                "sampled_child_cpu_seconds": 97.25,
+                "sampled_peak_tree_rss_bytes": 832937984,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 390,
+                "preview_bytes": 51525501,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 22059.249,
+                "trial_wall_ms": 22486.945,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9958.908,
+                  "extract": 8810.748,
+                  "register": 2848.194,
+                  "validate_and_publish": 426.672,
+                  "setup": 71.652,
+                  "verification_hashes": 301.954
+                },
+                "parent_cpu_seconds": 39.40625,
+                "sampled_child_cpu_seconds": 88.9375,
+                "sampled_peak_tree_rss_bytes": 832618496,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 390,
+                "preview_bytes": 51525501,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 22087.621,
+              "min": 22059.249,
+              "max": 22758.94
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 0,
+                "median": null,
+                "min": null,
+                "max": null
+              },
+              "scan": {
+                "count": 3,
+                "median": 9961.413,
+                "min": 9958.908,
+                "max": 10283.475
+              },
+              "extract": {
+                "count": 3,
+                "median": 8883.378,
+                "min": 8810.748,
+                "max": 9285.835
+              },
+              "register": {
+                "count": 3,
+                "median": 2840.593,
+                "min": 2807.387,
+                "max": 2848.194
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 389.934,
+                "min": 368.356,
+                "max": 426.672
+              },
+              "setup": {
+                "count": 3,
+                "median": 71.652,
+                "min": 65.842,
+                "max": 74.199
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 291.656,
+                "min": 277.345,
+                "max": 301.954
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 43.34375,
+                "min": 39.40625,
+                "max": 47.125
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 91.328125,
+                "min": 88.9375,
+                "max": 97.25
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 832618496,
+                "min": 832389120,
+                "max": 832937984
+              }
+            }
+          },
+          "B": {
+            "runs": [
+              {
+                "processing_wall_ms": 17929.63,
+                "trial_wall_ms": 18363.485,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 50.6,
+                  "scan": 9335.963,
+                  "extract": 7871.565,
+                  "register": 249.939,
+                  "validate_and_publish": 408.799,
+                  "setup": 74.376,
+                  "verification_hashes": 299.825
+                },
+                "parent_cpu_seconds": 14.65625,
+                "sampled_child_cpu_seconds": 91.71875,
+                "sampled_peak_tree_rss_bytes": 832233472,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 4,
+                "preview_bytes": 51525501,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 17924.801,
+                "trial_wall_ms": 18325.807,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 45.85,
+                  "scan": 9171.39,
+                  "extract": 8057.376,
+                  "register": 233.029,
+                  "validate_and_publish": 404.658,
+                  "setup": 68.486,
+                  "verification_hashes": 279.516
+                },
+                "parent_cpu_seconds": 14.234375,
+                "sampled_child_cpu_seconds": 84.703125,
+                "sampled_peak_tree_rss_bytes": 831700992,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 4,
+                "preview_bytes": 51525501,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 17856.372,
+                "trial_wall_ms": 18271.753,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 44.708,
+                  "scan": 9227.124,
+                  "extract": 7962.423,
+                  "register": 232.97,
+                  "validate_and_publish": 377.411,
+                  "setup": 65.727,
+                  "verification_hashes": 298.469
+                },
+                "parent_cpu_seconds": 14.453125,
+                "sampled_child_cpu_seconds": 85.453125,
+                "sampled_peak_tree_rss_bytes": 831188992,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 4,
+                "preview_bytes": 51525501,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 17924.801,
+              "min": 17856.372,
+              "max": 17929.63
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 45.85,
+                "min": 44.708,
+                "max": 50.6
+              },
+              "scan": {
+                "count": 3,
+                "median": 9227.124,
+                "min": 9171.39,
+                "max": 9335.963
+              },
+              "extract": {
+                "count": 3,
+                "median": 7962.423,
+                "min": 7871.565,
+                "max": 8057.376
+              },
+              "register": {
+                "count": 3,
+                "median": 233.029,
+                "min": 232.97,
+                "max": 249.939
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 404.658,
+                "min": 377.411,
+                "max": 408.799
+              },
+              "setup": {
+                "count": 3,
+                "median": 68.486,
+                "min": 65.727,
+                "max": 74.376
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 298.469,
+                "min": 279.516,
+                "max": 299.825
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 14.453125,
+                "min": 14.234375,
+                "max": 14.65625
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 85.453125,
+                "min": 84.703125,
+                "max": 91.71875
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 831700992,
+                "min": 831188992,
+                "max": 832233472
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.18824983460192468,
+                0.212406157756029,
+                0.19052674912006295
+              ],
+              "median": 0.19052674912006295,
+              "min": 0.18824983460192468,
+              "max": 0.212406157756029
+            },
+            "median_time_reduction_vs_A": 0.18846846385131288
+          },
+          "C": {
+            "runs": [
+              {
+                "processing_wall_ms": 13369.206,
+                "trial_wall_ms": 13814.166,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 54.694,
+                  "scan": 4661.906,
+                  "extract": 7973.038,
+                  "register": 269.416,
+                  "validate_and_publish": 398.634,
+                  "setup": 73.429,
+                  "verification_hashes": 310.149
+                },
+                "parent_cpu_seconds": 44.75,
+                "sampled_child_cpu_seconds": 42.140625,
+                "sampled_peak_tree_rss_bytes": 836681728,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 4,
+                "preview_bytes": 51525501,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 13337.729,
+                "trial_wall_ms": 13757.905,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 45.932,
+                  "scan": 4607.623,
+                  "extract": 8012.902,
+                  "register": 244.607,
+                  "validate_and_publish": 413.667,
+                  "setup": 68.873,
+                  "verification_hashes": 290.828
+                },
+                "parent_cpu_seconds": 43.421875,
+                "sampled_child_cpu_seconds": 39.0625,
+                "sampled_peak_tree_rss_bytes": 837509120,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 4,
+                "preview_bytes": 51525501,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 13485.818,
+                "trial_wall_ms": 13920.601,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 46.897,
+                  "scan": 4813.414,
+                  "extract": 8017.667,
+                  "register": 223.584,
+                  "validate_and_publish": 372.277,
+                  "setup": 69.375,
+                  "verification_hashes": 314.531
+                },
+                "parent_cpu_seconds": 45.0625,
+                "sampled_child_cpu_seconds": 42.53125,
+                "sampled_peak_tree_rss_bytes": 836714496,
+                "frame_count": 390,
+                "shot_count": 100,
+                "batch_count": 109,
+                "extraction_batches": 4,
+                "registry_write_calls": 4,
+                "preview_bytes": 51525501,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 13369.206,
+              "min": 13337.729,
+              "max": 13485.818
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 46.897,
+                "min": 45.932,
+                "max": 54.694
+              },
+              "scan": {
+                "count": 3,
+                "median": 4661.906,
+                "min": 4607.623,
+                "max": 4813.414
+              },
+              "extract": {
+                "count": 3,
+                "median": 8012.902,
+                "min": 7973.038,
+                "max": 8017.667
+              },
+              "register": {
+                "count": 3,
+                "median": 244.607,
+                "min": 223.584,
+                "max": 269.416
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 398.634,
+                "min": 372.277,
+                "max": 413.667
+              },
+              "setup": {
+                "count": 3,
+                "median": 69.375,
+                "min": 68.873,
+                "max": 73.429
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 310.149,
+                "min": 290.828,
+                "max": 314.531
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 44.75,
+                "min": 43.421875,
+                "max": 45.0625
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 42.140625,
+                "min": 39.0625,
+                "max": 42.53125
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 836714496,
+                "min": 836681728,
+                "max": 837509120
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.3947195127985943,
+                0.4139564935801052,
+                0.38865470896130694
+              ],
+              "median": 0.3947195127985943,
+              "min": 0.38865470896130694,
+              "max": 0.4139564935801052
+            },
+            "median_time_reduction_vs_A": 0.3947195127985943
+          }
+        },
+        "comparisons": {
+          "B": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 390,
+                "candidate": 390
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 390,
+                "candidate": 390
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 390,
+                "candidate": 390
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ],
+          "C": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 390,
+                "candidate": 390
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 390,
+                "candidate": 390
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 390,
+                "candidate": 390
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "episode": 4,
+        "position_percent": 50,
+        "start_ms": 722827,
+        "end_ms": 812827,
+        "variants": {
+          "A": {
+            "runs": [
+              {
+                "processing_wall_ms": 16477.305,
+                "trial_wall_ms": 16696.753,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9347.48,
+                  "extract": 5762.928,
+                  "register": 1182.838,
+                  "validate_and_publish": 178.998,
+                  "setup": 69.612,
+                  "verification_hashes": 125.497
+                },
+                "parent_cpu_seconds": 42.046875,
+                "sampled_child_cpu_seconds": 76.515625,
+                "sampled_peak_tree_rss_bytes": 855822336,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 173,
+                "preview_bytes": 26230470,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 16462.647,
+                "trial_wall_ms": 16684.185,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9365.952,
+                  "extract": 5696.443,
+                  "register": 1212.595,
+                  "validate_and_publish": 181.2,
+                  "setup": 68.619,
+                  "verification_hashes": 123.135
+                },
+                "parent_cpu_seconds": 42.59375,
+                "sampled_child_cpu_seconds": 76.140625,
+                "sampled_peak_tree_rss_bytes": 855252992,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 173,
+                "preview_bytes": 26230470,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 16799.555,
+                "trial_wall_ms": 17053.811,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9515.856,
+                  "extract": 5873.967,
+                  "register": 1189.733,
+                  "validate_and_publish": 213.153,
+                  "setup": 71.23,
+                  "verification_hashes": 149.971
+                },
+                "parent_cpu_seconds": 43.234375,
+                "sampled_child_cpu_seconds": 80.71875,
+                "sampled_peak_tree_rss_bytes": 855388160,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 173,
+                "preview_bytes": 26230470,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 16477.305,
+              "min": 16462.647,
+              "max": 16799.555
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 0,
+                "median": null,
+                "min": null,
+                "max": null
+              },
+              "scan": {
+                "count": 3,
+                "median": 9365.952,
+                "min": 9347.48,
+                "max": 9515.856
+              },
+              "extract": {
+                "count": 3,
+                "median": 5762.928,
+                "min": 5696.443,
+                "max": 5873.967
+              },
+              "register": {
+                "count": 3,
+                "median": 1189.733,
+                "min": 1182.838,
+                "max": 1212.595
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 181.2,
+                "min": 178.998,
+                "max": 213.153
+              },
+              "setup": {
+                "count": 3,
+                "median": 69.612,
+                "min": 68.619,
+                "max": 71.23
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 125.497,
+                "min": 123.135,
+                "max": 149.971
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 42.59375,
+                "min": 42.046875,
+                "max": 43.234375
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 76.515625,
+                "min": 76.140625,
+                "max": 80.71875
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 855388160,
+                "min": 855252992,
+                "max": 855822336
+              }
+            }
+          },
+          "B": {
+            "runs": [
+              {
+                "processing_wall_ms": 14417.998,
+                "trial_wall_ms": 14643.097,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 47.001,
+                  "scan": 8618.425,
+                  "extract": 5474.636,
+                  "register": 106.437,
+                  "validate_and_publish": 165.447,
+                  "setup": 68.956,
+                  "verification_hashes": 130.066
+                },
+                "parent_cpu_seconds": 11.734375,
+                "sampled_child_cpu_seconds": 75.640625,
+                "sampled_peak_tree_rss_bytes": 855027712,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 2,
+                "preview_bytes": 26230470,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 14494.0,
+                "trial_wall_ms": 14738.987,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 49.106,
+                  "scan": 8666.514,
+                  "extract": 5465.887,
+                  "register": 106.965,
+                  "validate_and_publish": 199.571,
+                  "setup": 71.469,
+                  "verification_hashes": 135.073
+                },
+                "parent_cpu_seconds": 11.890625,
+                "sampled_child_cpu_seconds": 72.625,
+                "sampled_peak_tree_rss_bytes": 854908928,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 2,
+                "preview_bytes": 26230470,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 14381.876,
+                "trial_wall_ms": 14602.681,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 48.204,
+                  "scan": 8715.008,
+                  "extract": 5336.837,
+                  "register": 109.047,
+                  "validate_and_publish": 166.636,
+                  "setup": 73.824,
+                  "verification_hashes": 122.792
+                },
+                "parent_cpu_seconds": 11.53125,
+                "sampled_child_cpu_seconds": 74.75,
+                "sampled_peak_tree_rss_bytes": 854650880,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 2,
+                "preview_bytes": 26230470,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 14417.998,
+              "min": 14381.876,
+              "max": 14494.0
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 48.204,
+                "min": 47.001,
+                "max": 49.106
+              },
+              "scan": {
+                "count": 3,
+                "median": 8666.514,
+                "min": 8618.425,
+                "max": 8715.008
+              },
+              "extract": {
+                "count": 3,
+                "median": 5465.887,
+                "min": 5336.837,
+                "max": 5474.636
+              },
+              "register": {
+                "count": 3,
+                "median": 106.965,
+                "min": 106.437,
+                "max": 109.047
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 166.636,
+                "min": 165.447,
+                "max": 199.571
+              },
+              "setup": {
+                "count": 3,
+                "median": 71.469,
+                "min": 68.956,
+                "max": 73.824
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 130.066,
+                "min": 122.792,
+                "max": 135.073
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 11.734375,
+                "min": 11.53125,
+                "max": 11.890625
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 74.75,
+                "min": 72.625,
+                "max": 75.640625
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 854908928,
+                "min": 854650880,
+                "max": 855027712
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.12497838693888352,
+                0.11958265277752722,
+                0.1439132762742823
+              ],
+              "median": 0.12497838693888352,
+              "min": 0.11958265277752722,
+              "max": 0.1439132762742823
+            },
+            "median_time_reduction_vs_A": 0.12497838693888352
+          },
+          "C": {
+            "runs": [
+              {
+                "processing_wall_ms": 11052.512,
+                "trial_wall_ms": 11279.261,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 44.686,
+                  "scan": 5208.294,
+                  "extract": 5477.126,
+                  "register": 126.123,
+                  "validate_and_publish": 189.046,
+                  "setup": 71.485,
+                  "verification_hashes": 126.394
+                },
+                "parent_cpu_seconds": 42.3125,
+                "sampled_child_cpu_seconds": 31.25,
+                "sampled_peak_tree_rss_bytes": 859324416,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 2,
+                "preview_bytes": 26230470,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 11161.932,
+                "trial_wall_ms": 11388.124,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 45.613,
+                  "scan": 5307.191,
+                  "extract": 5485.97,
+                  "register": 115.074,
+                  "validate_and_publish": 201.797,
+                  "setup": 67.505,
+                  "verification_hashes": 130.848
+                },
+                "parent_cpu_seconds": 41.015625,
+                "sampled_child_cpu_seconds": 30.15625,
+                "sampled_peak_tree_rss_bytes": 858812416,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 2,
+                "preview_bytes": 26230470,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 11260.942,
+                "trial_wall_ms": 11486.239,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 50.133,
+                  "scan": 5433.026,
+                  "extract": 5476.027,
+                  "register": 108.776,
+                  "validate_and_publish": 186.357,
+                  "setup": 68.606,
+                  "verification_hashes": 131.257
+                },
+                "parent_cpu_seconds": 41.6875,
+                "sampled_child_cpu_seconds": 31.46875,
+                "sampled_peak_tree_rss_bytes": 859148288,
+                "frame_count": 173,
+                "shot_count": 38,
+                "batch_count": 49,
+                "extraction_batches": 2,
+                "registry_write_calls": 2,
+                "preview_bytes": 26230470,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 11161.932,
+              "min": 11052.512,
+              "max": 11260.942
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 45.613,
+                "min": 44.686,
+                "max": 50.133
+              },
+              "scan": {
+                "count": 3,
+                "median": 5307.191,
+                "min": 5208.294,
+                "max": 5433.026
+              },
+              "extract": {
+                "count": 3,
+                "median": 5477.126,
+                "min": 5476.027,
+                "max": 5485.97
+              },
+              "register": {
+                "count": 3,
+                "median": 115.074,
+                "min": 108.776,
+                "max": 126.123
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 189.046,
+                "min": 186.357,
+                "max": 201.797
+              },
+              "setup": {
+                "count": 3,
+                "median": 68.606,
+                "min": 67.505,
+                "max": 71.485
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 130.848,
+                "min": 126.394,
+                "max": 131.257
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 41.6875,
+                "min": 41.015625,
+                "max": 42.3125
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 31.25,
+                "min": 30.15625,
+                "max": 31.46875
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 859148288,
+                "min": 858812416,
+                "max": 859324416
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.3292281717186154,
+                0.32198436861338275,
+                0.3296880780473055
+              ],
+              "median": 0.3292281717186154,
+              "min": 0.32198436861338275,
+              "max": 0.3296880780473055
+            },
+            "median_time_reduction_vs_A": 0.32258752265616253
+          }
+        },
+        "comparisons": {
+          "B": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 173,
+                "candidate": 173
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 173,
+                "candidate": 173
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 173,
+                "candidate": 173
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ],
+          "C": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 173,
+                "candidate": 173
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 173,
+                "candidate": 173
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 173,
+                "candidate": 173
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "episode": 4,
+        "position_percent": 85,
+        "start_ms": 1228806,
+        "end_ms": 1318806,
+        "variants": {
+          "A": {
+            "runs": [
+              {
+                "processing_wall_ms": 14374.098,
+                "trial_wall_ms": 14511.581,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9832.522,
+                  "extract": 3992.296,
+                  "register": 467.766,
+                  "validate_and_publish": 78.258,
+                  "setup": 67.606,
+                  "verification_hashes": 59.587
+                },
+                "parent_cpu_seconds": 41.890625,
+                "sampled_child_cpu_seconds": 66.671875,
+                "sampled_peak_tree_rss_bytes": 731111424,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 69,
+                "preview_bytes": 11576657,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 13711.586,
+                "trial_wall_ms": 13885.805,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9252.367,
+                  "extract": 3906.38,
+                  "register": 444.74,
+                  "validate_and_publish": 105.033,
+                  "setup": 99.944,
+                  "verification_hashes": 61.241
+                },
+                "parent_cpu_seconds": 39.1875,
+                "sampled_child_cpu_seconds": 64.78125,
+                "sampled_peak_tree_rss_bytes": 713195520,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 69,
+                "preview_bytes": 11576657,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 13606.269,
+                "trial_wall_ms": 13746.862,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9188.648,
+                  "extract": 3870.73,
+                  "register": 468.182,
+                  "validate_and_publish": 75.856,
+                  "setup": 73.036,
+                  "verification_hashes": 56.018
+                },
+                "parent_cpu_seconds": 42.34375,
+                "sampled_child_cpu_seconds": 64.484375,
+                "sampled_peak_tree_rss_bytes": 725786624,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 69,
+                "preview_bytes": 11576657,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 13711.586,
+              "min": 13606.269,
+              "max": 14374.098
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 0,
+                "median": null,
+                "min": null,
+                "max": null
+              },
+              "scan": {
+                "count": 3,
+                "median": 9252.367,
+                "min": 9188.648,
+                "max": 9832.522
+              },
+              "extract": {
+                "count": 3,
+                "median": 3906.38,
+                "min": 3870.73,
+                "max": 3992.296
+              },
+              "register": {
+                "count": 3,
+                "median": 467.766,
+                "min": 444.74,
+                "max": 468.182
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 78.258,
+                "min": 75.856,
+                "max": 105.033
+              },
+              "setup": {
+                "count": 3,
+                "median": 73.036,
+                "min": 67.606,
+                "max": 99.944
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 59.587,
+                "min": 56.018,
+                "max": 61.241
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 41.890625,
+                "min": 39.1875,
+                "max": 42.34375
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 64.78125,
+                "min": 64.484375,
+                "max": 66.671875
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 725786624,
+                "min": 713195520,
+                "max": 731111424
+              }
+            }
+          },
+          "B": {
+            "runs": [
+              {
+                "processing_wall_ms": 13027.959,
+                "trial_wall_ms": 13173.74,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 64.563,
+                  "scan": 8966.691,
+                  "extract": 3864.379,
+                  "register": 45.019,
+                  "validate_and_publish": 84.694,
+                  "setup": 82.54,
+                  "verification_hashes": 51.791
+                },
+                "parent_cpu_seconds": 11.265625,
+                "sampled_child_cpu_seconds": 66.109375,
+                "sampled_peak_tree_rss_bytes": 714780672,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 11576657,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 12359.45,
+                "trial_wall_ms": 12494.441,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 50.908,
+                  "scan": 8334.395,
+                  "extract": 3854.225,
+                  "register": 42.699,
+                  "validate_and_publish": 74.694,
+                  "setup": 70.057,
+                  "verification_hashes": 51.895
+                },
+                "parent_cpu_seconds": 10.453125,
+                "sampled_child_cpu_seconds": 63.265625,
+                "sampled_peak_tree_rss_bytes": 713756672,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 11576657,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 12453.966,
+                "trial_wall_ms": 12601.733,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 48.698,
+                  "scan": 8460.572,
+                  "extract": 3798.061,
+                  "register": 55.914,
+                  "validate_and_publish": 87.035,
+                  "setup": 72.757,
+                  "verification_hashes": 59.667
+                },
+                "parent_cpu_seconds": 10.859375,
+                "sampled_child_cpu_seconds": 62.125,
+                "sampled_peak_tree_rss_bytes": 713908224,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 11576657,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 12453.966,
+              "min": 12359.45,
+              "max": 13027.959
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 50.908,
+                "min": 48.698,
+                "max": 64.563
+              },
+              "scan": {
+                "count": 3,
+                "median": 8460.572,
+                "min": 8334.395,
+                "max": 8966.691
+              },
+              "extract": {
+                "count": 3,
+                "median": 3854.225,
+                "min": 3798.061,
+                "max": 3864.379
+              },
+              "register": {
+                "count": 3,
+                "median": 45.019,
+                "min": 42.699,
+                "max": 55.914
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 84.694,
+                "min": 74.694,
+                "max": 87.035
+              },
+              "setup": {
+                "count": 3,
+                "median": 72.757,
+                "min": 70.057,
+                "max": 82.54
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 51.895,
+                "min": 51.791,
+                "max": 59.667
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 10.859375,
+                "min": 10.453125,
+                "max": 11.265625
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 63.265625,
+                "min": 62.125,
+                "max": 66.109375
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 713908224,
+                "min": 713756672,
+                "max": 714780672
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.09365032852844046,
+                0.09861266231346244,
+                0.08468912381491212
+              ],
+              "median": 0.09365032852844046,
+              "min": 0.08468912381491212,
+              "max": 0.09861266231346244
+            },
+            "median_time_reduction_vs_A": 0.09171951370177012
+          },
+          "C": {
+            "runs": [
+              {
+                "processing_wall_ms": 9020.443,
+                "trial_wall_ms": 9154.527,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 61.876,
+                  "scan": 4945.837,
+                  "extract": 3894.472,
+                  "register": 37.704,
+                  "validate_and_publish": 76.635,
+                  "setup": 71.369,
+                  "verification_hashes": 50.915
+                },
+                "parent_cpu_seconds": 38.171875,
+                "sampled_child_cpu_seconds": 24.390625,
+                "sampled_peak_tree_rss_bytes": 718491648,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 11576657,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 8853.917,
+                "trial_wall_ms": 9005.221,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 46.142,
+                  "scan": 4817.639,
+                  "extract": 3863.303,
+                  "register": 42.83,
+                  "validate_and_publish": 80.748,
+                  "setup": 68.86,
+                  "verification_hashes": 65.171
+                },
+                "parent_cpu_seconds": 35.578125,
+                "sampled_child_cpu_seconds": 24.234375,
+                "sampled_peak_tree_rss_bytes": 719380480,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 11576657,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 8832.619,
+                "trial_wall_ms": 8965.753,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2182,
+                "stage_ms": {
+                  "probe": 46.301,
+                  "scan": 4822.04,
+                  "extract": 3845.368,
+                  "register": 38.482,
+                  "validate_and_publish": 76.952,
+                  "setup": 66.304,
+                  "verification_hashes": 53.294
+                },
+                "parent_cpu_seconds": 36.234375,
+                "sampled_child_cpu_seconds": 23.984375,
+                "sampled_peak_tree_rss_bytes": 734633984,
+                "frame_count": 69,
+                "shot_count": 20,
+                "batch_count": 22,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 11576657,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 8853.917,
+              "min": 8832.619,
+              "max": 9020.443
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 46.301,
+                "min": 46.142,
+                "max": 61.876
+              },
+              "scan": {
+                "count": 3,
+                "median": 4822.04,
+                "min": 4817.639,
+                "max": 4945.837
+              },
+              "extract": {
+                "count": 3,
+                "median": 3863.303,
+                "min": 3845.368,
+                "max": 3894.472
+              },
+              "register": {
+                "count": 3,
+                "median": 38.482,
+                "min": 37.704,
+                "max": 42.83
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 76.952,
+                "min": 76.635,
+                "max": 80.748
+              },
+              "setup": {
+                "count": 3,
+                "median": 68.86,
+                "min": 66.304,
+                "max": 71.369
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 53.294,
+                "min": 50.915,
+                "max": 65.171
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 36.234375,
+                "min": 35.578125,
+                "max": 38.171875
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 24.234375,
+                "min": 23.984375,
+                "max": 24.390625
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 719380480,
+                "min": 718491648,
+                "max": 734633984
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.3724515444377797,
+                0.354274771714957,
+                0.35084195380820415
+              ],
+              "median": 0.354274771714957,
+              "min": 0.35084195380820415,
+              "max": 0.3724515444377797
+            },
+            "median_time_reduction_vs_A": 0.354274771714957
+          }
+        },
+        "comparisons": {
+          "B": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 69,
+                "candidate": 69
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 69,
+                "candidate": 69
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 69,
+                "candidate": 69
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ],
+          "C": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 69,
+                "candidate": 69
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 69,
+                "candidate": 69
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 69,
+                "candidate": 69
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "episode": 7,
+        "position_percent": 10,
+        "start_ms": 144561,
+        "end_ms": 234561,
+        "variants": {
+          "A": {
+            "runs": [
+              {
+                "processing_wall_ms": 14296.915,
+                "trial_wall_ms": 14437.429,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9272.286,
+                  "extract": 4500.986,
+                  "register": 436.183,
+                  "validate_and_publish": 83.851,
+                  "setup": 70.936,
+                  "verification_hashes": 56.942
+                },
+                "parent_cpu_seconds": 38.609375,
+                "sampled_child_cpu_seconds": 76.3125,
+                "sampled_peak_tree_rss_bytes": 723451904,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 66,
+                "preview_bytes": 10323774,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 14602.815,
+                "trial_wall_ms": 14744.694,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9518.821,
+                  "extract": 4626.447,
+                  "register": 383.345,
+                  "validate_and_publish": 70.748,
+                  "setup": 74.102,
+                  "verification_hashes": 55.921
+                },
+                "parent_cpu_seconds": 42.4375,
+                "sampled_child_cpu_seconds": 75.71875,
+                "sampled_peak_tree_rss_bytes": 723849216,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 66,
+                "preview_bytes": 10323774,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 14774.429,
+                "trial_wall_ms": 14911.868,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9791.8,
+                  "extract": 4486.653,
+                  "register": 417.492,
+                  "validate_and_publish": 75.954,
+                  "setup": 71.286,
+                  "verification_hashes": 50.031
+                },
+                "parent_cpu_seconds": 42.28125,
+                "sampled_child_cpu_seconds": 76.265625,
+                "sampled_peak_tree_rss_bytes": 723542016,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 66,
+                "preview_bytes": 10323774,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 14602.815,
+              "min": 14296.915,
+              "max": 14774.429
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 0,
+                "median": null,
+                "min": null,
+                "max": null
+              },
+              "scan": {
+                "count": 3,
+                "median": 9518.821,
+                "min": 9272.286,
+                "max": 9791.8
+              },
+              "extract": {
+                "count": 3,
+                "median": 4500.986,
+                "min": 4486.653,
+                "max": 4626.447
+              },
+              "register": {
+                "count": 3,
+                "median": 417.492,
+                "min": 383.345,
+                "max": 436.183
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 75.954,
+                "min": 70.748,
+                "max": 83.851
+              },
+              "setup": {
+                "count": 3,
+                "median": 71.286,
+                "min": 70.936,
+                "max": 74.102
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 55.921,
+                "min": 50.031,
+                "max": 56.942
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 42.28125,
+                "min": 38.609375,
+                "max": 42.4375
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 76.265625,
+                "min": 75.71875,
+                "max": 76.3125
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 723542016,
+                "min": 723451904,
+                "max": 723849216
+              }
+            }
+          },
+          "B": {
+            "runs": [
+              {
+                "processing_wall_ms": 13325.172,
+                "trial_wall_ms": 13461.441,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 47.506,
+                  "scan": 8695.295,
+                  "extract": 4442.17,
+                  "register": 45.66,
+                  "validate_and_publish": 91.0,
+                  "setup": 70.124,
+                  "verification_hashes": 55.509
+                },
+                "parent_cpu_seconds": 10.453125,
+                "sampled_child_cpu_seconds": 74.671875,
+                "sampled_peak_tree_rss_bytes": 724013056,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 10323774,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 13224.865,
+                "trial_wall_ms": 13359.577,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 47.453,
+                  "scan": 8738.367,
+                  "extract": 4318.309,
+                  "register": 41.717,
+                  "validate_and_publish": 75.396,
+                  "setup": 69.757,
+                  "verification_hashes": 53.961
+                },
+                "parent_cpu_seconds": 10.671875,
+                "sampled_child_cpu_seconds": 73.875,
+                "sampled_peak_tree_rss_bytes": 723681280,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 10323774,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 13237.385,
+                "trial_wall_ms": 13370.17,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 52.803,
+                  "scan": 8724.572,
+                  "extract": 4330.855,
+                  "register": 49.802,
+                  "validate_and_publish": 76.677,
+                  "setup": 70.984,
+                  "verification_hashes": 49.432
+                },
+                "parent_cpu_seconds": 10.203125,
+                "sampled_child_cpu_seconds": 75.21875,
+                "sampled_peak_tree_rss_bytes": 722759680,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 10323774,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 13237.385,
+              "min": 13224.865,
+              "max": 13325.172
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 47.506,
+                "min": 47.453,
+                "max": 52.803
+              },
+              "scan": {
+                "count": 3,
+                "median": 8724.572,
+                "min": 8695.295,
+                "max": 8738.367
+              },
+              "extract": {
+                "count": 3,
+                "median": 4330.855,
+                "min": 4318.309,
+                "max": 4442.17
+              },
+              "register": {
+                "count": 3,
+                "median": 45.66,
+                "min": 41.717,
+                "max": 49.802
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 76.677,
+                "min": 75.396,
+                "max": 91.0
+              },
+              "setup": {
+                "count": 3,
+                "median": 70.124,
+                "min": 69.757,
+                "max": 70.984
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 53.961,
+                "min": 49.432,
+                "max": 55.509
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 10.453125,
+                "min": 10.203125,
+                "max": 10.671875
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 74.671875,
+                "min": 73.875,
+                "max": 75.21875
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 723681280,
+                "min": 722759680,
+                "max": 724013056
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.06796871912576952,
+                0.09436194322806946,
+                0.10403407129981135
+              ],
+              "median": 0.09436194322806946,
+              "min": 0.06796871912576952,
+              "max": 0.10403407129981135
+            },
+            "median_time_reduction_vs_A": 0.09350457428927228
+          },
+          "C": {
+            "runs": [
+              {
+                "processing_wall_ms": 9871.187,
+                "trial_wall_ms": 10008.97,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 47.071,
+                  "scan": 5282.176,
+                  "extract": 4421.466,
+                  "register": 48.755,
+                  "validate_and_publish": 68.829,
+                  "setup": 72.292,
+                  "verification_hashes": 53.169
+                },
+                "parent_cpu_seconds": 42.390625,
+                "sampled_child_cpu_seconds": 28.359375,
+                "sampled_peak_tree_rss_bytes": 727982080,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 10323774,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 9890.087,
+                "trial_wall_ms": 10020.362,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 45.751,
+                  "scan": 5360.035,
+                  "extract": 4365.575,
+                  "register": 43.159,
+                  "validate_and_publish": 72.244,
+                  "setup": 69.561,
+                  "verification_hashes": 48.476
+                },
+                "parent_cpu_seconds": 43.4375,
+                "sampled_child_cpu_seconds": 29.203125,
+                "sampled_peak_tree_rss_bytes": 727552000,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 10323774,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 9931.967,
+                "trial_wall_ms": 10068.489,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 46.083,
+                  "scan": 5340.789,
+                  "extract": 4417.82,
+                  "register": 42.77,
+                  "validate_and_publish": 81.212,
+                  "setup": 65.991,
+                  "verification_hashes": 58.425
+                },
+                "parent_cpu_seconds": 42.40625,
+                "sampled_child_cpu_seconds": 27.625,
+                "sampled_peak_tree_rss_bytes": 728031232,
+                "frame_count": 66,
+                "shot_count": 23,
+                "batch_count": 24,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 10323774,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 9890.087,
+              "min": 9871.187,
+              "max": 9931.967
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 46.083,
+                "min": 45.751,
+                "max": 47.071
+              },
+              "scan": {
+                "count": 3,
+                "median": 5340.789,
+                "min": 5282.176,
+                "max": 5360.035
+              },
+              "extract": {
+                "count": 3,
+                "median": 4417.82,
+                "min": 4365.575,
+                "max": 4421.466
+              },
+              "register": {
+                "count": 3,
+                "median": 43.159,
+                "min": 42.77,
+                "max": 48.755
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 72.244,
+                "min": 68.829,
+                "max": 81.212
+              },
+              "setup": {
+                "count": 3,
+                "median": 69.561,
+                "min": 65.991,
+                "max": 72.292
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 53.169,
+                "min": 48.476,
+                "max": 58.425
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 42.40625,
+                "min": 42.390625,
+                "max": 43.4375
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 28.359375,
+                "min": 27.625,
+                "max": 29.203125
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 727982080,
+                "min": 727552000,
+                "max": 728031232
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.3095582508534185,
+                0.3227273645526565,
+                0.32775967179509946
+              ],
+              "median": 0.3227273645526565,
+              "min": 0.3095582508534185,
+              "max": 0.32775967179509946
+            },
+            "median_time_reduction_vs_A": 0.3227273645526565
+          }
+        },
+        "comparisons": {
+          "B": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 66,
+                "candidate": 66
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 66,
+                "candidate": 66
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 66,
+                "candidate": 66
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ],
+          "C": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 66,
+                "candidate": 66
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 66,
+                "candidate": 66
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 66,
+                "candidate": 66
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "episode": 7,
+        "position_percent": 50,
+        "start_ms": 722807,
+        "end_ms": 812807,
+        "variants": {
+          "A": {
+            "runs": [
+              {
+                "processing_wall_ms": 13152.337,
+                "trial_wall_ms": 13268.944,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9362.639,
+                  "extract": 3468.844,
+                  "register": 264.216,
+                  "validate_and_publish": 53.691,
+                  "setup": 76.35,
+                  "verification_hashes": 30.049
+                },
+                "parent_cpu_seconds": 40.359375,
+                "sampled_child_cpu_seconds": 65.546875,
+                "sampled_peak_tree_rss_bytes": 603783168,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 39,
+                "preview_bytes": 4734451,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 13348.278,
+                "trial_wall_ms": 13454.999,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9467.123,
+                  "extract": 3582.814,
+                  "register": 244.25,
+                  "validate_and_publish": 51.136,
+                  "setup": 68.575,
+                  "verification_hashes": 29.216
+                },
+                "parent_cpu_seconds": 39.34375,
+                "sampled_child_cpu_seconds": 65.984375,
+                "sampled_peak_tree_rss_bytes": 600961024,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 39,
+                "preview_bytes": 4734451,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 13237.758,
+                "trial_wall_ms": 13358.319,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9460.799,
+                  "extract": 3463.172,
+                  "register": 259.501,
+                  "validate_and_publish": 51.543,
+                  "setup": 72.293,
+                  "verification_hashes": 37.456
+                },
+                "parent_cpu_seconds": 36.59375,
+                "sampled_child_cpu_seconds": 63.0,
+                "sampled_peak_tree_rss_bytes": 601116672,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 39,
+                "preview_bytes": 4734451,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 13237.758,
+              "min": 13152.337,
+              "max": 13348.278
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 0,
+                "median": null,
+                "min": null,
+                "max": null
+              },
+              "scan": {
+                "count": 3,
+                "median": 9460.799,
+                "min": 9362.639,
+                "max": 9467.123
+              },
+              "extract": {
+                "count": 3,
+                "median": 3468.844,
+                "min": 3463.172,
+                "max": 3582.814
+              },
+              "register": {
+                "count": 3,
+                "median": 259.501,
+                "min": 244.25,
+                "max": 264.216
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 51.543,
+                "min": 51.136,
+                "max": 53.691
+              },
+              "setup": {
+                "count": 3,
+                "median": 72.293,
+                "min": 68.575,
+                "max": 76.35
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 30.049,
+                "min": 29.216,
+                "max": 37.456
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 39.34375,
+                "min": 36.59375,
+                "max": 40.359375
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 65.546875,
+                "min": 63.0,
+                "max": 65.984375
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 601116672,
+                "min": 600961024,
+                "max": 603783168
+              }
+            }
+          },
+          "B": {
+            "runs": [
+              {
+                "processing_wall_ms": 11827.781,
+                "trial_wall_ms": 11938.946,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 61.615,
+                  "scan": 8356.956,
+                  "extract": 3329.212,
+                  "register": 25.28,
+                  "validate_and_publish": 51.734,
+                  "setup": 68.151,
+                  "verification_hashes": 33.195
+                },
+                "parent_cpu_seconds": 9.859375,
+                "sampled_child_cpu_seconds": 66.71875,
+                "sampled_peak_tree_rss_bytes": 599818240,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 4734451,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 12324.107,
+                "trial_wall_ms": 12442.58,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 51.349,
+                  "scan": 8750.84,
+                  "extract": 3434.224,
+                  "register": 29.82,
+                  "validate_and_publish": 54.687,
+                  "setup": 74.857,
+                  "verification_hashes": 31.895
+                },
+                "parent_cpu_seconds": 10.25,
+                "sampled_child_cpu_seconds": 61.703125,
+                "sampled_peak_tree_rss_bytes": 600068096,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 4734451,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 11901.336,
+                "trial_wall_ms": 12016.347,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 48.099,
+                  "scan": 8418.349,
+                  "extract": 3338.335,
+                  "register": 31.565,
+                  "validate_and_publish": 62.182,
+                  "setup": 70.705,
+                  "verification_hashes": 34.182
+                },
+                "parent_cpu_seconds": 10.046875,
+                "sampled_child_cpu_seconds": 62.390625,
+                "sampled_peak_tree_rss_bytes": 601133056,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 4734451,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 11901.336,
+              "min": 11827.781,
+              "max": 12324.107
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 51.349,
+                "min": 48.099,
+                "max": 61.615
+              },
+              "scan": {
+                "count": 3,
+                "median": 8418.349,
+                "min": 8356.956,
+                "max": 8750.84
+              },
+              "extract": {
+                "count": 3,
+                "median": 3338.335,
+                "min": 3329.212,
+                "max": 3434.224
+              },
+              "register": {
+                "count": 3,
+                "median": 29.82,
+                "min": 25.28,
+                "max": 31.565
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 54.687,
+                "min": 51.734,
+                "max": 62.182
+              },
+              "setup": {
+                "count": 3,
+                "median": 70.705,
+                "min": 68.151,
+                "max": 74.857
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 33.195,
+                "min": 31.895,
+                "max": 34.182
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 10.046875,
+                "min": 9.859375,
+                "max": 10.25
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 62.390625,
+                "min": 61.703125,
+                "max": 66.71875
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 600068096,
+                "min": 599818240,
+                "max": 601133056
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.10070879418615863,
+                0.07672682573737233,
+                0.10095531282563108
+              ],
+              "median": 0.10070879418615863,
+              "min": 0.07672682573737233,
+              "max": 0.10095531282563108
+            },
+            "median_time_reduction_vs_A": 0.10095531282563108
+          },
+          "C": {
+            "runs": [
+              {
+                "processing_wall_ms": 8337.715,
+                "trial_wall_ms": 8451.385,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 47.904,
+                  "scan": 4875.275,
+                  "extract": 3321.649,
+                  "register": 31.911,
+                  "validate_and_publish": 57.3,
+                  "setup": 71.355,
+                  "verification_hashes": 31.641
+                },
+                "parent_cpu_seconds": 40.203125,
+                "sampled_child_cpu_seconds": 23.390625,
+                "sampled_peak_tree_rss_bytes": 601178112,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 4734451,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 8374.28,
+                "trial_wall_ms": 8480.375,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 60.702,
+                  "scan": 4779.775,
+                  "extract": 3441.76,
+                  "register": 30.569,
+                  "validate_and_publish": 58.551,
+                  "setup": 68.415,
+                  "verification_hashes": 28.86
+                },
+                "parent_cpu_seconds": 37.734375,
+                "sampled_child_cpu_seconds": 23.34375,
+                "sampled_peak_tree_rss_bytes": 600977408,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 4734451,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 8518.235,
+                "trial_wall_ms": 8631.585,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 48.402,
+                  "scan": 4949.091,
+                  "extract": 3432.521,
+                  "register": 30.782,
+                  "validate_and_publish": 53.59,
+                  "setup": 73.543,
+                  "verification_hashes": 29.048
+                },
+                "parent_cpu_seconds": 40.515625,
+                "sampled_child_cpu_seconds": 24.359375,
+                "sampled_peak_tree_rss_bytes": 604672000,
+                "frame_count": 39,
+                "shot_count": 20,
+                "batch_count": 20,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 4734451,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 8374.28,
+              "min": 8337.715,
+              "max": 8518.235
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 48.402,
+                "min": 47.904,
+                "max": 60.702
+              },
+              "scan": {
+                "count": 3,
+                "median": 4875.275,
+                "min": 4779.775,
+                "max": 4949.091
+              },
+              "extract": {
+                "count": 3,
+                "median": 3432.521,
+                "min": 3321.649,
+                "max": 3441.76
+              },
+              "register": {
+                "count": 3,
+                "median": 30.782,
+                "min": 30.569,
+                "max": 31.911
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 57.3,
+                "min": 53.59,
+                "max": 58.551
+              },
+              "setup": {
+                "count": 3,
+                "median": 71.355,
+                "min": 68.415,
+                "max": 73.543
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 29.048,
+                "min": 28.86,
+                "max": 31.641
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 40.203125,
+                "min": 37.734375,
+                "max": 40.515625
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 23.390625,
+                "min": 23.34375,
+                "max": 24.359375
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 601178112,
+                "min": 600977408,
+                "max": 604672000
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.3660658938407676,
+                0.3726321852152015,
+                0.3565198124939283
+              ],
+              "median": 0.3660658938407676,
+              "min": 0.3565198124939283,
+              "max": 0.3726321852152015
+            },
+            "median_time_reduction_vs_A": 0.3673943880829367
+          }
+        },
+        "comparisons": {
+          "B": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 39,
+                "candidate": 39
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 39,
+                "candidate": 39
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 39,
+                "candidate": 39
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ],
+          "C": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 39,
+                "candidate": 39
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 39,
+                "candidate": 39
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 39,
+                "candidate": 39
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ]
+        }
+      },
+      {
+        "episode": 7,
+        "position_percent": 85,
+        "start_ms": 1228772,
+        "end_ms": 1318772,
+        "variants": {
+          "A": {
+            "runs": [
+              {
+                "processing_wall_ms": 13471.032,
+                "trial_wall_ms": 13604.799,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9404.967,
+                  "extract": 3546.275,
+                  "register": 437.027,
+                  "validate_and_publish": 78.594,
+                  "setup": 71.865,
+                  "verification_hashes": 49.977
+                },
+                "parent_cpu_seconds": 49.203125,
+                "sampled_child_cpu_seconds": 65.375,
+                "sampled_peak_tree_rss_bytes": 707604480,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 64,
+                "preview_bytes": 8767574,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 13534.865,
+                "trial_wall_ms": 13673.564,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9514.724,
+                  "extract": 3518.662,
+                  "register": 422.933,
+                  "validate_and_publish": 75.034,
+                  "setup": 73.681,
+                  "verification_hashes": 52.431
+                },
+                "parent_cpu_seconds": 39.3125,
+                "sampled_child_cpu_seconds": 64.59375,
+                "sampled_peak_tree_rss_bytes": 707543040,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 64,
+                "preview_bytes": 8767574,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 13211.502,
+                "trial_wall_ms": 13351.063,
+                "opencv_threads": 32,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": null,
+                  "scan": 9045.084,
+                  "extract": 3661.137,
+                  "register": 427.92,
+                  "validate_and_publish": 73.684,
+                  "setup": 70.311,
+                  "verification_hashes": 53.935
+                },
+                "parent_cpu_seconds": 40.34375,
+                "sampled_child_cpu_seconds": 66.140625,
+                "sampled_peak_tree_rss_bytes": 707641344,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 64,
+                "preview_bytes": 8767574,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 13471.032,
+              "min": 13211.502,
+              "max": 13534.865
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 0,
+                "median": null,
+                "min": null,
+                "max": null
+              },
+              "scan": {
+                "count": 3,
+                "median": 9404.967,
+                "min": 9045.084,
+                "max": 9514.724
+              },
+              "extract": {
+                "count": 3,
+                "median": 3546.275,
+                "min": 3518.662,
+                "max": 3661.137
+              },
+              "register": {
+                "count": 3,
+                "median": 427.92,
+                "min": 422.933,
+                "max": 437.027
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 75.034,
+                "min": 73.684,
+                "max": 78.594
+              },
+              "setup": {
+                "count": 3,
+                "median": 71.865,
+                "min": 70.311,
+                "max": 73.681
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 52.431,
+                "min": 49.977,
+                "max": 53.935
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 40.34375,
+                "min": 39.3125,
+                "max": 49.203125
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 65.375,
+                "min": 64.59375,
+                "max": 66.140625
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 707604480,
+                "min": 707543040,
+                "max": 707641344
+              }
+            }
+          },
+          "B": {
+            "runs": [
+              {
+                "processing_wall_ms": 12306.191,
+                "trial_wall_ms": 12440.385,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 48.284,
+                  "scan": 8408.973,
+                  "extract": 3723.442,
+                  "register": 48.905,
+                  "validate_and_publish": 73.831,
+                  "setup": 69.476,
+                  "verification_hashes": 51.118
+                },
+                "parent_cpu_seconds": 10.375,
+                "sampled_child_cpu_seconds": 66.921875,
+                "sampled_peak_tree_rss_bytes": 705990656,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 8767574,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 12304.042,
+                "trial_wall_ms": 12452.107,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 52.582,
+                  "scan": 8508.556,
+                  "extract": 3602.434,
+                  "register": 46.683,
+                  "validate_and_publish": 91.298,
+                  "setup": 70.916,
+                  "verification_hashes": 57.957
+                },
+                "parent_cpu_seconds": 10.578125,
+                "sampled_child_cpu_seconds": 62.078125,
+                "sampled_peak_tree_rss_bytes": 706772992,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 8767574,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 12245.588,
+                "trial_wall_ms": 12381.199,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 47.168,
+                  "scan": 8375.574,
+                  "extract": 3708.399,
+                  "register": 38.818,
+                  "validate_and_publish": 72.188,
+                  "setup": 69.356,
+                  "verification_hashes": 53.364
+                },
+                "parent_cpu_seconds": 10.21875,
+                "sampled_child_cpu_seconds": 66.515625,
+                "sampled_peak_tree_rss_bytes": 705744896,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 8767574,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 12304.042,
+              "min": 12245.588,
+              "max": 12306.191
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 48.284,
+                "min": 47.168,
+                "max": 52.582
+              },
+              "scan": {
+                "count": 3,
+                "median": 8408.973,
+                "min": 8375.574,
+                "max": 8508.556
+              },
+              "extract": {
+                "count": 3,
+                "median": 3708.399,
+                "min": 3602.434,
+                "max": 3723.442
+              },
+              "register": {
+                "count": 3,
+                "median": 46.683,
+                "min": 38.818,
+                "max": 48.905
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 73.831,
+                "min": 72.188,
+                "max": 91.298
+              },
+              "setup": {
+                "count": 3,
+                "median": 69.476,
+                "min": 69.356,
+                "max": 70.916
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 53.364,
+                "min": 51.118,
+                "max": 57.957
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 10.375,
+                "min": 10.21875,
+                "max": 10.578125
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 66.515625,
+                "min": 62.078125,
+                "max": 66.921875
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 705990656,
+                "min": 705744896,
+                "max": 706772992
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.08647006406042224,
+                0.09093722028258133,
+                0.07311159624393959
+              ],
+              "median": 0.08647006406042224,
+              "min": 0.07311159624393959,
+              "max": 0.09093722028258133
+            },
+            "median_time_reduction_vs_A": 0.0866295915561629
+          },
+          "C": {
+            "runs": [
+              {
+                "processing_wall_ms": 8601.992,
+                "trial_wall_ms": 8729.092,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 46.943,
+                  "scan": 4832.231,
+                  "extract": 3606.976,
+                  "register": 39.928,
+                  "validate_and_publish": 72.116,
+                  "setup": 69.222,
+                  "verification_hashes": 45.845
+                },
+                "parent_cpu_seconds": 36.8125,
+                "sampled_child_cpu_seconds": 24.671875,
+                "sampled_peak_tree_rss_bytes": 707964928,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 8767574,
+                "repetition": 0
+              },
+              {
+                "processing_wall_ms": 8805.912,
+                "trial_wall_ms": 8950.249,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 49.967,
+                  "scan": 5129.088,
+                  "extract": 3504.67,
+                  "register": 42.036,
+                  "validate_and_publish": 77.556,
+                  "setup": 77.174,
+                  "verification_hashes": 51.398
+                },
+                "parent_cpu_seconds": 35.640625,
+                "sampled_child_cpu_seconds": 24.0,
+                "sampled_peak_tree_rss_bytes": 707551232,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 8767574,
+                "repetition": 1
+              },
+              {
+                "processing_wall_ms": 8436.575,
+                "trial_wall_ms": 8570.589,
+                "opencv_threads": 1,
+                "yielded_frames_including_preroll": 2181,
+                "stage_ms": {
+                  "probe": 58.326,
+                  "scan": 4813.163,
+                  "extract": 3435.919,
+                  "register": 45.162,
+                  "validate_and_publish": 81.407,
+                  "setup": 68.825,
+                  "verification_hashes": 52.353
+                },
+                "parent_cpu_seconds": 35.640625,
+                "sampled_child_cpu_seconds": 24.9375,
+                "sampled_peak_tree_rss_bytes": 710905856,
+                "frame_count": 64,
+                "shot_count": 27,
+                "batch_count": 29,
+                "extraction_batches": 1,
+                "registry_write_calls": 1,
+                "preview_bytes": 8767574,
+                "repetition": 2
+              }
+            ],
+            "processing_wall_ms": {
+              "count": 3,
+              "median": 8601.992,
+              "min": 8436.575,
+              "max": 8805.912
+            },
+            "stage_ms": {
+              "probe": {
+                "count": 3,
+                "median": 49.967,
+                "min": 46.943,
+                "max": 58.326
+              },
+              "scan": {
+                "count": 3,
+                "median": 4832.231,
+                "min": 4813.163,
+                "max": 5129.088
+              },
+              "extract": {
+                "count": 3,
+                "median": 3504.67,
+                "min": 3435.919,
+                "max": 3606.976
+              },
+              "register": {
+                "count": 3,
+                "median": 42.036,
+                "min": 39.928,
+                "max": 45.162
+              },
+              "validate_and_publish": {
+                "count": 3,
+                "median": 77.556,
+                "min": 72.116,
+                "max": 81.407
+              },
+              "setup": {
+                "count": 3,
+                "median": 69.222,
+                "min": 68.825,
+                "max": 77.174
+              },
+              "verification_hashes": {
+                "count": 3,
+                "median": 51.398,
+                "min": 45.845,
+                "max": 52.353
+              }
+            },
+            "resources": {
+              "parent_cpu_seconds": {
+                "count": 3,
+                "median": 35.640625,
+                "min": 35.640625,
+                "max": 36.8125
+              },
+              "sampled_child_cpu_seconds": {
+                "count": 3,
+                "median": 24.671875,
+                "min": 24.0,
+                "max": 24.9375
+              },
+              "sampled_peak_tree_rss_bytes": {
+                "count": 3,
+                "median": 707964928,
+                "min": 707551232,
+                "max": 710905856
+              }
+            },
+            "paired_reduction_vs_A": {
+              "values": [
+                0.3614452107306997,
+                0.34939048154525365,
+                0.3614219639825963
+              ],
+              "median": 0.3614219639825963,
+              "min": 0.34939048154525365,
+              "max": 0.3614452107306997
+            },
+            "median_time_reduction_vs_A": 0.3614452107306997
+          }
+        },
+        "comparisons": {
+          "B": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 64,
+                "candidate": 64
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 64,
+                "candidate": 64
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 64,
+                "candidate": 64
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ],
+          "C": [
+            {
+              "repetition": 0,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 64,
+                "candidate": 64
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 1,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 64,
+                "candidate": 64
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            },
+            {
+              "repetition": 2,
+              "exact_plan_equal": true,
+              "existing_image_hashes_equal": true,
+              "verified_images": {
+                "baseline": 64,
+                "candidate": 64
+              },
+              "max_nearest_source_pts_difference_ms": {
+                "baseline_to_candidate": 0.0,
+                "candidate_to_baseline": 0.0
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "completed_trials": 54,
+    "verified_comparisons": 36,
+    "sum_of_clip_median_ms": {
+      "A": 93588.117,
+      "B": 82239.52799999999,
+      "C": 60251.414000000004
+    },
+    "C_additional_reduction_vs_B_from_clip_medians": 0.26736673391413424,
+    "aggregation_note": "The sum of clip medians is a descriptive aggregate, not a measured continuous run."
+  },
+  "full_episodes": {
+    "episodes": [
+      {
+        "episode": 4,
+        "start_ms": 0,
+        "end_ms": 1445655,
+        "variants": {
+          "A": {
+            "processing_wall_ms": 259418.696,
+            "trial_wall_ms": 262040.582,
+            "opencv_threads": 32,
+            "yielded_frames_including_preroll": 34661,
+            "stage_ms": {
+              "probe": null,
+              "scan": 151487.737,
+              "extract": 74819.631,
+              "register": 30549.287,
+              "validate_and_publish": 2480.838,
+              "setup": 77.5,
+              "verification_hashes": 2132.748
+            },
+            "parent_cpu_seconds": 702.640625,
+            "sampled_child_cpu_seconds": 1215.96875,
+            "sampled_peak_tree_rss_bytes": 876204032,
+            "frame_count": 2434,
+            "shot_count": 540,
+            "batch_count": 652,
+            "extraction_batches": 20,
+            "registry_write_calls": 2434,
+            "preview_bytes": 366852194
+          },
+          "C": {
+            "processing_wall_ms": 138016.643,
+            "trial_wall_ms": 140298.942,
+            "opencv_threads": 1,
+            "yielded_frames_including_preroll": 34661,
+            "stage_ms": {
+              "probe": 48.854,
+              "scan": 65507.117,
+              "extract": 68468.745,
+              "register": 1584.051,
+              "validate_and_publish": 2336.03,
+              "setup": 72.843,
+              "verification_hashes": 1917.296
+            },
+            "parent_cpu_seconds": 599.75,
+            "sampled_child_cpu_seconds": 477.546875,
+            "sampled_peak_tree_rss_bytes": 879554560,
+            "frame_count": 2434,
+            "shot_count": 540,
+            "batch_count": 652,
+            "extraction_batches": 20,
+            "registry_write_calls": 20,
+            "preview_bytes": 366852194
+          }
+        },
+        "environments": {
+          "A": {
+            "python_version": "3.12.6",
+            "opencv_version": "5.0.0",
+            "platform": "Windows-11-10.0.26200-SP0",
+            "dependencies": {
+              "numpy": "2.5.3",
+              "scenedetect": "0.7.1",
+              "av": "18.1.0",
+              "psutil": "7.2.2",
+              "Pillow": "12.3.0",
+              "ffmpeg": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "core_code_sha256": {
+              "keyframes.py": "f086ed78121cb20b501e217333a52566010ef79bb2f7d82bc5319e0dadb0c6c7",
+              "media.py": "ca45b3320aeda81dfec1e98844ae82267b9421ad48849bb8f88c657c3fe009a3",
+              "library.py": "27d4e1f036cfa385fa61b7d044d4b67500d49f616deee2a14d893d9eb0897f53"
+            }
+          },
+          "C": {
+            "python_version": "3.12.6",
+            "opencv_version": "5.0.0",
+            "platform": "Windows-11-10.0.26200-SP0",
+            "dependencies": {
+              "numpy": "2.5.3",
+              "scenedetect": "0.7.1",
+              "av": "18.1.0",
+              "psutil": "7.2.2",
+              "Pillow": "12.3.0",
+              "ffmpeg": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "core_code_sha256": {
+              "keyframes.py": "f6ff96fa66db26bd0d32676e99745e3c05230feedd6d9c5e928026f9e95c4736",
+              "media.py": "e722c87b8bba5764fdb6997330919cc048ad3b6c79645fa20131fc06b97177a8",
+              "library.py": "5c058beabaab986025c300d293512b348e1e5308f516c7da7f219e311a286196"
+            }
+          }
+        },
+        "verification": {
+          "exact_plan_equal": true,
+          "existing_image_hashes_equal": true,
+          "verified_images": {
+            "baseline": 2434,
+            "candidate": 2434
+          },
+          "max_nearest_source_pts_difference_ms": {
+            "baseline_to_candidate": 0.0,
+            "candidate_to_baseline": 0.0
+          }
+        },
+        "reduction_fraction": 0.46797726945632323
+      },
+      {
+        "episode": 7,
+        "start_ms": 0,
+        "end_ms": 1445615,
+        "variants": {
+          "A": {
+            "processing_wall_ms": 226019.585,
+            "trial_wall_ms": 227434.221,
+            "opencv_threads": 32,
+            "yielded_frames_including_preroll": 34660,
+            "stage_ms": {
+              "probe": null,
+              "scan": 146699.574,
+              "extract": 63976.021,
+              "register": 13968.736,
+              "validate_and_publish": 1335.602,
+              "setup": 73.741,
+              "verification_hashes": 1135.794
+            },
+            "parent_cpu_seconds": 647.875,
+            "sampled_child_cpu_seconds": 1157.34375,
+            "sampled_peak_tree_rss_bytes": 880902144,
+            "frame_count": 1454,
+            "shot_count": 460,
+            "batch_count": 508,
+            "extraction_batches": 12,
+            "registry_write_calls": 1454,
+            "preview_bytes": 217550506
+          },
+          "C": {
+            "processing_wall_ms": 142624.446,
+            "trial_wall_ms": 143988.519,
+            "opencv_threads": 1,
+            "yielded_frames_including_preroll": 34660,
+            "stage_ms": {
+              "probe": 52.326,
+              "scan": 78082.712,
+              "extract": 62145.623,
+              "register": 951.468,
+              "validate_and_publish": 1352.174,
+              "setup": 69.754,
+              "verification_hashes": 1080.079
+            },
+            "parent_cpu_seconds": 662.0625,
+            "sampled_child_cpu_seconds": 452.265625,
+            "sampled_peak_tree_rss_bytes": 884740096,
+            "frame_count": 1454,
+            "shot_count": 460,
+            "batch_count": 508,
+            "extraction_batches": 12,
+            "registry_write_calls": 12,
+            "preview_bytes": 217550506
+          }
+        },
+        "environments": {
+          "A": {
+            "python_version": "3.12.6",
+            "opencv_version": "5.0.0",
+            "platform": "Windows-11-10.0.26200-SP0",
+            "dependencies": {
+              "numpy": "2.5.3",
+              "scenedetect": "0.7.1",
+              "av": "18.1.0",
+              "psutil": "7.2.2",
+              "Pillow": "12.3.0",
+              "ffmpeg": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "core_code_sha256": {
+              "keyframes.py": "f086ed78121cb20b501e217333a52566010ef79bb2f7d82bc5319e0dadb0c6c7",
+              "media.py": "ca45b3320aeda81dfec1e98844ae82267b9421ad48849bb8f88c657c3fe009a3",
+              "library.py": "27d4e1f036cfa385fa61b7d044d4b67500d49f616deee2a14d893d9eb0897f53"
+            }
+          },
+          "C": {
+            "python_version": "3.12.6",
+            "opencv_version": "5.0.0",
+            "platform": "Windows-11-10.0.26200-SP0",
+            "dependencies": {
+              "numpy": "2.5.3",
+              "scenedetect": "0.7.1",
+              "av": "18.1.0",
+              "psutil": "7.2.2",
+              "Pillow": "12.3.0",
+              "ffmpeg": "ffmpeg version 9.0.2-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+            },
+            "core_code_sha256": {
+              "keyframes.py": "f6ff96fa66db26bd0d32676e99745e3c05230feedd6d9c5e928026f9e95c4736",
+              "media.py": "e722c87b8bba5764fdb6997330919cc048ad3b6c79645fa20131fc06b97177a8",
+              "library.py": "5c058beabaab986025c300d293512b348e1e5308f516c7da7f219e311a286196"
+            }
+          }
+        },
+        "verification": {
+          "exact_plan_equal": true,
+          "existing_image_hashes_equal": true,
+          "verified_images": {
+            "baseline": 1454,
+            "candidate": 1454
+          },
+          "max_nearest_source_pts_difference_ms": {
+            "baseline_to_candidate": 0.0,
+            "candidate_to_baseline": 0.0
+          }
+        },
+        "reduction_fraction": 0.3689730648784263
+      }
+    ],
+    "summed_processing_wall_ms": {
+      "A": 485438.28099999996,
+      "C": 280641.08900000004
+    },
+    "combined_reduction_fraction": 0.4218810094212573,
+    "combined_reduction_definition": "1 - sum(candidate episode times) / sum(baseline episode times)",
+    "repetitions_per_episode_variant": 1,
+    "order": [
+      {
+        "episode": 4,
+        "variants": [
+          "A",
+          "C"
+        ]
+      },
+      {
+        "episode": 7,
+        "variants": [
+          "C",
+          "A"
+        ]
+      }
+    ]
+  },
+  "production": {
+    "episodes": [
+      {
+        "episode": 4,
+        "duration_ms": 1445655,
+        "status": "completed",
+        "frame_count": 2434,
+        "shot_count": 540,
+        "batch_count": 652,
+        "current_attempt_metrics": {
+          "selection_ms": 0,
+          "extraction_ms": 0,
+          "registration_ms": 0,
+          "validation_ms": 2111,
+          "elapsed_ms": 2621,
+          "selected_frames": 2434,
+          "reused_frames": 2434,
+          "extracted_frames": 0,
+          "selection_cache_hit": true,
+          "decoder_profile": "pyav-libavfilter-v1"
+        }
+      },
+      {
+        "episode": 5,
+        "duration_ms": 1446784,
+        "status": "completed",
+        "frame_count": 2872,
+        "shot_count": 670,
+        "batch_count": 808,
+        "current_attempt_metrics": {
+          "selection_ms": 78501,
+          "extraction_ms": 68840,
+          "registration_ms": 1716,
+          "validation_ms": 2330,
+          "elapsed_ms": 152375,
+          "selected_frames": 2872,
+          "reused_frames": 0,
+          "extracted_frames": 2872,
+          "selection_cache_hit": false,
+          "decoder_profile": "pyav-libavfilter-v1"
+        }
+      },
+      {
+        "episode": 6,
+        "duration_ms": 1445780,
+        "status": "completed",
+        "frame_count": 3024,
+        "shot_count": 674,
+        "batch_count": 813,
+        "current_attempt_metrics": {
+          "selection_ms": 78080,
+          "extraction_ms": 69853,
+          "registration_ms": 1680,
+          "validation_ms": 2090,
+          "elapsed_ms": 152773,
+          "selected_frames": 3024,
+          "reused_frames": 0,
+          "extracted_frames": 3024,
+          "selection_cache_hit": false,
+          "decoder_profile": "pyav-libavfilter-v1"
+        }
+      },
+      {
+        "episode": 7,
+        "duration_ms": 1445615,
+        "status": "completed",
+        "frame_count": 1454,
+        "shot_count": 460,
+        "batch_count": 508,
+        "current_attempt_metrics": {
+          "selection_ms": 0,
+          "extraction_ms": 0,
+          "registration_ms": 0,
+          "validation_ms": 1447,
+          "elapsed_ms": 1749,
+          "selected_frames": 1454,
+          "reused_frames": 1454,
+          "extracted_frames": 0,
+          "selection_cache_hit": true,
+          "decoder_profile": "pyav-libavfilter-v1"
+        }
+      },
+      {
+        "episode": 8,
+        "duration_ms": 1445655,
+        "status": "completed",
+        "frame_count": 3613,
+        "shot_count": 867,
+        "batch_count": 1013,
+        "current_attempt_metrics": {
+          "selection_ms": 75322,
+          "extraction_ms": 70416,
+          "registration_ms": 1765,
+          "validation_ms": 1870,
+          "elapsed_ms": 150613,
+          "selected_frames": 3613,
+          "reused_frames": 0,
+          "extracted_frames": 3613,
+          "selection_cache_hit": false,
+          "decoder_profile": "pyav-libavfilter-v1"
+        }
+      }
+    ],
+    "completed_episode_count": 5,
+    "model_requests": 0,
+    "all_images_readable": true,
+    "source_snapshots_unchanged": true,
+    "unchanged_existing_completed_plans": true,
+    "timing_note": "Current-attempt metrics can describe promotion/reuse, partial recovery, or a new scan. They are not fresh-process benchmark timings and are never included in speedup calculations.",
+    "unchanged_existing_jobs": true,
+    "unchanged_unrelated_metadata": true,
+    "existing_completed_plans_unchanged_count": 7,
+    "metadata_files_backed_up": 47746
+  },
+  "adoption_thresholds": {
+    "full_combined_reduction_min": 0.2,
+    "per_episode_regression_max": 0.05,
+    "C_extra_over_B_min": 0.1
+  },
+  "adoption_gates": {
+    "full_combined_reduction": true,
+    "per_episode_regression": true,
+    "candidate_extra_over_B_on_short_clips": true,
+    "exact_quality_with_existing_image_rehash": true,
+    "production_integrity_checks": true
+  },
+  "visual_review": {
+    "status": "reviewed",
+    "review_type": "sampled_side_by_side_visual_inspection",
+    "episodes": [
+      {
+        "episode": 4,
+        "sampled_pairs": [
+          {
+            "at_ms": 3962,
+            "shot_duration_ms": 5255
+          },
+          {
+            "at_ms": 35369,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 35452,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 142434,
+            "shot_duration_ms": 2085
+          },
+          {
+            "at_ms": 146021,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 154780,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 201243,
+            "shot_duration_ms": 1752
+          },
+          {
+            "at_ms": 449449,
+            "shot_duration_ms": 2335
+          },
+          {
+            "at_ms": 772188,
+            "shot_duration_ms": 3253
+          },
+          {
+            "at_ms": 904779,
+            "shot_duration_ms": 3378
+          },
+          {
+            "at_ms": 1182390,
+            "shot_duration_ms": 1752
+          },
+          {
+            "at_ms": 1444652,
+            "shot_duration_ms": 1003
+          }
+        ]
+      },
+      {
+        "episode": 7,
+        "sampled_pairs": [
+          {
+            "at_ms": 0,
+            "shot_duration_ms": 3670
+          },
+          {
+            "at_ms": 290457,
+            "shot_duration_ms": 4004
+          },
+          {
+            "at_ms": 343385,
+            "shot_duration_ms": 2085
+          },
+          {
+            "at_ms": 345971,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 346054,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 354813,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 355105,
+            "shot_duration_ms": 83
+          },
+          {
+            "at_ms": 369035,
+            "shot_duration_ms": 292
+          },
+          {
+            "at_ms": 536995,
+            "shot_duration_ms": 2252
+          },
+          {
+            "at_ms": 922130,
+            "shot_duration_ms": 5005
+          },
+          {
+            "at_ms": 1239280,
+            "shot_duration_ms": 3003
+          },
+          {
+            "at_ms": 1444610,
+            "shot_duration_ms": 1005
+          }
+        ]
+      }
+    ],
+    "finding": "No visible extraction, framing, color or timestamp mismatch in sampled pairs. Stylized transitions and terminal black frames are present in both versions.",
+    "limitation": "Sampled sanity review, not exhaustive semantic ground truth. Exact plan and all-image SHA256 comparison is reported separately."
+  },
+  "tests": {
+    "backend_unique_passed": 351,
+    "backend_skipped": 3,
+    "backend_scope": "keyframes, media, workflows, promotion, benchmark, retrieval sampling/jobs, concurrency, frame registry, backups, old-plan compatibility and recovery",
+    "backend_runs": [
+      {
+        "scope": "decoder/media",
+        "passed_first": 49,
+        "corrected_color_fixture_rerun_passed": 5
+      },
+      {
+        "scope": "workflow/promotion/episode",
+        "passed": 61
+      },
+      {
+        "scope": "benchmark",
+        "passed": 18
+      },
+      {
+        "scope": "retrieval/concurrency/storage/compatibility",
+        "passed_first": 217,
+        "initial_fixture_failure": 1,
+        "skipped": 3,
+        "frame_resolution_rerun_passed": 21,
+        "unique_final_passed": 218
+      }
+    ],
+    "skip_reason": "Three POSIX filename/legacy receipt cases cannot run on Windows.",
+    "frontend_tests_passed": 314,
+    "frontend_test_files": 30,
+    "frontend_build": "passed",
+    "ruff": "passed",
+    "lock_check": "passed",
+    "lock_av_version": "18.1.0"
+  }
+}

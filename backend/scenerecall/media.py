@@ -42,6 +42,21 @@ def _source(path: Path) -> Path:
     return path
 
 
+def _source_identity(path: Path) -> dict:
+    stat = path.stat()
+    path_digest = hashlib.sha256(os.path.normcase(str(path)).encode("utf-8")).hexdigest()
+    return {"path_digest": path_digest, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _metadata_for_source(path: Path, metadata: dict | None) -> dict:
+    """Reuse only metadata probed for this unchanged local file."""
+    if metadata is None:
+        return probe(path)
+    if not isinstance(metadata, dict) or metadata.get("_source_identity") != _source_identity(path):
+        raise MediaError("复用的视频元数据不属于当前文件，或文件已变化，请重新探测。")
+    return metadata
+
+
 def _run(args: list[str], timeout: int = 120, allow_failure: bool = False) -> subprocess.CompletedProcess:
     try:
         result = subprocess.run(args, capture_output=True, timeout=timeout, check=False)
@@ -63,6 +78,7 @@ def _number(value: Any, default: float = 0.0) -> float:
 
 def probe(path: Path) -> dict:
     path = _source(path)
+    identity = _source_identity(path)
     result = _run([
         _tool("ffprobe"), "-v", "error", "-show_format", "-show_streams",
         "-print_format", "json", str(path),
@@ -106,6 +122,8 @@ def probe(path: Path) -> dict:
         width, height = height, width
     if duration <= 0 or not width or not height:
         raise MediaError("视频时长或尺寸无效。")
+    if _source_identity(path) != identity:
+        raise MediaError("视频在元数据探测期间发生变化，请重试。")
     return {
         "duration_ms": round(duration * 1000), "width": width, "height": height,
         "video_codec": video.get("codec_name", "unknown"),
@@ -115,19 +133,23 @@ def probe(path: Path) -> dict:
         "start_time_ms": round(origin * 1000),
         # Exact decimal origin is needed when selecting an already observed PTS.
         "start_time_seconds": str(origin),
+        "_source_identity": identity,
     }
 
 
-def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, progress=None) -> dict:
+def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, progress=None,
+                   *, metadata: dict | None = None, decoder: str = "ffmpeg") -> dict:
     """Build a local, content-driven plan without invoking any model."""
     from .keyframes import scan_keyframes as scan
-    return scan(path, start_ms, end_ms, checkpoint=checkpoint, progress=progress)
+    return scan(path, start_ms, end_ms, checkpoint=checkpoint, progress=progress,
+                metadata=metadata, decoder=decoder)
 
 
-def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None) -> list[dict]:
+def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None,
+                      *, metadata: dict | None = None) -> list[dict]:
     """Extract the exact source pictures selected by a keyframe plan."""
     from .keyframes import extract_keyframes as extract
-    return extract(path, frames, out_paths, checkpoint=checkpoint)
+    return extract(path, frames, out_paths, checkpoint=checkpoint, metadata=metadata)
 
 
 _TEXT_SUBTITLE_CODECS = {"ass", "ssa", "subrip", "srt", "webvtt", "mov_text", "text"}
