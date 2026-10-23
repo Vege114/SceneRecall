@@ -99,12 +99,15 @@ def _metadata_reader(stream, records, condition, errors):
 def _decode(path, start_ms, end_ms, metadata, checkpoint):
     """Yield low-resolution pixels and exact source timestamps; cancellation is bounded."""
     origin = _origin(metadata)
+    container_origin = Fraction(metadata.get("_container_start_time_seconds", str(origin)))
     stop = origin + Fraction(end_ms, 1000)
+    if stop <= container_origin:
+        return
     # Start one second earlier to preserve held pictures at a partial-range start.
-    seek = max(Fraction(0), Fraction(start_ms, 1000) - 1)
+    seek = max(Fraction(0), origin + Fraction(start_ms, 1000) - container_origin - 1)
     command = [
         _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "info", "-copyts",
-        "-ss", _seconds(seek), "-t", _seconds(Fraction(end_ms, 1000) - seek), "-i", str(path),
+        "-ss", _seconds(seek), "-t", _seconds(stop - container_origin - seek), "-i", str(path),
         "-map", f"0:{metadata['video_stream_index']}", "-an", "-sn", "-dn",
         "-vf", (f"trim=end={_seconds(stop)},scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
                  f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,showinfo=checksum=0"),
@@ -404,7 +407,7 @@ def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, prog
         raise MediaError("未知关键帧解码后端。")
     metadata = _metadata_for_source(source, metadata)
     if end_ms > metadata["duration_ms"]:
-        raise MediaError("分析结束时间超出视频时长。")
+        raise MediaError("所选分析片段的结束位置超过视频可播放范围，请检查片段时间范围。")
     if progress:
         progress(0, end_ms - start_ms)
     detector = ContentDetector(
@@ -516,6 +519,7 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
         raise MediaError("抽帧输出路径必须唯一，且不能覆盖原视频。")
     metadata = _metadata_for_source(source, metadata)
     origin = _origin(metadata)
+    container_origin = Fraction(metadata.get("_container_start_time_seconds", str(origin)))
     targets = []
     for frame in frames:
         try:
@@ -543,7 +547,7 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
         select = _select_expression([frame["source_pts"] for frame in frames])
         command = [
             _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "info", "-y", "-copyts",
-            "-ss", _seconds(max(Fraction(0), targets[0] - origin - 1)), "-i", str(source),
+            "-ss", _seconds(max(Fraction(0), targets[0] - container_origin - 1)), "-i", str(source),
             "-map", f"0:{metadata['video_stream_index']}", "-an", "-sn", "-dn",
             "-vf", f"select='{select}',showinfo=checksum=0", "-frames:v", str(len(frames)),
             "-fps_mode", "passthrough", "-q:v", "2", "-start_number", "0", str(temporary_dir / "%08d.jpg"),

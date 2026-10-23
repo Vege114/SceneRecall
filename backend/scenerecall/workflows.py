@@ -408,7 +408,7 @@ class WorkflowQueueMixin:
         return result
 
     async def scan_plan(self, job_id, *, asset_id=None, start_ms=None, end_ms=None):
-        from .media import scan_keyframes, extract_keyframes, probe
+        from .media import scan_keyframes, extract_keyframes, probe_for_asset
         job = self.checkpoint(job_id)
         asset_id = asset_id or job["asset_id"]
         start_ms = job["config"]["start_ms"] if start_ms is None else start_ms
@@ -462,7 +462,7 @@ class WorkflowQueueMixin:
 
             try:
                 check()
-                metadata = probe(source)
+                metadata = probe_for_asset(source, asset)
                 data = None
                 if existing and existing.get("status") == "completed":
                     data = self._keyframe_selection_data(existing)

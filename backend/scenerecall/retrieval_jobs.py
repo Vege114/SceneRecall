@@ -96,6 +96,7 @@ class RetrievalJobMixin:
 
     async def _retrieval_plan(self, job_id):
         from .keyframes import extract_keyframes, scan_keyframes
+        from .media import probe_for_asset
         job = self.checkpoint(job_id)
         config, asset_id = job["config"], job["asset_id"]
         root = self.library.asset_dir(asset_id)
@@ -111,11 +112,14 @@ class RetrievalJobMixin:
             return saved
         self.update(job_id, stage="retrieval_sampling", message="正在扫描画面检索证据")
         source = self.library.require_source(asset_id)
+        asset = self.library.get_asset(asset_id)
 
         def work(check):
+            check()
+            metadata = probe_for_asset(source, asset)
             collector = RetrievalSampler()
             data = scan_keyframes(source, config["start_ms"], config["end_ms"], checkpoint=check,
-                                  sample_collector=collector)
+                                  sample_collector=collector, metadata=metadata)
             frames = {str((f["pts"], f["time_base"])): f for f in data["frames"] + collector.frames}
             if config.get("keyframe_plan_id"):
                 old = self.validated_plan(asset_id, config["start_ms"], config["end_ms"], config["keyframe_plan_id"])
@@ -132,7 +136,7 @@ class RetrievalJobMixin:
                 current = missing[offset:offset + 128]
                 outputs = [root / "frames" / f"{f['id']}.jpg" for f in current]
                 self.library.register_frames(asset_id,
-                    extract_keyframes(source, current, outputs, checkpoint=check))
+                    extract_keyframes(source, current, outputs, checkpoint=check, metadata=metadata))
             check()
             self.library.require_source(asset_id)
             return {"id": identity, "sampling_version": VERSION, "parameters": config["sampling_parameters"],

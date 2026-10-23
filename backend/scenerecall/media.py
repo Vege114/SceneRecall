@@ -17,6 +17,7 @@ import tempfile
 import threading
 from bisect import bisect_left
 from collections import deque
+from fractions import Fraction
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -135,6 +136,38 @@ def probe(path: Path) -> dict:
         "start_time_seconds": str(origin),
         "_source_identity": identity,
     }
+
+
+def probe_for_asset(path: Path, asset: dict) -> dict:
+    """Probe a verified source while preserving its imported playback timeline.
+
+    Callers must first use Library.require_source. Different FFmpeg versions can
+    report a slightly different Matroska origin for the same unchanged file. Its
+    stored subtitles, plans and queued ranges still use the imported zero point.
+    Reconcile only small origin shifts with the same absolute end, never extend
+    a genuinely shorter video or rewrite existing evidence.
+    """
+    metadata = probe(path)
+    if "matroska" not in metadata.get("format_name", "") and "webm" not in metadata.get("format_name", ""):
+        return metadata
+    # Older manifests only stored rounded milliseconds. They do not establish
+    # an exact origin, so keep the current precise PTS basis for their plans.
+    if "start_time_seconds" not in asset:
+        return metadata
+    try:
+        duration = asset["duration_ms"]
+        if type(duration) is not int or duration <= 0:
+            return metadata
+        origin = Fraction(asset["start_time_seconds"])
+        current_origin = Fraction(metadata["start_time_seconds"])
+        end_delta = origin + Fraction(duration, 1000) - current_origin - Fraction(metadata["duration_ms"], 1000)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return metadata
+    if abs(origin - current_origin) > Fraction(1, 10) or abs(end_delta) > Fraction(1, 1000):
+        return metadata
+    return {**metadata, "_container_start_time_seconds": metadata["start_time_seconds"],
+            "duration_ms": duration, "start_time_ms": round(origin * 1000),
+            "start_time_seconds": str(origin)}
 
 
 def scan_keyframes(path: Path, start_ms: int, end_ms: int, checkpoint=None, progress=None,
@@ -327,7 +360,7 @@ def detect_shots(path: Path, start_ms: int, end_ms: int) -> list[dict]:
     path = _source(path)
     metadata = probe(path)
     if end_ms > metadata["duration_ms"]:
-        raise MediaError("分析结束时间超出视频时长。")
+        raise MediaError("所选分析片段的结束位置超过视频可播放范围，请检查片段时间范围。")
     import numpy as np
     from scenedetect import FrameTimecode
     from scenedetect.detectors import ContentDetector
