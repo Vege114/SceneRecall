@@ -8,6 +8,7 @@ import pytest
 from scenerecall.jobs import JobQueue
 from scenerecall.library import atomic_json, digest, read_json
 from scenerecall.providers import ProviderError
+from scenerecall.scene_jobs import cue_batches
 from scenerecall.scene_preparation import SUBTITLE_PREPARATION_PROMPT_VERSION
 from test_parallel_execution import dense_dialogue, options
 from test_scene_jobs import counts, enqueue, execute
@@ -99,14 +100,34 @@ async def test_complete_transcript_skips_stage_and_preserves_story_semantics(sce
     worker = scene_worker(12)
     dense_dialogue(worker)
     original = worker.provider.prepare_subtitles
-    initial_summaries = []
+    source_cues = worker.library.subtitles(worker.asset["id"])
+    batches = list(cue_batches(source_cues))
+    assert len(batches) == 3
+    positions = {batch[0]["id"]: index for index, batch in enumerate(batches)}
+    expected_summaries = ["本批摘要 " + batch[0]["id"] for batch in batches]
+    completion_order = []
+    first_finished, second_finished = asyncio.Event(), asyncio.Event()
+    io_timeout = 30 if os.name == "nt" else 2
 
     async def distinct(identity, cues, story):
+        position = positions[cues[0]["id"]]
+        # Durable input preparation can finish in any order. Explicitly finish
+        # batch 1 before batch 0 so the expected result cannot accidentally use
+        # provider completion order instead of the source's chronological order.
+        if mode == "parallel":
+            if position == 0:
+                await asyncio.wait_for(second_finished.wait(), io_timeout)
+            elif position == 2:
+                await asyncio.wait_for(first_finished.wait(), io_timeout)
         result = await original(identity, cues, story)
         summary = "本批摘要 " + cues[0]["id"]
         result.data["segments"][0]["summary"] = summary
         result.data["unresolved"] = ["本批悬念 " + cues[0]["id"]]
-        initial_summaries.append(summary)
+        completion_order.append(position)
+        if position == 1:
+            second_finished.set()
+        elif position == 0:
+            first_finished.set()
         return result
 
     monkeypatch.setattr(worker.provider, "prepare_subtitles", distinct)
@@ -125,6 +146,7 @@ async def test_complete_transcript_skips_stage_and_preserves_story_semantics(sce
     assert failed["status"] == "failed", failed
     saved = read_json(checkpoint_path(worker, failed))
     assert saved["complete"]
+    assert completion_order == ([1, 0, 2] if mode == "parallel" else [0, 1, 2])
     before_metrics = copy.deepcopy(failed["stage_metrics"]["transcript"])
     resumed = reject_finished_units(worker, monkeypatch, failed, {"0", "1", "2"})
     worker.queue.control(failed["id"], "retry")
@@ -133,7 +155,9 @@ async def test_complete_transcript_skips_stage_and_preserves_story_semantics(sce
     assert resumed == []
     assert completed["stage_metrics"]["transcript"] == before_metrics
     segments, unresolved = worker.queue._transcript_outputs(saved["results"], mode == "parallel")
-    assert [segment["summary"] for segment in segments] == initial_summaries
+    assert [segment["summary"] for segment in segments] == expected_summaries
+    assert [cue_id for segment in segments for cue_id in segment["cue_ids"]] == [
+        cue["id"] for cue in source_cues]
     assert unresolved == ([entry for result in saved["results"] for entry in result["unresolved"]]
                           if mode == "parallel" else saved["results"][-1]["unresolved"])
     stories = [call["story_context"] for call in worker.provider.calls if call["stage"] == "transcript"]
