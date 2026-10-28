@@ -29,7 +29,7 @@ from .models import (
 )
 from .native_picker import FilePickerBusy, FilePickerInput, FilePickerUnavailable, RestoreLocalInput, local_file, pick_local_files
 from .providers import ProviderManager
-from .search import SearchEngine
+from .search import SearchEngine, SearchSnapshotChanged
 from .scenes import SceneStore
 
 DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", "embedding", "query", "decision", "answer")},
@@ -126,6 +126,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.exception_handler(StaleCharacterRevision)
     async def stale_characters(request, exc):
         return JSONResponse({"detail": str(exc)[:800]}, status_code=409)
+
+    @app.exception_handler(SearchSnapshotChanged)
+    async def search_changed(request, exc):
+        return JSONResponse({"detail": str(exc)}, status_code=409)
 
     @app.exception_handler(FileNotFoundError)
     async def missing(request, exc):
@@ -316,8 +320,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     from .work_entity_api import register_work_entity_routes
     work_entities = register_work_entity_routes(app, library,
         refresh=refresh_asset_search)
-    search.concept_lookup = lambda query, filters: work_entities.search_occurrences(
-        query, filters, eligible_records=search.filtered_records(filters))
+    from .knowledge_recall import WorkEntityRecall
+    search.knowledge_provider = WorkEntityRecall(work_entities)
 
     @app.get("/api/assets")
     def assets():
@@ -561,14 +565,28 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.post("/api/search")
     async def query(payload: SearchInput):
+        query_started = perf_counter()
         if preparation.started and preparation.states["index"]["status"] != "ready":
             raise HTTPException(503, preparation.states["index"].get("message", "搜索索引正在准备，请稍后再试"),
                                 headers={"Retry-After": "2"})
         bindings = settings()["bindings"]
+        search.clear_completed_query()
         result = await search.search(payload.query, filters=payload.filters, limit=payload.limit,
                                     **{k + "_profile_id": bindings.get(k) if k == "embedding" or payload.enhancements else None
                                        for k in ("embedding", "query", "decision", "answer")})
-        actual_records = {r["id"]: r for r in await asyncio.to_thread(library.records)}
+        from .execution import run_in_thread
+        def current_candidates():
+            current = {}
+            for owner in search.result_asset_ids(result.get("results", [])):
+                try:
+                    current.update((row["id"], row) for row in library.records(owner))
+                except FileNotFoundError:
+                    # A concurrently deleted asset cannot supply source citations.
+                    continue
+            return current
+        canonical_started = perf_counter()
+        actual_records = await run_in_thread(current_candidates)
+        canonical_ms = (perf_counter() - canonical_started) * 1000
         results = []
         changed = False
         for record in result.get("results", []):
@@ -649,6 +667,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         if payload.visual_verification:
             from .retrieval_verification import verify_candidates
             response = await verify_candidates(library, providers, bindings.get("vision"), payload.query, response)
+        await search.check_completed_query()
+        app.state.search_http_diagnostics = {"canonical_ms": canonical_ms,
+                                             "total_ms": (perf_counter() - query_started) * 1000}
         return response
 
     @app.get("/api/index/status")

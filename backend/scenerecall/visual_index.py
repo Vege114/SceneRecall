@@ -10,10 +10,15 @@ import asyncio
 import hashlib
 import json
 import math
+import sys
 import time
 from pathlib import Path
+from types import MappingProxyType
 
 import numpy as np
+
+from .execution import run_in_thread
+from .query_cache import MatrixCache, initialize_revision, query_revision
 
 
 SCHEMA_VERSION = "direct-visual-index-v1"
@@ -80,6 +85,8 @@ class VisualIndex:
                     PRIMARY KEY(signature,query_hash)
                 );
             """)
+            initialize_revision(db)
+        self.matrix_cache = MatrixCache()
 
     def namespace(self, encoder) -> tuple[str, dict]:
         identity = encoder.identity()
@@ -301,53 +308,128 @@ class VisualIndex:
             with engine._db() as db:
                 db.execute("INSERT OR REPLACE INTO visual_query_cache VALUES (?,?,?,?)",
                            (signature, query_hash, dimensions, vector.tobytes()))
-        return await asyncio.to_thread(self._rank, signature, vector, dimensions, where, params, limit)
+        return await run_in_thread(self._rank, signature, vector, dimensions, where, params, limit)
 
     def _rank(self, signature, vector, dimensions, where, params, limit):
+        with self.engine._db() as db:
+            db.execute("BEGIN")
+            if vector.shape != (dimensions,):
+                return self._rank_stream(db, signature, vector, dimensions, where, params, limit)
+            revision = query_revision(db)
+            # A replacement database may retain an old revision from a backup.
+            stat = self.engine.path.stat()
+            key = (stat.st_dev, stat.st_ino, signature, revision, where, tuple(params), dimensions)
+            snapshot = self.matrix_cache.get_or_build(key, lambda budget: self._matrix_snapshot(
+                db, signature, dimensions, where, params, budget))
+            if snapshot is None:
+                return self._rank_stream(db, signature, vector, dimensions, where, params, limit)
+            records, blocks = snapshot
+            matches = {}
+            for matrix, rows in blocks:
+                scores = matrix @ vector
+                for (record_id, frame_id, at_ms), value in zip(rows, scores):
+                    score = float(value)
+                    if not math.isfinite(score) or score <= 0:
+                        continue
+                    old = matches.get(record_id)
+                    if old is None or score > old[0]:
+                        matches[record_id] = score, frame_id, at_ms
+            ordered = sorted(matches, key=lambda identity: (
+                -matches[identity][0], records[identity][1], records[identity][2], identity))
+            result = []
+            for identity in ordered[:min(50, max(1, limit))]:
+                score, frame_id, at_ms = matches[identity]
+                result.append({**json.loads(records[identity][0]), "visual_similarity": score,
+                    "visual_signature": signature, "hit_frame_id": frame_id, "seek_ms": at_ms,
+                    "evidence_ids": [frame_id], "retrieval_branches": ["visual"]})
+            return result
+
+    def _matrix_snapshot(self, db, signature, dimensions, where, params, budget):
+        records, blocks = {}, []
+        # Conservative retained-memory accounting includes Python strings and
+        # row tuples, not just numeric payload. Read buffers remain 512 rows.
+        size = 2048
+        for row in db.execute(f"""SELECT r.id,r.data,v.evidence_digest FROM records r
+                JOIN visual_records v ON v.record_id=r.id
+                WHERE v.signature=? AND {where}""", [signature, *params]):
+            record = json.loads(row["data"])
+            if evidence_digest(record) != row["evidence_digest"]:
+                continue
+            value = (row["data"], record["asset_id"], record["start_ms"])
+            size += 128 + sys.getsizeof(row["id"]) + sys.getsizeof(value)
+            size += sum(sys.getsizeof(item) for item in value)
+            if size > budget:
+                return None
+            records[row["id"]] = value
+        rows = db.execute(f"""SELECT l.record_id,l.frame_id,l.at_ms,c.vector,c.dimensions
+            FROM visual_links l JOIN visual_cache c
+              ON c.signature=l.signature AND c.cache_key=l.cache_key
+            JOIN records r ON r.id=l.record_id
+            JOIN visual_records v ON v.record_id=r.id AND v.signature=l.signature
+            WHERE l.signature=? AND {where}""", [signature, *params])
+        while batch := rows.fetchmany(512):
+            accepted, vectors = [], []
+            for row in batch:
+                if row["record_id"] not in records or row["dimensions"] != dimensions:
+                    continue
+                image = np.frombuffer(row["vector"], dtype="<f4")
+                if image.shape == (dimensions,) and np.isfinite(image).all():
+                    accepted.append((row["record_id"], row["frame_id"], row["at_ms"]))
+                    vectors.append(image)
+            if not accepted:
+                continue
+            size += 256 + len(vectors) * dimensions * 4 + len(accepted) * 8
+            size += sum(sys.getsizeof(row) + sum(sys.getsizeof(item) for item in row) for row in accepted)
+            if size > budget:
+                return None
+            matrix = np.stack(vectors)
+            matrix.setflags(write=False)
+            blocks.append((matrix, tuple(accepted)))
+        return (MappingProxyType(records), tuple(blocks)), size
+
+    def _rank_stream(self, db, signature, vector, dimensions, where, params, limit):
         matches = {}
         # Filter in SQL before scoring; a small selected work must not lose its
         # nearest candidates to frames from a larger unrelated work. Read current
         # evidence after query encoding, in one snapshot, and parse each window
         # once rather than once per source image. Matrix batches bound memory.
-        with self.engine._db() as db:
-            db.execute("BEGIN")
-            valid = {}
-            for row in db.execute(f"""SELECT r.id,r.data,v.evidence_digest FROM records r
-                    JOIN visual_records v ON v.record_id=r.id
-                    WHERE v.signature=? AND {where}""", [signature, *params]):
-                record = json.loads(row["data"])
-                if evidence_digest(record) == row["evidence_digest"]:
-                    valid[row["id"]] = record
-            if not valid:
-                return []
-            rows = db.execute(f"""SELECT l.record_id,l.frame_id,l.at_ms,c.vector,c.dimensions
-                FROM visual_links l JOIN visual_cache c
-                  ON c.signature=l.signature AND c.cache_key=l.cache_key
-                JOIN records r ON r.id=l.record_id
-                JOIN visual_records v ON v.record_id=r.id AND v.signature=l.signature
-                WHERE l.signature=? AND {where}""", [signature, *params])
-            while batch := rows.fetchmany(512):
-                accepted, vectors = [], []
-                for row in batch:
-                    if row["record_id"] not in valid or row["dimensions"] != dimensions:
-                        continue
-                    image = np.frombuffer(row["vector"], dtype="<f4")
-                    if image.shape == vector.shape and np.isfinite(image).all():
-                        accepted.append(row)
-                        vectors.append(image)
-                if not accepted:
+        valid = {}
+        for row in db.execute(f"""SELECT r.id,r.data,v.evidence_digest FROM records r
+                JOIN visual_records v ON v.record_id=r.id
+                WHERE v.signature=? AND {where}""", [signature, *params]):
+            record = json.loads(row["data"])
+            if evidence_digest(record) == row["evidence_digest"]:
+                valid[row["id"]] = record
+        if not valid:
+            return []
+        rows = db.execute(f"""SELECT l.record_id,l.frame_id,l.at_ms,c.vector,c.dimensions
+            FROM visual_links l JOIN visual_cache c
+              ON c.signature=l.signature AND c.cache_key=l.cache_key
+            JOIN records r ON r.id=l.record_id
+            JOIN visual_records v ON v.record_id=r.id AND v.signature=l.signature
+            WHERE l.signature=? AND {where}""", [signature, *params])
+        while batch := rows.fetchmany(512):
+            accepted, vectors = [], []
+            for row in batch:
+                if row["record_id"] not in valid or row["dimensions"] != dimensions:
                     continue
-                scores = np.stack(vectors) @ vector
-                for row, value in zip(accepted, scores):
-                    score = float(value)
-                    # Positive scores are uncalibrated candidates, never "full".
-                    if not math.isfinite(score) or score <= 0:
-                        continue
-                    old = matches.get(row["record_id"])
-                    if old is None or score > old["visual_similarity"]:
-                        matches[row["record_id"]] = {**valid[row["record_id"]], "visual_similarity": score,
-                            "visual_signature": signature, "hit_frame_id": row["frame_id"], "seek_ms": row["at_ms"],
-                            "evidence_ids": [row["frame_id"]], "retrieval_branches": ["visual"]}
+                image = np.frombuffer(row["vector"], dtype="<f4")
+                if image.shape == vector.shape and np.isfinite(image).all():
+                    accepted.append(row)
+                    vectors.append(image)
+            if not accepted:
+                continue
+            scores = np.stack(vectors) @ vector
+            for row, value in zip(accepted, scores):
+                score = float(value)
+                # Positive scores are uncalibrated candidates, never "full".
+                if not math.isfinite(score) or score <= 0:
+                    continue
+                old = matches.get(row["record_id"])
+                if old is None or score > old["visual_similarity"]:
+                    matches[row["record_id"]] = {**valid[row["record_id"]], "visual_similarity": score,
+                        "visual_signature": signature, "hit_frame_id": row["frame_id"], "seek_ms": row["at_ms"],
+                        "evidence_ids": [row["frame_id"]], "retrieval_branches": ["visual"]}
         ordered = sorted(matches.values(), key=lambda row: (-row["visual_similarity"], row["asset_id"],
                                                             row["start_ms"], row["id"]))
         return ordered[:min(50, max(1, limit))]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import inspect
 import json
@@ -14,6 +15,7 @@ import unicodedata
 import uuid
 from collections import defaultdict
 from collections.abc import Callable
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,8 @@ from .execution import run_in_thread
 from .providers import ProviderError, ProviderManager
 
 jieba.setLogLevel(logging.WARNING)
+_query_embeddings = ContextVar("query_embeddings", default=None)
+_completed_query = ContextVar("completed_query", default=None)
 ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character", "character_id",
                    "concept_id", "project_id", "anime_id", "folder_id", "tag"}
 STOP_WORDS = {
@@ -219,6 +223,10 @@ class SearchGenerationConflict(ValueError):
     """The source changed while a disposable index snapshot was being built."""
 
 
+class SearchSnapshotChanged(ValueError):
+    """A live query could not retain a consistent source snapshot."""
+
+
 class SearchEngine:
     def __init__(self, index_dir: Path, providers: ProviderManager):
         self.index_dir = Path(index_dir)
@@ -229,6 +237,8 @@ class SearchEngine:
         self._generation = 0
         self.visual_encoder = None
         self.concept_lookup = None
+        self.knowledge_provider = None
+        self.query_diagnostics = {}
         self._initialize()
         from .visual_index import VisualIndex
         self.visual_index = VisualIndex(self)
@@ -594,21 +604,88 @@ class SearchEngine:
             return []
         return await self.visual_index.search(query, filters, self.visual_encoder, degraded)
 
-    def filtered_records(self, filters: dict | None = None) -> list[dict]:
+    def filtered_records(self, filters: dict | None = None, record_ids=None) -> list[dict]:
         """Canonical current index rows, filtered before concept lookup."""
         where, params = self._where(filters or {})
         with self._db() as db:
-            return [json.loads(row["data"]) for row in db.execute(
-                f"SELECT r.data FROM records r WHERE {where} AND r.is_context=0", params)]
+            if record_ids is None:
+                return [json.loads(row["data"]) for row in db.execute(
+                    f"SELECT r.data FROM records r WHERE {where} AND r.is_context=0", params)]
+            identifiers = list(dict.fromkeys(record_ids))
+            result = []
+            db.execute("BEGIN")
+            for offset in range(0, len(identifiers), 256):
+                batch = identifiers[offset:offset + 256]
+                result.extend(json.loads(row["data"]) for row in db.execute(
+                    f"SELECT r.data FROM records r WHERE {where} AND r.is_context=0 "
+                    f"AND r.id IN ({','.join('?' for _ in batch)})", [*params, *batch]))
+            return result
+
+    def filtered_asset_ids(self, filters=None):
+        where, params = self._where(filters or {})
+        with self._db() as db:
+            return [row[0] for row in db.execute(f"""SELECT DISTINCT r.asset_id FROM records r
+                WHERE {where} AND r.is_context=0 AND (r.kind IN ('visual','scene')
+                OR json_extract(r.data,'$.evidence_type')='retrieval_window') ORDER BY r.asset_id""", params)]
+
+    def result_asset_ids(self, candidates):
+        """Resolve ownership from the index, never generated result metadata."""
+        identifiers = list(dict.fromkeys(value for row in candidates for value in
+            [row.get("id"), *row.get("member_ids", []), *row.get("source_ids", [])] if isinstance(value, str)))
+        owners = set()
+        with self._db() as db:
+            db.execute("BEGIN")
+            for offset in range(0, len(identifiers), 256):
+                batch = identifiers[offset:offset + 256]
+                owners.update(row[0] for row in db.execute(
+                    f"SELECT DISTINCT asset_id FROM records WHERE id IN ({','.join('?' for _ in batch)})", batch))
+        return sorted(owners)
+
+    def query_token(self, filters):
+        from .query_cache import query_revision
+        with self._db() as db:
+            revision = query_revision(db)
+        knowledge = None
+        if self.knowledge_provider is not None:
+            try:
+                knowledge = self.knowledge_provider.revision(filters, self)
+            except (OSError, ValueError, RuntimeError) as exc:
+                # An unavailable optional provider degrades its own branch.
+                knowledge = ("unavailable", type(exc).__name__, str(exc))
+        encoder = self.visual_encoder
+        path = getattr(encoder, "path", None)
+        try:
+            stamp = path.stat() if path is not None else None
+            encoder_token = (id(encoder), (stamp.st_ino, stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns)
+                             if stamp is not None else None)
+        except OSError:
+            encoder_token = (id(encoder), "unavailable")
+        return revision, knowledge, encoder_token
+
+    @staticmethod
+    def clear_completed_query():
+        _completed_query.set(None)
+
+    async def check_completed_query(self):
+        completed = _completed_query.get()
+        if completed is not None and completed[0] is self:
+            await self._check_query_token(completed[2], completed[1])
+
+    async def _check_query_token(self, token, filters):
+        if await run_in_thread(self.query_token, filters) != token:
+            raise SearchSnapshotChanged("资料正在更新，请重试搜索")
 
     async def _concept(self, query: str, filters: dict) -> list[dict]:
         from .visual_index import evidence_digest
-        candidates = await asyncio.to_thread(self.concept_lookup, query, filters)
+        candidates = (await run_in_thread(self.knowledge_provider.search, query, filters, self)
+                      if self.knowledge_provider is not None else
+                      await run_in_thread(self.concept_lookup, query, filters))
         if not isinstance(candidates, list):
             raise ValueError("作品概念召回须返回记录列表")
         # The callback receives original constraints; its output is fenced again
         # against deletion, stale source evidence and the authoritative SQL scope.
-        current = {row["id"]: row for row in await asyncio.to_thread(self.filtered_records, filters)}
+        identifiers = [row.get("id") for row in candidates if isinstance(row, dict)]
+        current = {row["id"]: row for row in await run_in_thread(self.filtered_records, filters, identifiers)}
         selected, seen = [], set()
         for candidate in candidates:
             if not isinstance(candidate, dict):
@@ -680,31 +757,51 @@ class SearchEngine:
                     candidates.setdefault(record["id"], record)
         return list(candidates.values())[:limit]
 
-    async def _semantic(self, query: str, filters: dict, profile_id: str,
-                        degraded: list[str]) -> list[dict]:
-        import lancedb
+    def _semantic_snapshot(self, profile_id, filters):
+        """Read the complete scoped manifest off the event loop in one snapshot."""
         signature = self._signature(profile_id)
         with self._db() as db:
+            db.execute("BEGIN")
             namespace = db.execute("SELECT * FROM namespaces WHERE signature=?", (signature,)).fetchone()
             if not namespace:
-                degraded.append("当前向量模型尚未建立索引；本次使用字面检索")
-                return []
+                return signature, None, {}
             where, params = self._where(filters)
             valid = {row["id"]: (json.loads(row["data"]), row["text_hash"]) for row in db.execute(
                 f"SELECT r.id,r.data,r.text_hash FROM records r WHERE {where}", params)}
+            return signature, dict(namespace), valid
+
+    def _semantic_candidates(self, namespace, query_vector, valid, filtered):
+        # Import, connection setup, table opening and query preparation can all
+        # block. Keep their complete lifetime in the cancellation-owned worker.
+        import lancedb
+        table = lancedb.connect(str(self.index_dir / "vectors")).open_table(namespace["table_name"])
+        search = table.search(query_vector).distance_type("cosine")
+        if filtered:
+            # Filter before Top-50 so a small work cannot lose its own neighbors.
+            id_filter = "id IN (" + ",".join("'" + value.replace("'", "''") + "'" for value in valid) + ")"
+            search = search.where(id_filter, prefilter=True)
+        return search.limit(50).to_list()
+
+    async def _semantic(self, query: str, filters: dict, profile_id: str,
+                        degraded: list[str]) -> list[dict]:
+        signature, namespace, valid = await run_in_thread(self._semantic_snapshot, profile_id, filters)
+        if namespace is None:
+            degraded.append("当前向量模型尚未建立索引；本次使用字面检索")
+            return []
         if not valid:
             return []
-        result = await self.providers.embed(profile_id, [query])
-        if len(result.data[0]) != namespace["dimensions"]:
+        cache = _query_embeddings.get()
+        key = (signature, query)
+        query_vector = cache.get(key) if cache is not None else None
+        if query_vector is None:
+            result = await self.providers.embed(profile_id, [query])
+            query_vector = result.data[0]
+            if cache is not None:
+                cache[key] = query_vector
+        if len(query_vector) != namespace["dimensions"]:
             degraded.append("查询向量维度与索引不一致，请重建当前模型索引")
             return []
-        table = lancedb.connect(str(self.index_dir / "vectors")).open_table(namespace["table_name"])
-        # Pre-filter IDs so a small filtered work isn't excluded by a global nearest-50.
-        id_filter = "id IN (" + ",".join("'" + value.replace("'", "''") + "'" for value in valid) + ")"
-        search = table.search(result.data[0]).distance_type("cosine")
-        if filters:
-            search = search.where(id_filter, prefilter=True)
-        rows = await asyncio.to_thread(search.limit(50).to_list)
+        rows = await run_in_thread(self._semantic_candidates, namespace, query_vector, valid, bool(filters))
         records, stale = [], False
         for row in rows:
             current = valid.get(row["id"])
@@ -738,34 +835,90 @@ class SearchEngine:
                 filters = {**interpreted.data.get("filters", {}), **filters}
             except ProviderError as exc:
                 degraded.append("查询理解失败，已保留原始问题：" + str(exc))
-        lexical = await asyncio.to_thread(self._lexical, query, filters)
-        if search_text != query:
-            seen = {row["id"] for row in lexical}
-            expanded = await asyncio.to_thread(self._lexical, search_text, filters)
-            lexical.extend(row for row in expanded if row["id"] not in seen)
-            lexical = lexical[:50]
-        semantic = []
-        if embedding_profile_id:
+        filters = copy.deepcopy(filters)
+        diagnostics = {"branches_ms": {}}
+        self.clear_completed_query()
+        started = time.perf_counter()
+        cache_token = _query_embeddings.set({})
+        try:
+            for attempt in range(2):
+                token = await run_in_thread(self.query_token, filters)
+                try:
+                    result = await self._search_snapshot(query, search_text, filters, embedding_profile_id,
+                        decision_profile_id, answer_profile_id, limit, list(degraded), token, diagnostics)
+                    await self._check_query_token(token, filters)
+                    diagnostics["retries"] = attempt
+                    _completed_query.set((self, filters, token))
+                    return result
+                except SearchSnapshotChanged:
+                    if attempt:
+                        raise
+        finally:
+            _query_embeddings.reset(cache_token)
+            diagnostics["total_ms"] = (time.perf_counter() - started) * 1000
+            self.query_diagnostics = diagnostics
+
+    async def _recall_parallel(self, query, search_text, filters, embedding_profile_id, diagnostics,
+                               knowledge_available=True):
+        async def branch(name):
+            started = time.perf_counter()
+            warnings, rows = [], []
+            scoped = copy.deepcopy(filters)
             try:
-                semantic = await self._semantic(search_text, filters, embedding_profile_id, degraded)
-            except (ProviderError, OSError, ValueError, RuntimeError) as exc:
-                message = str(exc) if isinstance(exc, ProviderError) else "索引读取失败，请重建索引"
-                degraded.append("语义检索不可用：" + message)
-        elif self.visual_encoder is None and self.concept_lookup is None:
-            degraded.append("未配置向量模型；本次仅使用字面检索")
-        visual = []
-        if self.visual_encoder is not None:
-            try:
-                # Preserve the original actor/object/action/negation constraints.
-                visual = await self._visual(query, filters, degraded)
-            except (ProviderError, OSError, ValueError, RuntimeError) as exc:
-                degraded.append("直接视觉检索不可用，已保留其他召回结果：" + str(exc))
-        concept = []
-        if self.concept_lookup is not None:
-            try:
-                concept = await self._concept(query, filters)
-            except (OSError, ValueError, RuntimeError) as exc:
-                degraded.append("作品概念检索不可用，已保留其他召回结果：" + str(exc))
+                if name == "lexical":
+                    rows = await run_in_thread(self._lexical, query, scoped)
+                    if search_text != query:
+                        seen = {row["id"] for row in rows}
+                        expanded = await run_in_thread(self._lexical, search_text, scoped)
+                        rows.extend(row for row in expanded if row["id"] not in seen)
+                        rows = rows[:50]
+                elif name == "semantic":
+                    if embedding_profile_id:
+                        try:
+                            rows = await self._semantic(search_text, scoped, embedding_profile_id, warnings)
+                        except (ProviderError, OSError, ValueError, RuntimeError) as exc:
+                            message = str(exc) if isinstance(exc, ProviderError) else "索引读取失败，请重建索引"
+                            warnings.append("语义检索不可用：" + message)
+                    elif self.visual_encoder is None and self.concept_lookup is None and self.knowledge_provider is None:
+                        warnings.append("未配置向量模型；本次仅使用字面检索")
+                elif name == "visual" and self.visual_encoder is not None:
+                    try:
+                        rows = await self._visual(query, scoped, warnings)
+                    except (ProviderError, OSError, ValueError, RuntimeError) as exc:
+                        warnings.append("直接视觉检索不可用，已保留其他召回结果：" + str(exc))
+                elif name == "concept" and (self.knowledge_provider is not None or self.concept_lookup is not None):
+                    try:
+                        if not knowledge_available:
+                            raise ValueError("作品知识版本不可用，请检查资料")
+                        rows = await self._concept(query, scoped)
+                    except (OSError, ValueError, RuntimeError) as exc:
+                        warnings.append("作品概念检索不可用，已保留其他召回结果：" + str(exc))
+                return rows, warnings
+            finally:
+                diagnostics["branches_ms"][name] = (time.perf_counter() - started) * 1000
+
+        tasks = [asyncio.create_task(branch(name)) for name in ("lexical", "semantic", "visual", "concept")]
+        try:
+            return await asyncio.gather(*tasks)
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            drain = asyncio.gather(*tasks, return_exceptions=True)
+            while not drain.done():
+                try:
+                    await asyncio.shield(drain)
+                except asyncio.CancelledError:
+                    continue
+            raise
+
+    async def _search_snapshot(self, query, search_text, filters, embedding_profile_id,
+                               decision_profile_id, answer_profile_id, limit, degraded, token, diagnostics):
+        knowledge_available = not (isinstance(token[1], tuple) and token[1][:1] == ("unavailable",))
+        branches = await self._recall_parallel(query, search_text, filters, embedding_profile_id, diagnostics,
+                                                knowledge_available)
+        lexical, semantic, visual, concept = [rows for rows, _warnings in branches]
+        for _rows, warnings in branches:
+            degraded.extend(warnings)
         records, scores = {}, defaultdict(float)
         for ranking in (lexical, semantic, visual, concept):
             for rank, record in enumerate(ranking, 1):
@@ -787,6 +940,7 @@ class SearchEngine:
                                                 if record.get("match_basis") == "setting_concept_appearance" else
                                                 "台词原文包含查询文本" if exact else "包含相关证据，组合条件尚待核对")})
         if decision_profile_id and candidates:
+            await self._check_query_token(token, filters)
             try:
                 decision = await self.providers.decide(decision_profile_id, query, candidates[:20])
                 judgments = decision.data["candidates"]
@@ -828,6 +982,7 @@ class SearchEngine:
         explanation = (f"找到 {len(chosen)} 个候选片段；请结合原片核对标记为部分匹配的结果。"
                        if chosen else "未找到有足够证据支持的片段。")
         if answer_profile_id and chosen:
+            await self._check_query_token(token, filters)
             try:
                 answer = await self.providers.compose(answer_profile_id, query, chosen)
                 explanation = answer.data["text"]

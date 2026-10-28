@@ -1,5 +1,8 @@
 """Promotion checks use generated images and local metadata only."""
 import copy
+import hashlib
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -48,7 +51,61 @@ def trial_for(worker, directory):
 
 
 def snapshot(root):
-    return {path.relative_to(root).as_posix(): promote.file_hash(path) for path in root.rglob("*") if path.is_file()}
+    files = [path for path in root.rglob("*") if path.is_file()]
+    databases = set()
+    for path in files:
+        if path.suffix in {".sqlite", ".sqlite3", ".db"}:
+            with path.open("rb") as source:
+                if source.read(16) == b"SQLite format 3\0":
+                    databases.add(path)
+    result = {}
+    for path in files:
+        # Connection cleanup may checkpoint a WAL or remove SHM between the two
+        # snapshots. Compare committed schema/data through a read-only SQLite
+        # transaction, including WAL contents, rather than physical page layout.
+        if path.name.endswith(("-wal", "-shm")) and path.with_name(path.name[:-4]) in databases:
+            continue
+        if path in databases:
+            checksum = hashlib.sha256()
+            with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                db.execute("BEGIN")
+                for pragma in ("user_version", "application_id"):
+                    checksum.update(f"{pragma}={db.execute('PRAGMA ' + pragma).fetchone()[0]}\n".encode())
+                for statement in db.iterdump():
+                    checksum.update(statement.encode("utf-8"))
+                    checksum.update(b"\n")
+            result[path.relative_to(root).as_posix()] = checksum.hexdigest()
+        else:
+            result[path.relative_to(root).as_posix()] = promote.file_hash(path)
+    return result
+
+
+def test_snapshot_ignores_checkpoints_but_detects_database_and_file_changes(tmp_path):
+    database = tmp_path / "fixture.sqlite"
+    document = tmp_path / "metadata.json"
+    document.write_text('{"version": 1}', encoding="utf-8")
+    with closing(sqlite3.connect(database)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY, value BLOB)")
+        writer.execute("INSERT INTO sample VALUES (1,?)", (b"before",))
+        writer.commit()
+        before = snapshot(tmp_path)
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        assert snapshot(tmp_path) == before
+        writer.execute("UPDATE sample SET value=?", (b"after",))
+        writer.commit()
+        changed = snapshot(tmp_path)
+        assert changed[database.name] != before[database.name]
+        writer.execute("CREATE INDEX sample_value ON sample(value)")
+        writer.commit()
+        schema_changed = snapshot(tmp_path)
+        assert schema_changed[database.name] != changed[database.name]
+        document.write_text('{"version": 2}', encoding="utf-8")
+        file_changed = snapshot(tmp_path)
+        assert file_changed[document.name] != schema_changed[document.name]
+        assert file_changed[database.name] == schema_changed[database.name]
+    # Closing the last writer may merge/remove WAL and SHM without altering data.
+    assert snapshot(tmp_path) == file_changed
 
 
 def test_dry_run_validates_without_writing_library(scene_worker, tmp_path):  # noqa: F811

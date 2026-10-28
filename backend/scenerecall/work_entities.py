@@ -543,17 +543,23 @@ class WorkEntityStore:
                 bindings.get((scope, record["asset_id"], record["id"]), ()))
             if not self._matches_filters(projected, filters or {}):
                 continue
-            matched = [binding for binding in projected["concept_bindings"]
-                       if binding["concept_id"] in selected[scope]]
-            if not matched:
-                continue
-            score = max(selected[scope][binding["concept_id"]] for binding in matched)
-            results.append((score, {**projected, "matched_concept_ids": [binding["concept_id"] for binding in matched],
-                "match_basis": "setting_concept_appearance", "event_verified": False,
-                "retrieval_branches": ["concept"], "match_type": "partial",
-                "evidence_ids": list(dict.fromkeys(frame for binding in matched for frame in binding["evidence_frame_ids"]))}))
+            match = self._occurrence_match(projected, selected[scope])
+            if match is not None:
+                results.append(match)
         results.sort(key=lambda pair: (-pair[0], pair[1]["asset_id"], pair[1]["start_ms"], pair[1]["id"]))
         return [row for _, row in results[:50]]
+
+    @staticmethod
+    def _occurrence_match(projected, selected):
+        """Shared ranking/output contract for traversal and indexed recall."""
+        matched = [binding for binding in projected["concept_bindings"] if binding["concept_id"] in selected]
+        if not matched:
+            return None
+        score = max(selected[binding["concept_id"]] for binding in matched)
+        return score, {**projected, "matched_concept_ids": [binding["concept_id"] for binding in matched],
+            "match_basis": "setting_concept_appearance", "event_verified": False,
+            "retrieval_branches": ["concept"], "match_type": "partial",
+            "evidence_ids": list(dict.fromkeys(frame for binding in matched for frame in binding["evidence_frame_ids"]))}
 
     def occurrences(self, asset_id, concept_id):
         concept = self.get(asset_id, concept_id)

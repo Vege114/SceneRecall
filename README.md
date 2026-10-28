@@ -75,4 +75,6 @@ SceneRecall 使用 [GNU AGPL v3](LICENSE)。第三方程序、模型权重及外
 
 特别是 CCIP 模型卡仅标注 `OpenRAIL`，具体条款仍需向上游确认；community-1 权重使用 CC BY 4.0；Animated_AD 的可选外部适配未发现明确许可证，不捆绑其实现或权重。项目来源、署名、许可证原文及分发注意事项见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
+查询缓存、并发召回、实体出场索引及知识库接口见 [查询优化与实测](docs/QUERY_OPTIMIZATION_20261028.md)。该文记录同一批查询的结果等价验证、速度和内存边界，以及可复现基准命令。
+
 环境与能力细节见 [docs](docs/)，开发进度见 [PLAN.md](PLAN.md)，已完成与尚待完成的验证见 [VALIDATION.md](docs/VALIDATION.md)。

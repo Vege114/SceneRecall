@@ -98,6 +98,9 @@ def test_api_uses_canonical_event_onset_without_replacing_real_visual_hit(scene_
         return {"results": [{**row, "hit_frame_id": "frame_original", "seek_ms": 9999, "match_type": "partial"}],
                 "degraded": [], "explanation": ""}
 
+    # Real search results have an indexed owner; preserve that boundary in this
+    # ranking double while testing authoritative event timing independently.
+    app.state.search.sync_asset(library.records("scene_asset"), "scene_asset")
     monkeypatch.setattr(app.state.search, "search", search)
     result = client.post("/api/search", json={"query": "红衣人物转身"}).json()["results"][0]
     assert result["seek_ms"] == 1000 and result["seek_basis"] == "local_event"

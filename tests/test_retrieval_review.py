@@ -64,6 +64,7 @@ def test_api_rejected_merge_cannot_keep_excluded_member_evidence(scene_app, monk
                              "evidence_ids": ["frame_original", "frame_second", "invented"]}],
                 "degraded": [], "explanation": ""}
 
+    app.state.search.sync_asset(library.records("scene_asset"), "scene_asset")
     monkeypatch.setattr(app.state.search, "search", stale_search)
     result = client.post("/api/search", json={"query": "背景"}).json()["results"][0]
     assert not result.get("member_ids")
