@@ -284,7 +284,7 @@ class VisualEncoder:
             raise VisualEncoderUnavailable("视觉编码向量维度不一致")
         return value
 
-    def _request(self, action, values, cancelled):
+    def _request(self, action, values, cancelled, prefetch_values=None):
         from .local_resources import LOCAL_MODEL_GATE
         acquired_request = acquired_gate = False
         try:
@@ -302,6 +302,8 @@ class VisualEncoder:
             identity = self.identity()
             process = self._start(config, identity)
             request = {"action": action, "values": values, "config": config, "identity": identity}
+            if prefetch_values:
+                request["prefetch_values"] = prefetch_values
             reply = queue.Queue(maxsize=1)
 
             def exchange():
@@ -348,15 +350,18 @@ class VisualEncoder:
             if acquired_request:
                 self._request_lock.release()
 
-    async def _encode(self, action, values):
+    async def _encode(self, action, values, *, prefetch_values=None):
         if self._closed:
             raise VisualEncoderUnavailable("视觉编码器已关闭")
-        if not values:
+        if not values and action != "warmup":
             return []
         cancelled = threading.Event()
         with self._pending_lock:
             self._pending.add(cancelled)
-        task = asyncio.create_task(asyncio.to_thread(self._request, action, values, cancelled))
+        arguments = (action, values, cancelled)
+        if prefetch_values:
+            arguments += (prefetch_values,)
+        task = asyncio.create_task(asyncio.to_thread(self._request, *arguments))
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -370,7 +375,8 @@ class VisualEncoder:
             with self._pending_lock:
                 self._pending.discard(cancelled)
 
-    async def encode_images(self, items: list[dict]) -> list[list[float]]:
+    @staticmethod
+    def _image_values(items: list[dict]) -> list[dict]:
         values = []
         for item in items:
             if not isinstance(item, dict) or any(not item.get(key) for key in ("id", "asset_id", "source_fingerprint")):
@@ -398,7 +404,21 @@ class VisualEncoder:
                                     or not 0 <= box[0] < box[2] <= 1 or not 0 <= box[1] < box[3] <= 1):
                 raise ValueError("视觉区域须为归一化 left/top/right/bottom")
             values.append({"path": str(path), "box": list(box) if box is not None else None})
-        return await self._encode("images", values)
+        return values
+
+    async def encode_images(self, items: list[dict]) -> list[list[float]]:
+        return await self._encode("images", self._image_values(items))
+
+    async def prepare(self):
+        """Load the offline model without encoding or publishing dummy evidence."""
+        await self._encode("warmup", [])
+
+    async def encode_images_prefetched(self, items: list[dict], next_items: list[dict]) -> list[list[float]]:
+        """Encode in order while the worker prepares at most the next image batch."""
+        if len(next_items) > self.batch_size:
+            raise ValueError("视觉预取不能超过一个编码批次")
+        return await self._encode("images", self._image_values(items),
+                                  prefetch_values=self._image_values(next_items))
 
     async def encode_texts(self, texts: list[str]) -> list[list[float]]:
         if any(not isinstance(text, str) or not text.strip() or len(text) > 2000 for text in texts):

@@ -324,7 +324,7 @@ async def test_new_analysis_freezes_decoder_but_missing_legacy_setting_uses_ffmp
     assert supplied_legacy_config["keyframe_decoder_profile"] == "ffmpeg-v1"
     retrieval = worker.queue.add("analysis", {"analysis_strategy": "retrieval-first-v1", "stages": []},
                                  worker.asset["id"])
-    assert retrieval["config"]["keyframe_decoder_profile"] == "ffmpeg-v1"
+    assert retrieval["config"]["keyframe_decoder_profile"] == "pyav-libavfilter-v1"
 
 
 def test_explicit_new_profile_does_not_rewrite_cancelled_old_scan(scene_worker, monkeypatch):  # noqa: F811

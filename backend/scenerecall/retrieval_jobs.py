@@ -1,6 +1,7 @@
 """Retrieval-first execution; no chronological story or scene receipts are inputs."""
 from __future__ import annotations
 
+import asyncio
 import copy
 import time
 
@@ -95,18 +96,24 @@ class RetrievalJobMixin:
         return asset, config
 
     async def _retrieval_plan(self, job_id):
-        from .keyframes import extract_keyframes, scan_keyframes
+        from .keyframes import extract_keyframes_stream, scan_keyframes
         from .media import probe_for_asset
         job = self.checkpoint(job_id)
         config, asset_id = job["config"], job["asset_id"]
         root = self.library.asset_dir(asset_id)
-        identity = "rp_" + digest([asset_id, config["source_fingerprint"], config["start_ms"],
-                                    config["end_ms"], VERSION, config["sampling_parameters"]])
+        from .workflows import KEYFRAME_DECODER_PROFILES, LEGACY_KEYFRAME_DECODER_PROFILE
+        profile = self._keyframe_decoder_profile(config.get("keyframe_decoder_profile", LEGACY_KEYFRAME_DECODER_PROFILE))
+        plan_identity = [asset_id, config["source_fingerprint"], config["start_ms"],
+                         config["end_ms"], VERSION, config["sampling_parameters"]]
+        if profile != LEGACY_KEYFRAME_DECODER_PROFILE:
+            plan_identity.append(profile)
+        identity = "rp_" + digest(plan_identity)
         path = root / "retrieval" / "plans" / f"{identity}.json"
         saved = read_json(path)
         if saved is not None:
             if (saved.get("source_fingerprint") != config["source_fingerprint"]
-                    or saved.get("sampling_version") != VERSION):
+                    or saved.get("sampling_version") != VERSION
+                    or saved.get("decoder_profile", LEGACY_KEYFRAME_DECODER_PROFILE) != profile):
                 raise ValueError("检索采样计划身份不匹配")
             self.library.frame_paths(asset_id, [f["id"] for f in saved["frames"]])
             return saved
@@ -118,8 +125,12 @@ class RetrievalJobMixin:
             check()
             metadata = probe_for_asset(source, asset)
             collector = RetrievalSampler()
+            scan_started = time.perf_counter()
+            decoder = KEYFRAME_DECODER_PROFILES[profile]
             data = scan_keyframes(source, config["start_ms"], config["end_ms"], checkpoint=check,
-                                  sample_collector=collector, metadata=metadata)
+                                  sample_collector=collector, metadata=metadata, decoder=decoder)
+            execution = {"scan_decoder": decoder, "scan_ms": round((time.perf_counter() - scan_started) * 1000),
+                         "scan_decode_passes": 1}
             frames = {str((f["pts"], f["time_base"])): f for f in data["frames"] + collector.frames}
             if config.get("keyframe_plan_id"):
                 old = self.validated_plan(asset_id, config["start_ms"], config["end_ms"], config["keyframe_plan_id"])
@@ -131,21 +142,41 @@ class RetrievalJobMixin:
             registry = read_json(root / "frames" / "registry.json", {})
             missing = [f for f in frames if f["id"] not in registry
                        or not (root / registry[f["id"]]["path"]).is_file()]
-            for offset in range(0, len(missing), 128):
+            if missing:
                 check()
-                current = missing[offset:offset + 128]
-                outputs = [root / "frames" / f"{f['id']}.jpg" for f in current]
+                outputs = [root / "frames" / f"{f['id']}.jpg" for f in missing]
+                extraction = {}
                 self.library.register_frames(asset_id,
-                    extract_keyframes(source, current, outputs, checkpoint=check, metadata=metadata))
+                    extract_keyframes_stream(source, missing, outputs, checkpoint=check, metadata=metadata,
+                                             metrics=extraction))
+                execution["extraction"] = extraction
+            else:
+                execution["extraction"] = {"decode_passes": 0, "extraction_processes": 0, "frames": 0}
             check()
             self.library.require_source(asset_id)
             return {"id": identity, "sampling_version": VERSION, "parameters": config["sampling_parameters"],
+                    "decoder_profile": profile,
                     "source_fingerprint": config["source_fingerprint"], "frames": frames,
                     "shots": data["shots"], "base_plan_id": config.get("keyframe_plan_id"),
-                    "start_ms": config["start_ms"], "end_ms": config["end_ms"]}
+                    "start_ms": config["start_ms"], "end_ms": config["end_ms"], "execution": execution}
 
         async with self._scan_slots:
-            plan = await self._local_work(job_id, work)
+            tasks = [asyncio.create_task(self._local_work(job_id, work))]
+            prepare = getattr(getattr(self.search, "visual_encoder", None), "prepare", None)
+            if callable(prepare):
+                tasks.append(asyncio.create_task(prepare()))
+            try:
+                plan = (await asyncio.gather(*tasks))[0]
+                plan["execution"]["model_prepare_overlapped"] = len(tasks) > 1
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                drained = asyncio.gather(*tasks, return_exceptions=True)
+                try:
+                    await asyncio.shield(drained)
+                except asyncio.CancelledError:
+                    await drained
+                raise
         atomic_json(path, plan)
         return plan
 
@@ -170,7 +201,8 @@ class RetrievalJobMixin:
             raise ValueError("作品实体作用域已变化，请创建新的检索任务")
         self.library.require_source(asset_id)
         encoder = getattr(self.search, "visual_encoder", None)
-        if encoder is None or encoder.identity() != config["encoder_identity"]:
+        from .visual_encoder_compat import compatible_identities
+        if encoder is None or not compatible_identities(encoder.identity(), config["encoder_identity"]):
             raise ValueError("图文编码器已变化，请创建新的检索任务")
         state = copy.deepcopy(job.get("retrieval") or {"status": "processing",
             "capabilities": {key: "pending" for key in CAPABILITIES}, "coverage": {},

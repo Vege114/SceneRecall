@@ -511,9 +511,64 @@ def _select_expression(timestamps: list[int]) -> str:
 
 def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None,
                       *, metadata: dict | None = None) -> list[dict]:
+    """Extract a bounded public API batch of exact source pictures."""
+    return _extract_keyframes(path, frames, out_paths, checkpoint, metadata=metadata, max_frames=256)
+
+
+def extract_keyframes_stream(path: Path, frames: list[dict], out_paths: list[Path], checkpoint=None,
+                             *, metadata: dict | None = None, metrics: dict | None = None) -> list[dict]:
+    """Extract an entire retrieval plan with one continuous FFmpeg decode.
+
+    Pictures stream straight to temporary JPEG files, not an in-memory image
+    list. All source PTS and the source identity are checked before any output
+    is published. The caller can retain dense evidence without restarting the
+    decoder for each 128-picture batch. Scanning and extraction remain two
+    separate decode passes so the existing JPEG/color contract stays intact.
+    """
+    return _extract_keyframes(path, frames, out_paths, checkpoint, metadata=metadata,
+                              max_frames=None, metrics=metrics)
+
+
+def _filter_arguments(expression: str, directory: Path) -> list[str]:
+    # Windows CreateProcess limits the complete command line to 32767 UTF-16
+    # characters. Dense/long retrieval plans can exceed it even though the
+    # balanced select expression itself is valid. Keep the filter in a file.
+    script = directory / "selected-frames.filter"
+    script.write_text(expression, encoding="utf-8")
+    executable = _tool("ffmpeg")
+    try:
+        version = subprocess.run([executable, "-version"], capture_output=True,
+                                 timeout=15, check=True).stdout
+        major = int(re.search(rb"ffmpeg version (\d+)", version)[1])
+    except (subprocess.SubprocessError, ValueError, TypeError):
+        # Unknown/custom builds retain the traditional filter-file spelling.
+        major = 0
+    # FFmpeg 7 added generic option-file loading. FFmpeg 9 removed the former
+    # filter_script option, while earlier supported builds still need it.
+    return ["-/filter:v" if major >= 7 else "-filter_script:v", str(script)]
+
+
+class _ExtractionWatchdog:
+    """A continuous long-video extraction may exceed ten minutes while progressing."""
+
+    def __init__(self, continuous):
+        self.continuous = continuous
+        self.started = self.last_progress = time.monotonic()
+        self.frames = 0
+
+    def expired(self, frame_count):
+        current = time.monotonic()
+        if frame_count > self.frames:
+            self.frames, self.last_progress = frame_count, current
+        return current - (self.last_progress if self.continuous else self.started) > 600
+
+
+def _extract_keyframes(path, frames, out_paths, checkpoint, *, metadata, max_frames, metrics=None):
+    started = time.perf_counter()
     source = _source(path)
-    if not 1 <= len(frames) <= 256 or len(frames) != len(out_paths):
-        raise MediaError("关键帧提取需要 1–256 个计划画面及相同数量的输出路径。")
+    if not frames or (max_frames is not None and len(frames) > max_frames) or len(frames) != len(out_paths):
+        limit = "1–256 个" if max_frames is not None else "至少一个"
+        raise MediaError(f"关键帧提取需要 {limit}计划画面及相同数量的输出路径。")
     outputs = [Path(output).resolve() for output in out_paths]
     if source in outputs or len(set(outputs)) != len(outputs):
         raise MediaError("抽帧输出路径必须唯一，且不能覆盖原视频。")
@@ -545,23 +600,28 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
     with tempfile.TemporaryDirectory(prefix="scenerecall-keyframes-") as directory:
         temporary_dir = Path(directory)
         select = _select_expression([frame["source_pts"] for frame in frames])
+        expression = f"select='{select}',showinfo=checksum=0"
+        filters = (["-vf", expression] if max_frames is not None
+                   else _filter_arguments(expression, temporary_dir))
         command = [
             _tool("ffmpeg"), "-nostdin", "-hide_banner", "-loglevel", "info", "-y", "-copyts",
             "-ss", _seconds(max(Fraction(0), targets[0] - container_origin - 1)), "-i", str(source),
             "-map", f"0:{metadata['video_stream_index']}", "-an", "-sn", "-dn",
-            "-vf", f"select='{select}',showinfo=checksum=0", "-frames:v", str(len(frames)),
+            *filters, "-frames:v", str(len(frames)),
             "-fps_mode", "passthrough", "-q:v", "2", "-start_number", "0", str(temporary_dir / "%08d.jpg"),
         ]
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         records, condition, errors = {}, threading.Condition(), []
         reader = threading.Thread(target=_metadata_reader, args=(process.stderr, records, condition, errors), daemon=True)
         reader.start()
-        started = time.monotonic()
+        watchdog = _ExtractionWatchdog(continuous=max_frames is None)
         try:
             while process.poll() is None:
                 if checkpoint:
                     checkpoint()
-                if time.monotonic() - started > 600:
+                with condition:
+                    decoded_count = len(records)
+                if watchdog.expired(decoded_count):
                     raise MediaError("关键帧提取超时。")
                 time.sleep(.1)
             reader.join(timeout=2)
@@ -569,6 +629,8 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
             actual = [pts * Fraction(*base) for _, (pts, base) in sorted(records.items())]
             if process.returncode or errors or len(images) != len(frames) or actual != targets:
                 raise MediaError("无法提取计划指定的精确画面；未用相邻帧替代。")
+            _metadata_for_source(source, metadata)
+            decode_finished = time.perf_counter()
             result = []
             for frame, image, output in zip(frames, images, outputs, strict=True):
                 if checkpoint:
@@ -585,6 +647,11 @@ def extract_keyframes(path: Path, frames: list[dict], out_paths: list[Path], che
                 finally:
                     temporary.unlink(missing_ok=True)
                 result.append({**frame, "id": output.stem, "path": str(output), "requested_at_ms": frame["at_ms"]})
+            if metrics is not None:
+                metrics.update(decode_passes=1, extraction_processes=1, frames=len(result),
+                               decode_ms=round((decode_finished - started) * 1000),
+                               output_write_ms=round((time.perf_counter() - decode_finished) * 1000),
+                               elapsed_ms=round((time.perf_counter() - started) * 1000))
             return result
         finally:
             _stop(process)

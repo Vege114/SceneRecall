@@ -81,14 +81,22 @@ class VisualIndex:
                 );
             """)
 
-    @staticmethod
-    def namespace(encoder) -> tuple[str, dict]:
+    def namespace(self, encoder) -> tuple[str, dict]:
         identity = encoder.identity()
         if not isinstance(identity, dict) or not identity:
             raise ValueError("视觉编码器必须提供冻结的模型、权重与预处理身份")
         # Round-trip makes a detached, JSON-only snapshot, including every field
         # supplied by the encoder, rather than guessing interchangeable models.
         identity = json.loads(json.dumps(identity, sort_keys=True, allow_nan=False))
+        from .visual_encoder_compat import cache_identities
+        identities = cache_identities(identity)
+        if len(identities) > 1:
+            candidates = [(digest([SCHEMA_VERSION, value]), value) for value in identities]
+            with self.engine._db() as db:
+                present = {row["signature"] for row in db.execute(
+                    f"SELECT signature FROM visual_namespaces WHERE signature IN ({','.join('?' for _ in candidates)})",
+                    [signature for signature, _ in candidates])}
+            return next((candidate for candidate in candidates if candidate[0] in present), candidates[0])
         return digest([SCHEMA_VERSION, identity]), identity
 
     @staticmethod
@@ -240,7 +248,13 @@ class VisualIndex:
             with engine._lock:
                 engine._check_generation(generation)
             self._check_files(batch, stats)
-            values = await encoder.encode_images([items[key] for key in batch])
+            next_batch = pending[offset + batch_size:offset + batch_size * 2]
+            prefetched = getattr(encoder, "encode_images_prefetched", None)
+            if callable(prefetched):
+                self._check_files(next_batch, stats)
+                values = await prefetched([items[key] for key in batch], [items[key] for key in next_batch])
+            else:
+                values = await encoder.encode_images([items[key] for key in batch])
             vectors = normalized_vectors(values, len(batch), dimensions)
             dimensions = len(vectors[0])
             self._check_files(batch, stats)

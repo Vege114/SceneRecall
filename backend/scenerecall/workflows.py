@@ -257,7 +257,7 @@ class WorkflowQueueMixin:
         """New jobs snapshot their decoder; persisted jobs never call this on resume."""
         config = dict(config)
         if config.get("analysis_strategy") == "retrieval-first-v1":
-            profile = LEGACY_KEYFRAME_DECODER_PROFILE
+            profile = config.get("keyframe_decoder_profile", DEFAULT_KEYFRAME_DECODER_PROFILE)
         elif config.get("keyframe_plan_id"):
             profile = self._plan_decoder_profile(self.load_plan(config["keyframe_plan_id"]))
             if "keyframe_decoder_profile" in config and config["keyframe_decoder_profile"] != profile:

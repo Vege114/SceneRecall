@@ -155,6 +155,14 @@ def scene_worker(tmp_path, monkeypatch):
     monkeypatch.setattr("scenerecall.media.scan_keyframes", scan)
     monkeypatch.setattr("scenerecall.media.extract_keyframes", extract_keyframes)
 
+    def extract_retrieval_frames(path, frames, output_paths, checkpoint=None, *, metadata=None, metrics=None):
+        images = extract_keyframes(path, frames, output_paths, checkpoint, metadata=metadata)
+        if metrics is not None:
+            metrics.update(decode_passes=1, extraction_processes=1, frames=len(images))
+        return images
+
+    monkeypatch.setattr("scenerecall.keyframes.extract_keyframes_stream", extract_retrieval_frames)
+
     def create(frame_count=60, with_subtitles=False):
         identity = len(sources)
         directory = tmp_path / f"worker-{identity}"
