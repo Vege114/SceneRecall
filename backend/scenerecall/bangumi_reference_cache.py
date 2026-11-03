@@ -17,7 +17,8 @@ import time
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .characters import CharacterStore
-from .visual_identity import MAX_IMAGE_BYTES, ReferenceGallery, _image, _png
+from .library import confined_path, digest, safe_id
+from .visual_identity import MAX_IMAGE_BYTES, ReferenceGallery, _image, _png, _write_bytes
 
 IMAGE_HOSTS = frozenset({"lain.bgm.tv"})
 MAX_REDIRECTS = 3
@@ -273,6 +274,44 @@ def _stored_url(profile):
     return source.get("image_url") if source.get("source") == "bangumi" else None
 
 
+def _reference_priority(profile):
+    role = (profile.get("external_source") or {}).get("role")
+    return ({"主角": 0, "配角": 1}.get(role, 2), profile["id"])
+
+
+def _complete_reference(reference, directory):
+    try:
+        path = confined_path(directory, f"{safe_id(reference['id'])}.png")
+        if not path.is_file() or not 0 < path.stat().st_size <= MAX_IMAGE_BYTES:
+            return False
+        with path.open("rb") as stream:
+            content = stream.read(MAX_IMAGE_BYTES + 1)
+        return len(content) <= MAX_IMAGE_BYTES and hashlib.sha256(content).hexdigest() == reference["sha256"]
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def _cache_inventory(profiles, references, directory):
+    cached, revoked, by_profile = set(), set(), {}
+    for profile in profiles:
+        identity, url = profile["id"], _stored_url(profile)
+        rows = [row for row in references if row["character_id"] == identity
+                and row["source"]["kind"] == "external_cached" and row["source"].get("url") == url]
+        active = [row for row in rows if row["status"] != "revoked"]
+        complete = [row for row in active if _complete_reference(row, directory)]
+        if complete:
+            cached.add(identity)
+        elif not active and rows:
+            revoked.add(identity)
+        by_profile[identity] = complete or ([] if active else rows)
+    return by_profile, cached, revoked
+
+
+def _page_signature(catalog, profiles, refresh):
+    return digest([catalog["scope_id"], refresh, [(row["id"], _stored_url(row), _reference_priority(row)[0])
+                                                for row in profiles]])
+
+
 class BangumiReferenceCache:
     def __init__(self, library, gallery=None, *, characters=None, downloader=None):
         self.library = library
@@ -281,28 +320,51 @@ class BangumiReferenceCache:
         self.downloader = downloader or download_image
         self._busy = threading.Lock()
 
-    def run(self, asset_id, max_images=12):
+    def run(self, asset_id, max_images=12, *, cursor=None, refresh=False):
         if type(max_images) is not int or not 1 <= max_images <= MAX_IMAGES:
             raise ValueError("每次缓存图片数量须为 1–20")
+        if type(refresh) is not bool:
+            raise ValueError("刷新参数须为布尔值")
         if not self._busy.acquire(blocking=False):
             raise ValueError("参考图缓存正在运行，请稍后重试")
         try:
-            return self._run(asset_id, max_images)
+            return self._run(asset_id, max_images, cursor=cursor, refresh=refresh)
         finally:
             self._busy.release()
 
-    def _run(self, asset_id, max_images):
-        catalog = self.characters.catalog(asset_id)
-        result = {"imported": 0, "existing": 0, "skipped": 0, "errors": [], "references": []}
+    def _run(self, asset_id, max_images, *, cursor=None, refresh=False):
         deadline = time.monotonic() + BATCH_TIMEOUT_SECONDS
-        attempted = 0
-        for profile in sorted(catalog["profiles"], key=lambda row: row["id"]):
+        catalog = self.characters.roster(asset_id)
+        profiles = sorted(catalog["profiles"], key=_reference_priority)
+        signature = _page_signature(catalog, profiles, refresh)
+        cursors = {digest([signature, index]): index for index in range(-1, len(profiles))}
+        if cursor is not None and (not isinstance(cursor, str) or cursor not in cursors):
+            raise ValueError("角色名单或参考图来源已变化，请从第一批重新缓存")
+        start = cursors.get(cursor, -1) + 1
+        result = {"imported": 0, "existing": 0, "skipped": 0, "errors": [], "references": [],
+                  "next_cursor": None, "time_limited": False, "attempted": 0}
+        result["skipped"] = sum(not _stored_url(row) for row in profiles)
+        references = self.gallery.list(asset_id, _catalog=catalog)["references"]
+        by_profile, _, _ = _cache_inventory(profiles, references, self.gallery._directory(catalog["scope_id"]))
+        for index, profile in enumerate(profiles):
             url = _stored_url(profile)
-            if not url or attempted >= max_images:
-                result["skipped"] += 1
-                continue
-            attempted += 1
             identity = profile["id"]
+            if not url:
+                continue
+            existing_rows = by_profile[identity]
+            if not refresh and existing_rows:
+                result["existing"] += 1
+                result["references"].append({key: value for key, value in existing_rows[0].items() if key != "path"})
+                continue
+            if index < start:
+                continue
+            if result["attempted"] >= max_images or time.monotonic() >= deadline:
+                result["time_limited"] = result["attempted"] < max_images
+                result["next_cursor"] = digest([signature, index - 1])
+                result["skipped"] += sum(bool(_stored_url(row)) and (refresh or not by_profile[row["id"]])
+                                         for row in profiles[index:])
+                break
+            result["attempted"] += 1
             try:
                 checked_image_url(url)
                 content = self.downloader(url, timeout=min(IMAGE_TIMEOUT_SECONDS, _remaining(deadline)))
@@ -313,15 +375,21 @@ class BangumiReferenceCache:
                     raise CacheError("转换后的 Bangumi 参考图超过 20 MiB")
                 content_hash = hashlib.sha256(normalized).hexdigest()
                 with self.library.lock:
-                    current = self.characters.catalog(asset_id)
+                    current = self.characters.roster(asset_id)
                     latest = next((row for row in current["profiles"] if row["id"] == identity), None)
                     if current["scope_id"] != catalog["scope_id"] or not latest or _stored_url(latest) != url:
                         raise CacheError("角色所属作品或 Bangumi 图片资料已变更，请重试")
-                    existing = next((row for row in self.gallery.list(asset_id, identity)["references"]
+                    existing = next((row for row in sorted(self.gallery.list(asset_id, identity, _catalog=current)["references"],
+                                                          key=lambda row: row["status"] == "revoked")
                         if row["source"].get("kind") == "external_cached" and row["source"].get("url") == url
                         and row["sha256"] == content_hash), None)
                     if existing is not None:
                         reference = existing  # Never reactivate a revoked reference.
+                        if not _complete_reference(existing, self.gallery._directory(current["scope_id"])):
+                            # Restore only the original bytes, identity and trust decision.
+                            path = confined_path(self.gallery._directory(current["scope_id"]),
+                                                 f"{safe_id(existing['id'])}.png")
+                            _write_bytes(path, normalized)
                         result["existing"] += 1
                     else:
                         reference = self.gallery.add(asset_id, identity, content, source_kind="external_cached",
@@ -333,4 +401,20 @@ class BangumiReferenceCache:
                 result["skipped"] += 1
                 reason = str(error) if isinstance(error, CacheError) else f"图片读取或保存失败（{type(error).__name__}）"
                 result["errors"].append({"character_id": identity, "reason": reason})
+        with self.library.lock:
+            current = self.characters.roster(asset_id)
+            current_profiles = sorted(current["profiles"], key=_reference_priority)
+            if _page_signature(current, current_profiles, refresh) != signature:
+                raise CacheError("角色所属作品或 Bangumi 图片资料已变更，请从第一批重新缓存")
+            references = self.gallery.list(asset_id, _catalog=current)["references"]
+            _, cached, revoked = _cache_inventory(profiles, references, self.gallery._directory(current["scope_id"]))
+            by_id = {row["id"]: row for row in references}
+            result["references"] = [{key: value for key, value in by_id[row["id"]].items() if key != "path"}
+                                    for row in result["references"] if row["id"] in by_id]
+        with_images = {row["id"] for row in profiles if _stored_url(row)}
+        main = {row["id"] for row in profiles if (row.get("external_source") or {}).get("role") == "主角"}
+        result["coverage"] = {"total": len(profiles), "with_image": len(with_images), "cached": len(cached),
+                              "revoked": len(revoked), "remaining": len(with_images - cached - revoked),
+                              "main_total": len(main), "main_with_image": len(main & with_images),
+                              "main_cached": len(main & cached)}
         return result

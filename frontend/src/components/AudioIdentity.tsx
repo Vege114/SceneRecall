@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { api, formatTime, message, post, subtitleLink } from '../api';
 import { type Asset, type CharacterLibrary, type CharacterProfile } from '../types';
 import { type AudioConfiguration, type AudioRecord, type AudioResult, type AudioSettings, type AudioTrack, type BangumiReferenceCacheResult, type IdentityRegion, type IdentityReview, identitySourceLabel, identityStatusLabel } from '../identityTypes';
@@ -23,6 +23,9 @@ export default function AudioIdentity({ asset, initialAudio, onSeek, onSaved }: 
   const [previewRunning, setPreviewRunning] = useState(false);
   const busy = operation || (previewRunning ? 'preview' : '');
   const [bangumiCache, setBangumiCache] = useState<BangumiReferenceCacheResult | null>(null);
+  const cacheAsset = useRef(asset.id);
+  cacheAsset.current = asset.id;
+  useEffect(() => { setBangumiCache(null); }, [asset.id]);
   const [referenceProfile, setReferenceProfile] = useState<CharacterProfile | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [errors, setErrors] = useState<string[]>([]); const [notice, setNotice] = useState('');
@@ -98,11 +101,13 @@ export default function AudioIdentity({ asset, initialAudio, onSeek, onSaved }: 
   const cacheBangumi = async () => {
     if (busy) return;
     setBusy('bangumi'); setErrors([]); setNotice('');
+    const savedAsset = asset.id;
     try {
-      const cached = await post<BangumiReferenceCacheResult>('/assets/' + encodeURIComponent(asset.id) + '/references/cache-bangumi', { max_images: 20 });
+      const cached = await post<BangumiReferenceCacheResult>('/assets/' + encodeURIComponent(asset.id) + '/references/cache-bangumi', { max_images: 20, ...(bangumiCache?.next_cursor ? { cursor: bangumiCache.next_cursor } : {}) });
+      if (cacheAsset.current !== savedAsset) return;
       setBangumiCache(cached); await refreshProfiles();
-      setNotice('Bangumi 角色图已处理：新增 ' + cached.imported + ' 张，已有 ' + cached.existing + ' 张，跳过 ' + cached.skipped + ' 项。新图保留为候选，请核对参考图库。');
-    } catch (caught) { setErrors([message(caught)]); } finally { setBusy(''); }
+      setNotice('Bangumi 角色图已处理：新增 ' + cached.imported + ' 张，已有 ' + cached.existing + ' 张，跳过 ' + cached.skipped + ' 项。新图保留为候选，请核对参考图库。' + (cached.coverage ? `主角已缓存 ${cached.coverage.main_cached} / ${cached.coverage.main_total} 个，剩余待缓存 ${cached.coverage.remaining} 个。${cached.next_cursor ? '可再次点击继续下一批。' : ''}` : ''));
+    } catch (caught) { if (cacheAsset.current === savedAsset) { setErrors([message(caught)]); setBangumiCache(null); } } finally { setBusy(''); }
   };
   const settingsDirty = !!settings && JSON.stringify(settings) !== JSON.stringify(configuration?.settings);
   if (loading) return <Spinner label="正在读取视听身份配置" />;

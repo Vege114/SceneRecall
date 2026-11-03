@@ -57,6 +57,22 @@ describe('Pre-analysis character confirmation', () => {
     expect(screen.getByText('暂时没有合适候选')).toBeTruthy();
   });
 
+  it('continues cache pages with the server cursor and reports main-role coverage', async () => {
+    const fetch = mockApi((url, options) => url.endsWith('/cache-bangumi') ? {
+      imported: 5, existing: 12, skipped: 20, errors: [], next_cursor: options?.body?.toString().includes('cursor') ? null : 'a'.repeat(24),
+      coverage: { total: 49, with_image: 37, cached: 17, revoked: 0, remaining: 20, main_total: 6, main_with_image: 6, main_cached: 5 },
+    } : initial());
+    const { user } = setup(); await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getByText('候选不足时，少量补充采样'));
+    await user.click(screen.getByRole('button', { name: '缓存 Bangumi 参考图' }));
+    await screen.findByText(/主角已缓存 5 \/ 6 个/);
+    await user.click(screen.getByRole('button', { name: '继续缓存 Bangumi 参考图' }));
+    const calls = fetch.mock.calls.filter((call) => call[0].endsWith('/cache-bangumi'));
+    expect(JSON.parse(calls[0][1]!.body as string)).toEqual({ max_images: 20 });
+    expect(JSON.parse(calls[1][1]!.body as string)).toEqual({ max_images: 20, cursor: 'a'.repeat(24) });
+    expect(screen.getAllByRole('checkbox').every((element) => !(element as HTMLInputElement).checked)).toBe(true);
+  });
+
   it('submits all three checked crops once and leaves replacement candidates unchecked', async () => {
     const pending = deferred<CharacterConfirmationBatchResult>();
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? pending.promise : initial());

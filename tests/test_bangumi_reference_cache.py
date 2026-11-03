@@ -338,9 +338,147 @@ class CacheTests(unittest.TestCase):
     def test_changed_image_content_creates_new_candidate(self):
         self.service.run("asset_one", 1)
         self.download.return_value = picture(160)
-        result = self.service.run("asset_one", 1)
+        result = self.service.run("asset_one", 1, refresh=True)
         self.assertEqual(result["imported"], 1)
         self.assertEqual(len(self.gallery.list("asset_one")["references"]), 2)
+
+    def test_complete_cache_is_not_downloaded_and_does_not_consume_next_batch(self):
+        first = self.service.run("asset_one", 1)
+        self.download.reset_mock()
+        second = self.service.run("asset_one", 1, cursor=first["next_cursor"])
+        self.assertEqual((second["imported"], second["existing"]), (1, 1))
+        self.assertEqual(self.download.call_count, 1)
+        self.assertEqual(second["coverage"]["remaining"], 0)
+        self.download.reset_mock()
+        complete = self.service.run("asset_one", 1)
+        self.download.assert_not_called()
+        self.assertEqual((complete["existing"], complete["coverage"]["cached"]), (2, 2))
+
+    def test_failed_first_page_does_not_starve_later_roles(self):
+        self.download.side_effect = ValueError("fixture failure")
+        first = self.service.run("asset_one", 1)
+        self.assertEqual(len(first["errors"]), 1)
+        self.assertIsNotNone(first["next_cursor"])
+        self.download.side_effect = None
+        second = self.service.run("asset_one", 1, cursor=first["next_cursor"])
+        self.assertEqual(second["imported"], 1)
+        self.assertIsNone(second["next_cursor"])
+        self.assertEqual(second["coverage"]["remaining"], 1)
+        retry = self.service.run("asset_one", 1)
+        self.assertEqual(retry["imported"], 1)
+        self.assertEqual(retry["coverage"]["remaining"], 0)
+
+    def test_main_roles_first_and_49_role_roster_reaches_all_images_in_pages(self):
+        scope = scope_id(self.library.get_asset("asset_one"))
+        registry = self.characters._read(scope)
+        registry["profiles"] = {}
+        registry["external_bindings"] = {}
+        atomic_json(self.characters._path(scope), registry)
+        dossier = {"source": "bangumi", "subject": {"id": 42, "name": "Fixture"},
+                   "fetched_at": "2026-10-15T00:00:00Z", "characters": [
+                       {"id": 1000 + index, "name": f"Role {index}",
+                        "role": "主角" if index >= 44 else "配角",
+                        "image_url": f"https://lain.bgm.tv/{index}.jpg"} for index in range(49)]}
+        self.characters.seed_bangumi(scope_id(self.library.get_asset("asset_one")), dossier)
+        first = self.service.run("asset_one", 20)
+        self.assertEqual(first["coverage"]["main_cached"], 5)
+        self.assertTrue(all(call.args[0].rsplit("/", 1)[1] in {f"{index}.jpg" for index in range(44, 49)}
+                            for call in self.download.call_args_list[:5]))
+        result = first
+        while result["next_cursor"]:
+            result = self.service.run("asset_one", 20, cursor=result["next_cursor"])
+        self.assertEqual(result["coverage"]["with_image"], 49)
+        self.assertEqual(result["coverage"]["cached"], 49)
+        self.assertEqual(result["coverage"]["remaining"], 0)
+        self.assertEqual(self.download.call_count, 49)
+        self.assertEqual(self.gallery.trusted("asset_one"), [])
+
+    def test_missing_or_corrupt_cache_restores_original_id_and_trust(self):
+        first = self.service.run("asset_one", 1)["references"][0]
+        self.gallery.update("asset_one", first["character_id"], first["id"], status="confirmed",
+                            reason="verified fixture", single_character=True)
+        before = self.gallery._read(scope_id(self.library.get_asset("asset_one")))
+        path = Path(self.gallery.list("asset_one", first["character_id"])["references"][0]["path"])
+        for broken in (b"corrupt", None):
+            if broken is None:
+                path.unlink()
+            else:
+                path.write_bytes(broken)
+            self.download.reset_mock()
+            result = self.service.run("asset_one", 1)
+            self.assertEqual(self.download.call_count, 1)
+            self.assertEqual(result["references"][0]["id"], first["id"])
+            self.assertEqual(result["references"][0]["status"], "confirmed")
+            self.assertEqual(cache.hashlib.sha256(path.read_bytes()).hexdigest(), first["sha256"])
+            self.assertEqual(self.gallery._read(before["scope_id"]), before)
+
+    def test_page_cursor_rejects_changed_roster_before_network(self):
+        cursor = self.service.run("asset_one", 1)["next_cursor"]
+        registry = self.characters._read(scope_id(self.library.get_asset("asset_one")))
+        row = next(row for row in registry["profiles"].values() if row["external_source"].get("image_url"))
+        row["external_source"]["image_url"] += "?new=1"
+        atomic_json(self.characters._path(registry["scope_id"]), registry)
+        self.download.reset_mock()
+        with self.assertRaises(ValueError):
+            self.service.run("asset_one", 1, cursor=cursor)
+        self.download.assert_not_called()
+
+    def test_page_cursor_cannot_be_reused_for_a_different_refresh_mode(self):
+        cursor = self.service.run("asset_one", 1)["next_cursor"]
+        self.download.reset_mock()
+        with self.assertRaises(ValueError):
+            self.service.run("asset_one", 1, cursor=cursor, refresh=True)
+        self.download.assert_not_called()
+
+    def test_revoked_old_image_does_not_mask_active_cache_or_prevent_repair(self):
+        old = self.service.run("asset_one", 1)["references"][0]
+        self.gallery.update("asset_one", old["character_id"], old["id"], status="revoked", reason="old image")
+        self.download.return_value = picture(160)
+        active = self.service.run("asset_one", 1, refresh=True)["references"][0]
+        self.assertNotEqual(active["id"], old["id"])
+        intact = self.service.run("asset_one", 1)
+        self.assertEqual(intact["references"][0]["id"], active["id"])
+        path = self.gallery._directory(scope_id(self.library.get_asset("asset_one"))) / f"{active['id']}.png"
+        path.write_bytes(b"broken")
+        repaired = self.service.run("asset_one", 1)
+        self.assertEqual(repaired["references"][0]["id"], active["id"])
+        self.assertEqual(cache.hashlib.sha256(path.read_bytes()).hexdigest(), active["sha256"])
+        self.assertEqual(self.gallery.list("asset_one", old["character_id"])["references"][0]["status"], "revoked")
+
+    def test_cache_hit_rechecks_scope_and_current_revocation_without_network(self):
+        first = self.service.run("asset_one")["references"][0]
+        self.download.reset_mock()
+        complete = cache._complete_reference
+        changed = False
+
+        def revoke_during_check(reference, directory):
+            nonlocal changed
+            if not changed:
+                changed = True
+                self.gallery.update("asset_one", first["character_id"], first["id"], status="revoked", reason="now revoked")
+            return complete(reference, directory)
+
+        with patch.object(cache, "_complete_reference", side_effect=revoke_during_check):
+            result = self.service.run("asset_one")
+        self.download.assert_not_called()
+        self.assertEqual(result["coverage"]["cached"], 1)
+        self.assertEqual(result["coverage"]["revoked"], 1)
+        self.assertEqual(next(row for row in result["references"] if row["id"] == first["id"])["status"], "revoked")
+        original = self.characters.roster("asset_one")
+        with patch.object(self.characters, "roster", side_effect=[original, {**original, "scope_id": "different"}]):
+            with self.assertRaises(cache.CacheError):
+                self.service.run("asset_one")
+        self.download.assert_not_called()
+
+    def test_deadline_stops_new_downloads_and_returns_next_page(self):
+        with patch.object(cache, "BATCH_TIMEOUT_SECONDS", 0):
+            result = self.service.run("asset_one", 1)
+        self.download.assert_not_called()
+        self.assertTrue(result["time_limited"])
+        self.assertIsNotNone(result["next_cursor"])
+        self.assertEqual(result["coverage"]["remaining"], 2)
+        resumed = self.service.run("asset_one", 1, cursor=result["next_cursor"])
+        self.assertEqual(resumed["imported"], 1)
 
     def test_limit_and_invalid_max_images_never_expand_downloads(self):
         result = self.service.run("asset_one", 1)
@@ -370,12 +508,11 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(self.download.call_count, 1)
 
     def test_stale_scope_during_fetch_does_not_write(self):
-        original = self.characters.catalog("asset_one")
+        original = self.characters.roster("asset_one")
         changed = {**original, "scope_id": "different_scope"}
-        with patch.object(self.characters, "catalog", side_effect=[original, changed]):
-            result = self.service.run("asset_one", 1)
-        self.assertEqual(result["imported"], 0)
-        self.assertEqual(len(result["errors"]), 1)
+        with patch.object(self.characters, "roster", side_effect=[original, changed, changed]):
+            with self.assertRaises(cache.CacheError):
+                self.service.run("asset_one", 1)
         self.assertEqual(self.gallery.list("asset_one")["references"], [])
 
     def test_explicit_route_body_and_no_fetch_on_read(self):

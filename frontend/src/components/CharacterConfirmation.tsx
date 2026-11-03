@@ -357,11 +357,11 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
     if (mutation.current || session.running || Object.keys(session.selections).length || sampling?.status === 'running') return;
     mutation.current = true; sequence.current += 1; setBusy('cache'); setError(''); setNotice('');
     try {
-      const result = await post<BangumiReferenceCacheResult>(`/assets/${encodeURIComponent(asset.id)}/references/cache-bangumi`, { max_images: 20 });
+      const result = await post<BangumiReferenceCacheResult>(`/assets/${encodeURIComponent(asset.id)}/references/cache-bangumi`, { max_images: 20, ...(cached?.next_cursor ? { cursor: cached.next_cursor } : {}) });
       if (!current(session)) return;
       setCached(result);
       await load();
-    } catch (caught) { if (current(session)) setError(message(caught)); }
+    } catch (caught) { if (current(session)) { setError(message(caught)); setCached(null); } }
     finally { if (current(session)) { mutation.current = false; setBusy(''); } }
   };
   const continueTask = async () => {
@@ -403,8 +403,9 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
         </section>
         <details className="confirmation-options"><summary>候选不足？补充参考图与少量采样</summary>
         <div className="confirmation-sampling"><div><strong>候选不足时，少量补充采样</strong><p className="helper">只在「{asset.title}」采样最多 12 帧，使用本地人物检测与图像匹配，不调用 VLM。已有候选可直接核对。</p></div><button type="button" className="button small secondary" disabled={!!busy || pendingCount > 0 || readySelections.length > 0 || sampling?.status === 'running' || !asset.source_available || data.sampling_available === false} onClick={() => void sample()}><ScanLine size={14} />{sampling?.status === 'failed' || sampling?.status === 'interrupted' ? '重试少量采样' : sampling?.status === 'completed' ? '继续少量本地采样' : '补充少量本地采样'}</button></div>
-        {data.roles.some((item) => item.profile.external_source?.image_url) && <div className="confirmation-cache"><p className="helper">首次采样前，可先缓存 Bangumi 档案参考图用于查找候选。缓存图片不会自动加入可信图库。</p><button type="button" className="text-button" disabled={!!busy || pendingCount > 0 || readySelections.length > 0 || sampling?.status === 'running'} onClick={() => void cacheReferences()}>缓存 Bangumi 参考图</button></div>}
+        {data.roles.some((item) => item.profile.external_source?.image_url) && <div className="confirmation-cache"><p className="helper">优先补齐主角参考图，跳过已有完整缓存。每批最多下载 20 张，可继续处理剩余图片；缓存图片仍需核对身份。</p><button type="button" className="text-button" disabled={!!busy || pendingCount > 0 || readySelections.length > 0 || sampling?.status === 'running'} onClick={() => void cacheReferences()}>{cached?.next_cursor ? '继续缓存 Bangumi 参考图' : '缓存 Bangumi 参考图'}</button></div>}
         {cached && <Alert tone="info">Bangumi 参考图：新增 {cached.imported} 张 · 已有 {cached.existing} 张 · 跳过 {cached.skipped} 张。仍需在正片中人工核对身份。{cached.errors?.length > 0 && <ul>{cached.errors.map((item, index) => <li key={`${item.character_id}:${index}`}>{data.roles.find((entry) => entry.character_id === item.character_id)?.profile.name || '角色'}：{item.reason}</li>)}</ul>}</Alert>}
+        {cached?.coverage && <p className="helper">来源有图 {cached.coverage.with_image} / {cached.coverage.total} 个角色 · 本地已缓存 {cached.coverage.cached} 个 · 主角已缓存 {cached.coverage.main_cached} / {cached.coverage.main_total} 个 · 剩余待缓存 {cached.coverage.remaining} 个。{cached.time_limited ? '本批已到时间限制，可继续下一批。' : cached.next_cursor ? '本批已到下载数量限制，可继续下一批。' : cached.coverage.remaining ? '本轮已结束，未成功项可再次缓存重试。' : '当前有来源图的角色已处理完成。'}{cached.coverage.revoked > 0 && `另有 ${cached.coverage.revoked} 个角色的来源图已撤销，保留撤销决定。`}</p>}
         {!asset.source_available && <Alert>当前视频原文件暂不可用，恢复原文件后可补充采样。已保存候选仍可核对。</Alert>}
         {data.sampling_available === false && asset.source_available && <Alert>{data.sampling_unavailable_reason || '本地人物检测或图像匹配模型尚未就绪。'}<a href="#/settings" target="_blank" rel="noreferrer">检查本地模型设置</a></Alert>}
         {sampling?.status === 'completed' && <p className="helper">本地采样已完成：{sampling.completed} / {sampling.total} 帧。没有匹配候选不代表角色一定未出场。</p>}
