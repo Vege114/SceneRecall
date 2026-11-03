@@ -489,6 +489,8 @@ export interface SearchResult extends SceneEvidence, RetrievalEvidence {
   association_source?: string;
 }
 export interface SearchResponse {
+  search_timing?: import('./searchTiming').SearchTiming;
+  client_timing?: import('./searchTiming').SearchClientTiming;
   results: SearchResult[];
   degraded: string[];
   explanation?: string;

@@ -23,6 +23,7 @@ import jieba
 
 from .execution import run_in_thread
 from .providers import ProviderError, ProviderManager
+from .search_timing import current_trace, record_interval, timed, trace_span
 
 jieba.setLogLevel(logging.WARNING)
 _query_embeddings = ContextVar("query_embeddings", default=None)
@@ -238,6 +239,7 @@ class SearchEngine:
         self.visual_encoder = None
         self.concept_lookup = None
         self.knowledge_provider = None
+        self.character_resolver = None
         self.query_diagnostics = {}
         self._initialize()
         from .visual_index import VisualIndex
@@ -621,12 +623,13 @@ class SearchEngine:
                     f"AND r.id IN ({','.join('?' for _ in batch)})", [*params, *batch]))
             return result
 
-    def filtered_asset_ids(self, filters=None):
+    def filtered_asset_ids(self, filters=None, *, visual_only=True):
         where, params = self._where(filters or {})
+        evidence_clause = ("AND (r.kind IN ('visual','scene') "
+                           "OR json_extract(r.data,'$.evidence_type')='retrieval_window')") if visual_only else ""
         with self._db() as db:
             return [row[0] for row in db.execute(f"""SELECT DISTINCT r.asset_id FROM records r
-                WHERE {where} AND r.is_context=0 AND (r.kind IN ('visual','scene')
-                OR json_extract(r.data,'$.evidence_type')='retrieval_window') ORDER BY r.asset_id""", params)]
+                WHERE {where} AND r.is_context=0 {evidence_clause} ORDER BY r.asset_id""", params)]
 
     def result_asset_ids(self, candidates):
         """Resolve ownership from the index, never generated result metadata."""
@@ -641,6 +644,7 @@ class SearchEngine:
                     f"SELECT DISTINCT asset_id FROM records WHERE id IN ({','.join('?' for _ in batch)})", batch))
         return sorted(owners)
 
+    @timed("snapshot.revision.work")
     def query_token(self, filters):
         from .query_cache import query_revision
         with self._db() as db:
@@ -660,17 +664,28 @@ class SearchEngine:
                              if stamp is not None else None)
         except OSError:
             encoder_token = (id(encoder), "unavailable")
-        return revision, knowledge, encoder_token
+        names = None
+        if self.character_resolver is not None:
+            try:
+                names = self.character_resolver.revision(filters, self)
+            except (OSError, ValueError) as exc:
+                names = ("unavailable", type(exc).__name__)
+        return revision, knowledge, encoder_token, names
 
     @staticmethod
     def clear_completed_query():
         _completed_query.set(None)
+
+    def completed_query_text(self, fallback):
+        completed = _completed_query.get()
+        return completed[3] if completed is not None and completed[0] is self else fallback
 
     async def check_completed_query(self):
         completed = _completed_query.get()
         if completed is not None and completed[0] is self:
             await self._check_query_token(completed[2], completed[1])
 
+    @timed("snapshot.validate")
     async def _check_query_token(self, token, filters):
         if await run_in_thread(self.query_token, filters) != token:
             raise SearchSnapshotChanged("资料正在更新，请重试搜索")
@@ -735,7 +750,8 @@ class SearchEngine:
                 params.append(value)
         return (" AND ".join(clauses) or "1=1"), params
 
-    def _lexical(self, query: str, filters: dict, limit: int = 50) -> list[dict]:
+    @timed("lexical.sql_tokenize.work")
+    def _lexical(self, query: str, filters: dict, limit: int = 50, *, aliases=()) -> list[dict]:
         where, params = self._where(filters)
         normalized = normalize(query)
         if not normalized:
@@ -745,7 +761,8 @@ class SearchEngine:
                                "ORDER BY r.is_context ASC, length(r.normalized) ASC LIMIT ?",
                                [*params, normalized, limit]).fetchall()
             candidates = {json.loads(row[0])["id"]: json.loads(row[0]) for row in exact}
-            tokens = tokenize(query)
+            tokens = list(dict.fromkeys([*tokenize(query),
+                                         *(term for alias in aliases for term in tokenize(alias))]))
             # Tokens quoted as literal FTS terms; no user-controlled FTS query language.
             fts_query = " OR ".join('"' + term.replace('"', '""') + '"' for term in tokens[:100])
             if fts_query:
@@ -757,6 +774,7 @@ class SearchEngine:
                     candidates.setdefault(record["id"], record)
         return list(candidates.values())[:limit]
 
+    @timed("semantic.snapshot.work")
     def _semantic_snapshot(self, profile_id, filters):
         """Read the complete scoped manifest off the event loop in one snapshot."""
         signature = self._signature(profile_id)
@@ -770,6 +788,7 @@ class SearchEngine:
                 f"SELECT r.id,r.data,r.text_hash FROM records r WHERE {where}", params)}
             return signature, dict(namespace), valid
 
+    @timed("semantic.index_read_rank.work")
     def _semantic_candidates(self, namespace, query_vector, valid, filtered):
         # Import, connection setup, table opening and query preparation can all
         # block. Keep their complete lifetime in the cancellation-owned worker.
@@ -793,8 +812,10 @@ class SearchEngine:
         cache = _query_embeddings.get()
         key = (signature, query)
         query_vector = cache.get(key) if cache is not None else None
+        phase_cache_hit = query_vector is not None
         if query_vector is None:
-            result = await self.providers.embed(profile_id, [query])
+            with trace_span("semantic.query_encode", request_cache_hit=phase_cache_hit):
+                result = await self.providers.embed(profile_id, [query])
             query_vector = result.data[0]
             if cache is not None:
                 cache[key] = query_vector
@@ -818,6 +839,7 @@ class SearchEngine:
             degraded.append("部分资料已更新，旧向量已跳过；请重建向量索引")
         return records
 
+    @timed("search.engine")
     async def search(self, query: str, filters: dict | None = None, embedding_profile_id: str | None = None,
                      query_profile_id: str | None = None, decision_profile_id: str | None = None,
                      answer_profile_id: str | None = None, limit: int = 10) -> dict:
@@ -827,14 +849,6 @@ class SearchEngine:
         limit = max(1, min(int(limit), 50))
         filters = {key: value for key, value in (filters or {}).items() if key in ALLOWED_FILTERS}
         degraded = []
-        search_text = query
-        if query_profile_id:
-            try:
-                interpreted = await self.providers.interpret(query_profile_id, query)
-                search_text = interpreted.data["search_text"]
-                filters = {**interpreted.data.get("filters", {}), **filters}
-            except ProviderError as exc:
-                degraded.append("查询理解失败，已保留原始问题：" + str(exc))
         filters = copy.deepcopy(filters)
         diagnostics = {"branches_ms": {}}
         self.clear_completed_query()
@@ -842,13 +856,66 @@ class SearchEngine:
         cache_token = _query_embeddings.set({})
         try:
             for attempt in range(2):
-                token = await run_in_thread(self.query_token, filters)
+                attempt_filters = copy.deepcopy(filters)
+                warnings = list(degraded)
+                planning_sources = []
+                with trace_span("snapshot.acquire", attempt=attempt):
+                    token = await run_in_thread(self.query_token, attempt_filters)
                 try:
-                    result = await self._search_snapshot(query, search_text, filters, embedding_profile_id,
-                        decision_profile_id, answer_profile_id, limit, list(degraded), token, diagnostics)
-                    await self._check_query_token(token, filters)
+                    query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                    search_text = query_text
+                    if query_profile_id:
+                        try:
+                            # A generated scope can change which character a name
+                            # denotes. Replan once; never carry old interpretation
+                            # text into a newly resolved character's query.
+                            for planning_attempt in range(2):
+                                planned_query = query_text
+                                with trace_span("query.interpret", planning_attempt=planning_attempt):
+                                    interpreted = await self.providers.interpret(query_profile_id, planned_query)
+                                interpreted_filters = {**interpreted.data.get("filters", {}), **filters}
+                                if interpreted_filters != attempt_filters:
+                                    previous_filters, previous_token = attempt_filters, token
+                                    planning_sources.append((previous_filters, previous_token))
+                                    attempt_filters = interpreted_filters
+                                    with trace_span("snapshot.acquire", attempt=attempt, interpreted=True):
+                                        token = await run_in_thread(self.query_token, attempt_filters)
+                                    # Fence the interpretation source *after* acquiring
+                                    # the new snapshot, closing the scope-switch gap.
+                                    await self._check_query_token(previous_token, previous_filters)
+                                    query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                                if query_text != planned_query:
+                                    continue
+                                search_text = interpreted.data["search_text"]
+                                if search_text != query_text:
+                                    search_text, interpreted_aliases = await self._resolve_character_query(search_text, attempt_filters, token, warnings)
+                                    lexical_aliases = tuple(sorted(set(lexical_aliases).union(interpreted_aliases)))
+                                break
+                            else:
+                                warnings.append("查询理解反复改变角色范围，已使用原筛选与本地角色解析")
+                                attempt_filters = copy.deepcopy(filters)
+                                with trace_span("snapshot.acquire", attempt=attempt, interpretation_fallback=True):
+                                    token = await run_in_thread(self.query_token, attempt_filters)
+                                query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                                search_text = query_text
+                        except ProviderError as exc:
+                            warnings.append("查询理解失败，已保留原始问题：" + str(exc))
+                            if attempt_filters != filters:
+                                attempt_filters = copy.deepcopy(filters)
+                                with trace_span("snapshot.acquire", attempt=attempt, interpretation_fallback=True):
+                                    token = await run_in_thread(self.query_token, attempt_filters)
+                                query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                            search_text = query_text
+                    result = await self._search_snapshot(query_text, search_text, attempt_filters, embedding_profile_id,
+                        decision_profile_id, answer_profile_id, limit, warnings, token, diagnostics, lexical_aliases)
+                    for planning_filters, planning_token in planning_sources:
+                        await self._check_query_token(planning_token, planning_filters)
+                    await self._check_query_token(token, attempt_filters)
                     diagnostics["retries"] = attempt
-                    _completed_query.set((self, filters, token))
+                    trace = current_trace()
+                    if trace is not None:
+                        trace.attributes["snapshot_retries"] = attempt
+                    _completed_query.set((self, attempt_filters, token, query_text))
                     return result
                 except SearchSnapshotChanged:
                     if attempt:
@@ -858,18 +925,20 @@ class SearchEngine:
             diagnostics["total_ms"] = (time.perf_counter() - started) * 1000
             self.query_diagnostics = diagnostics
 
+    @timed("recall.parallel")
     async def _recall_parallel(self, query, search_text, filters, embedding_profile_id, diagnostics,
-                               knowledge_available=True):
-        async def branch(name):
+                               knowledge_available=True, lexical_aliases=()):
+        async def recall_branch(name):
             started = time.perf_counter()
             warnings, rows = [], []
             scoped = copy.deepcopy(filters)
             try:
                 if name == "lexical":
-                    rows = await run_in_thread(self._lexical, query, scoped)
+                    options = {"aliases": lexical_aliases} if lexical_aliases else {}
+                    rows = await run_in_thread(self._lexical, query, scoped, **options)
                     if search_text != query:
                         seen = {row["id"] for row in rows}
-                        expanded = await run_in_thread(self._lexical, search_text, scoped)
+                        expanded = await run_in_thread(self._lexical, search_text, scoped, **options)
                         rows.extend(row for row in expanded if row["id"] not in seen)
                         rows = rows[:50]
                 elif name == "semantic":
@@ -897,6 +966,12 @@ class SearchEngine:
             finally:
                 diagnostics["branches_ms"][name] = (time.perf_counter() - started) * 1000
 
+        async def branch(name):
+            with trace_span("recall." + name) as phase:
+                rows, warnings = await recall_branch(name)
+                phase.set(candidate_count=len(rows), warning_count=len(warnings))
+                return rows, warnings
+
         tasks = [asyncio.create_task(branch(name)) for name in ("lexical", "semantic", "visual", "concept")]
         try:
             return await asyncio.gather(*tasks)
@@ -911,14 +986,32 @@ class SearchEngine:
                     continue
             raise
 
+    async def _resolve_character_query(self, query, filters, token, degraded):
+        # Every record type, ranker and evidence consumer receives the same
+        # resolved query. Literal matching and FTS retain the source wording.
+        if self.character_resolver is not None:
+            with trace_span("query.character_names") as phase:
+                try:
+                    if isinstance(token[3], tuple) and token[3][:1] == ("unavailable",):
+                        raise ValueError("角色名称表不可用")
+                    resolved = await run_in_thread(self.character_resolver.resolve, query, filters, self)
+                    phase.set(matched_count=len(resolved["matches"]), changed=resolved["changed"])
+                    return resolved["text"], tuple(resolved.get("aliases", ()))
+                except (OSError, ValueError):
+                    degraded.append("角色简称解析不可用，已保留原始查询")
+                    phase.set(matched_count=0, changed=False, unavailable=True)
+        return query, ()
+
     async def _search_snapshot(self, query, search_text, filters, embedding_profile_id,
-                               decision_profile_id, answer_profile_id, limit, degraded, token, diagnostics):
+                               decision_profile_id, answer_profile_id, limit, degraded, token, diagnostics,
+                               lexical_aliases=()):
         knowledge_available = not (isinstance(token[1], tuple) and token[1][:1] == ("unavailable",))
         branches = await self._recall_parallel(query, search_text, filters, embedding_profile_id, diagnostics,
-                                                knowledge_available)
+                                                knowledge_available, lexical_aliases)
         lexical, semantic, visual, concept = [rows for rows, _warnings in branches]
         for _rows, warnings in branches:
             degraded.extend(warnings)
+        merge_started = time.perf_counter()
         records, scores = {}, defaultdict(float)
         for ranking in (lexical, semantic, visual, concept):
             for rank, record in enumerate(ranking, 1):
@@ -939,6 +1032,8 @@ class SearchEngine:
                                "match_reason": ("设定匹配该实体；画面证据仅确认出场，未证明当前功能或动作"
                                                 if record.get("match_basis") == "setting_concept_appearance" else
                                                 "台词原文包含查询文本" if exact else "包含相关证据，组合条件尚待核对")})
+        record_interval("results.merge_rank", merge_started, candidate_count=len(candidates))
+        rerank_started = time.perf_counter()
         if decision_profile_id and candidates:
             await self._check_query_token(token, filters)
             try:
@@ -963,6 +1058,8 @@ class SearchEngine:
                 candidates = sorted(reranked, key=lambda row: row["score"], reverse=True)
             except ProviderError as exc:
                 degraded.append("候选核对失败，已保留召回结果：" + str(exc))
+        record_interval("results.provider_rerank", rerank_started, enabled=bool(decision_profile_id and candidates))
+        select_started = time.perf_counter()
         # Suppress a context hit when one of its shorter source cues already contains
         # the complete literal quote. Context remains when the query spans cue boundaries.
         chosen = []
@@ -981,10 +1078,12 @@ class SearchEngine:
                 break
         explanation = (f"找到 {len(chosen)} 个候选片段；请结合原片核对标记为部分匹配的结果。"
                        if chosen else "未找到有足够证据支持的片段。")
+        record_interval("results.deduplicate_select", select_started, result_count=len(chosen))
         if answer_profile_id and chosen:
             await self._check_query_token(token, filters)
             try:
-                answer = await self.providers.compose(answer_profile_id, query, chosen)
+                with trace_span("results.compose"):
+                    answer = await self.providers.compose(answer_profile_id, query, chosen)
                 explanation = answer.data["text"]
             except ProviderError as exc:
                 degraded.append("解释生成失败，已使用证据摘要：" + str(exc))

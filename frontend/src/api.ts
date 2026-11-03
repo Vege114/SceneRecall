@@ -1,3 +1,5 @@
+import { searchTransportTiming } from './searchTiming';
+
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
@@ -10,6 +12,7 @@ function errorText(detail: unknown): string {
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const started = performance.now();
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
@@ -20,10 +23,15 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   } catch {
     throw new ApiError('无法连接本地服务，请确认 SceneRecall 服务正在运行。', 0);
   }
+  const headersReady = performance.now();
   const data = await response.json().catch(() => ({}));
+  const parsed = performance.now();
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new CustomEvent('session-expired'));
     throw new ApiError(errorText(data.detail || data.message || `服务返回错误 (${response.status})`), response.status);
+  }
+  if (path === '/search' && data && typeof data === 'object' && !Array.isArray(data)) {
+    Object.assign(data, searchTransportTiming(response, started, headersReady, parsed));
   }
   return data as T;
 }

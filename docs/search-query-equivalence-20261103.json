@@ -1,0 +1,349 @@
+{
+  "schema": "search-query-equivalence-validation-v1",
+  "date": "2026-11-03",
+  "timezone": "Asia/Shanghai",
+  "conditions": {
+    "scope": "Revue Starlight TV episodes 1-12",
+    "query_kind": "visual",
+    "enhancements": false,
+    "visual_verification": false,
+    "knowledge_mode": "baseline",
+    "server_restarted_before_pair": true,
+    "server_pid": 12736,
+    "server_restarted_between_pair": false,
+    "concurrent_searches_or_tests": false,
+    "sample_order": [
+      "short",
+      "full"
+    ],
+    "one_sample_per_variant": true,
+    "cache_state": "preserved; actual cache facts are recorded per sample",
+    "image_loading_measured": false
+  },
+  "code": {
+    "base_commit": "b0b98d7d19837110ffcacfdd3c7c7f44e84cda9f",
+    "state": "current workspace includes preexisting uncommitted changes and this fix",
+    "source_manifest": [
+      {
+        "path": "backend/scenerecall/character_query.py",
+        "sha256": "327d8cbfea1bddfde2ed08f6c023c8d1317e5b161b55722a925905144a752dac"
+      },
+      {
+        "path": "backend/scenerecall/search.py",
+        "sha256": "911560458db357f235edfd6d3dc6538cfb4aa9b286f0b71fca6afe339660855a"
+      },
+      {
+        "path": "backend/scenerecall/main.py",
+        "sha256": "91e78721a19625a6b8453280fbae5165a1207ab718a552ce3b1c0e2382e2e2aa"
+      },
+      {
+        "path": "frontend/src/components/Search.tsx",
+        "sha256": "e0c332233f7e758bad1f7e494912c7d7978dcdc00c9194b3c4cff8b5ba6cfac8"
+      },
+      {
+        "path": "frontend/src/searchTiming.ts",
+        "sha256": "a32001313ea0115a43d030af57199cae5137afe546e54f7149ef0c95c144f3f4"
+      },
+      {
+        "path": "frontend/src/components/SearchTiming.tsx",
+        "sha256": "0790c6cfb3aa54dfc5d1b0b03c470abc2411f13e3720dd3e2cf447c3baa96ae7"
+      },
+      {
+        "path": "tests/test_character_query.py",
+        "sha256": "9b9826f7654bcf18961548297e0f69d4a10d5b36de85f52632e361dc35814bc3"
+      }
+    ],
+    "source_manifest_sha256": "4d95b466baf988a3a02f681b240e1c6062e5340c3fd153bce76e01c16c8bbc7c"
+  },
+  "validation": {
+    "regression_tests_passed": 128,
+    "ruff_passed": true,
+    "regression_evidence": "reported by the implementation run; not rerun during UI measurement",
+    "subtitle_api_coverage": [
+      "disjoint nickname and canonical name",
+      "partial-word recall",
+      "original subtitle text preserved"
+    ]
+  },
+  "results": {
+    "short_count": 10,
+    "full_count": 10,
+    "ordered_complete_results_equal": true,
+    "hash_serialization": "UTF-8 JSON; recursively sorted object keys; original array order; compact separators; unescaped Unicode; SHA-256",
+    "field_count": 60,
+    "field_comparisons": {
+      "anime_id": true,
+      "anime_title": true,
+      "asset_id": true,
+      "character": true,
+      "character_revision": true,
+      "concept_bindings": true,
+      "context_frame_ids": true,
+      "end_ms": true,
+      "entities": true,
+      "episode": true,
+      "events": true,
+      "evidence_frame_ids": true,
+      "evidence_ids": true,
+      "evidence_type": true,
+      "favorite": true,
+      "folder_id": true,
+      "folder_ids": true,
+      "frame_ids": true,
+      "held_frame_spans": true,
+      "hit_frame_id": true,
+      "id": true,
+      "identity_policy": true,
+      "kind": true,
+      "language": true,
+      "local_frame_ids": true,
+      "match_reason": true,
+      "match_type": true,
+      "media_url": true,
+      "note": true,
+      "ordered_frames": true,
+      "project_id": true,
+      "project_name": true,
+      "record_id": true,
+      "resolved_actions": true,
+      "retrieval_branches": true,
+      "review_status": true,
+      "run_id": true,
+      "sampling_version": true,
+      "score": true,
+      "season": true,
+      "seek_basis": true,
+      "seek_ms": true,
+      "series": true,
+      "shot_ids": true,
+      "source": true,
+      "source_fingerprint": true,
+      "start_ms": true,
+      "strategy": true,
+      "subtitle_ids": true,
+      "subtitle_text": true,
+      "summary": true,
+      "tags": true,
+      "text": true,
+      "thumbnail": true,
+      "thumbnail_url": true,
+      "title": true,
+      "uncertainties": true,
+      "unverified_character_names": true,
+      "version": true,
+      "work_id": true
+    },
+    "nested_differences": [],
+    "complete_ordered_results_sha256": "f2e5fe4d0fa7c62d18b87f935583e1fc44d2f02f772049a4cd74fe4d8d7c3303"
+  },
+  "response_comparison": {
+    "stable_top_level_fields": {
+      "degraded": {
+        "equal": true
+      },
+      "explanation": {
+        "equal": true
+      },
+      "knowledge_hits": {
+        "equal": true
+      }
+    },
+    "all_response_difference_paths": [
+      "knowledge_diagnostics.mapping_and_evidence_ms",
+      "knowledge_diagnostics.total_ms"
+    ]
+  },
+  "samples": [
+    {
+      "label": "short",
+      "request_id": "da6d888ef75d4af9a09d4df9b41fa58c",
+      "attributes": {
+        "query_kind": "visual",
+        "character_filter": false,
+        "query_characters": 10,
+        "filter_count": 2,
+        "enhancements": false,
+        "visual_verification": false,
+        "snapshot_retries": 0,
+        "result_count": 10,
+        "status_code": 200
+      },
+      "click_to_result_dom_ms": 55893.39999997616,
+      "click_to_paint_opportunity_ms": 57506.5,
+      "server_ms": 55861.784,
+      "frontend_nonoverlap_parts_ms": {
+        "click_to_submit_ms": 1.100000023841858,
+        "submit_to_fetch_ms": 0,
+        "backend_ms": 55861.784,
+        "request_to_json_remainder_ms": 11.71600000000035,
+        "json_to_dom_ms": 18.799999952316284
+      },
+      "frontend_equation_error_ms": 0.0,
+      "backend_nonoverlap_groups_ms": {
+        "snapshot_acquire_and_validation": 18318.717,
+        "character_name_resolution": 626.62,
+        "parallel_recall": 21413.375,
+        "current_source_evidence": 15408.913,
+        "merge_select_enrich_serialize": 6.52
+      },
+      "backend_measured_nonoverlap_ms": 55774.145,
+      "backend_unclassified_ms": 87.639,
+      "backend_selected_span_ids": [
+        3,
+        6,
+        7,
+        21,
+        22,
+        23,
+        24,
+        27,
+        29,
+        30,
+        33
+      ],
+      "selected_intervals_overlap": false,
+      "character_resolution_ms": 626.62,
+      "character_revision_ms": 2431.612,
+      "character_all_measured_ms": 3058.232,
+      "timing_file": "search-equivalence-short-timing-20261103.json",
+      "detail_phase_totals_ms": {
+        "query.character_names": 626.62,
+        "query.character_names.revision": 2431.612,
+        "recall.concept": 9890.389,
+        "recall.lexical": 2709.27,
+        "visual.matrix_cache": 12199.835,
+        "visual.query_cache_lookup": 1.103,
+        "visual.streaming_rank.work": 9172.885
+      },
+      "cache_state": {
+        "visual.query_cache_lookup": {
+          "query_cache_hit": true
+        },
+        "visual.matrix_cache": {
+          "matrix_cache_hit": false,
+          "matrix_built": true,
+          "streaming_fallback": true,
+          "cache_status": "fallback",
+          "fallback_reason": "retained_budget_exceeded",
+          "memoized_fallback": false,
+          "build_attempted": true,
+          "attempted_retained_bytes": 269410176,
+          "retained_bytes_phase": "vectors",
+          "cache_budget_bytes": 268435456,
+          "build_budget_bytes": 268435456
+        }
+      },
+      "name_resolution_state": [
+        {
+          "matched_count": 2,
+          "changed": true
+        }
+      ]
+    },
+    {
+      "label": "full",
+      "request_id": "7cbc476d861c459ea844148f2083ffb9",
+      "attributes": {
+        "query_kind": "visual",
+        "character_filter": false,
+        "query_characters": 14,
+        "filter_count": 2,
+        "enhancements": false,
+        "visual_verification": false,
+        "snapshot_retries": 0,
+        "result_count": 10,
+        "status_code": 200
+      },
+      "click_to_result_dom_ms": 84365.5,
+      "click_to_paint_opportunity_ms": 85523.69999992847,
+      "server_ms": 83898.855,
+      "frontend_nonoverlap_parts_ms": {
+        "click_to_submit_ms": 0.5999999046325684,
+        "submit_to_fetch_ms": 0,
+        "backend_ms": 83898.855,
+        "request_to_json_remainder_ms": 463.94500007152965,
+        "json_to_dom_ms": 2.100000023841858
+      },
+      "frontend_equation_error_ms": 0.0,
+      "backend_nonoverlap_groups_ms": {
+        "snapshot_acquire_and_validation": 18893.471,
+        "character_name_resolution": 725.758,
+        "parallel_recall": 33718.867,
+        "current_source_evidence": 30511.764,
+        "merge_select_enrich_serialize": 3.299
+      },
+      "backend_measured_nonoverlap_ms": 83853.159,
+      "backend_unclassified_ms": 45.696,
+      "backend_selected_span_ids": [
+        3,
+        6,
+        7,
+        20,
+        21,
+        22,
+        23,
+        26,
+        28,
+        29,
+        32
+      ],
+      "selected_intervals_overlap": false,
+      "character_resolution_ms": 725.758,
+      "character_revision_ms": 2896.121,
+      "character_all_measured_ms": 3621.879,
+      "timing_file": "search-equivalence-full-timing-20261103.json",
+      "detail_phase_totals_ms": {
+        "query.character_names": 725.758,
+        "query.character_names.revision": 2896.121,
+        "recall.concept": 10353.118,
+        "recall.lexical": 1072.605,
+        "visual.matrix_cache": 0.039,
+        "visual.query_cache_lookup": 0.974,
+        "visual.streaming_rank.work": 33614.825
+      },
+      "cache_state": {
+        "visual.query_cache_lookup": {
+          "query_cache_hit": true
+        },
+        "visual.matrix_cache": {
+          "matrix_cache_hit": false,
+          "matrix_built": false,
+          "streaming_fallback": true,
+          "cache_status": "fallback",
+          "fallback_reason": "retained_budget_exceeded",
+          "memoized_fallback": true,
+          "build_attempted": false,
+          "attempted_retained_bytes": 269410176,
+          "retained_bytes_phase": "vectors",
+          "cache_budget_bytes": 268435456
+        }
+      },
+      "name_resolution_state": [
+        {
+          "matched_count": 2,
+          "changed": false
+        }
+      ]
+    }
+  ],
+  "delta_full_minus_short_ms": {
+    "click_to_result_dom": 28472.1,
+    "server": 28037.071,
+    "backend_groups": {
+      "snapshot_acquire_and_validation": 574.754,
+      "character_name_resolution": 99.138,
+      "parallel_recall": 12305.492,
+      "current_source_evidence": 15102.851,
+      "merge_select_enrich_serialize": -3.221
+    },
+    "character_all_measured": 563.647
+  },
+  "limits": [
+    "Only one observed request per variant; no stable latency or throughput claim.",
+    "Do not add parent and child spans or parallel recall branches.",
+    "Character revision time is already contained within snapshot phases.",
+    "Click-to-DOM excludes thumbnail loading; paint opportunity does not prove displayed pixels or loaded images.",
+    "No continuous CPU, disk, GPU, or OS scheduling trace was collected, so phase changes are localized but their resource causes are unproven.",
+    "Result equality does not establish semantic relevance or confirmed identities; user reviews retrieval quality."
+  ]
+}

@@ -18,7 +18,8 @@ from types import MappingProxyType
 import numpy as np
 
 from .execution import run_in_thread
-from .query_cache import MatrixCache, initialize_revision, query_revision
+from .query_cache import MatrixCache, initialize_revision, note_matrix_build, query_revision
+from .search_timing import record_interval, timed, trace_span
 
 
 SCHEMA_VERSION = "direct-visual-index-v1"
@@ -285,7 +286,9 @@ class VisualIndex:
 
     async def search(self, query, filters, encoder, degraded, limit=50):
         engine = self.engine
-        signature, _identity = self.namespace(encoder)
+        with trace_span("visual.model_identity"):
+            signature, _identity = self.namespace(encoder)
+        cache_started = time.perf_counter()
         where, params = engine._where(filters)
         with engine._db() as db:
             namespace = db.execute("SELECT dimensions FROM visual_namespaces WHERE signature=?", (signature,)).fetchone()
@@ -299,17 +302,22 @@ class VisualIndex:
             cached = db.execute("SELECT vector,dimensions FROM visual_query_cache WHERE signature=? AND query_hash=?",
                                 (signature, query_hash)).fetchone()
         dimensions = namespace["dimensions"]
+        record_interval("visual.query_cache_lookup", cache_started,
+                        query_cache_hit=bool(cached and cached["dimensions"] == dimensions))
         if cached and cached["dimensions"] == dimensions:
             vector = np.frombuffer(cached["vector"], dtype="<f4")
         else:
-            vector = normalized_vectors(await encoder.encode_texts([query]), 1, dimensions)[0]
+            with trace_span("visual.query_encode"):
+                vector = normalized_vectors(await encoder.encode_texts([query]), 1, dimensions)[0]
             if self.namespace(encoder)[0] != signature:
                 raise ValueError("视觉查询编码器身份在运行期间发生变化")
             with engine._db() as db:
                 db.execute("INSERT OR REPLACE INTO visual_query_cache VALUES (?,?,?,?)",
                            (signature, query_hash, dimensions, vector.tobytes()))
-        return await run_in_thread(self._rank, signature, vector, dimensions, where, params, limit)
+        with trace_span("visual.rank"):
+            return await run_in_thread(self._rank, signature, vector, dimensions, where, params, limit)
 
+    @timed("visual.rank.work")
     def _rank(self, signature, vector, dimensions, where, params, limit):
         with self.engine._db() as db:
             db.execute("BEGIN")
@@ -319,11 +327,23 @@ class VisualIndex:
             # A replacement database may retain an old revision from a backup.
             stat = self.engine.path.stat()
             key = (stat.st_dev, stat.st_ino, signature, revision, where, tuple(params), dimensions)
-            snapshot = self.matrix_cache.get_or_build(key, lambda budget: self._matrix_snapshot(
-                db, signature, dimensions, where, params, budget))
+            built = False
+
+            def build(budget):
+                nonlocal built
+                built = True
+                with trace_span("visual.matrix_build.work"):
+                    return self._matrix_snapshot(db, signature, dimensions, where, params, budget)
+
+            with trace_span("visual.matrix_cache") as phase:
+                cache_details = {}
+                snapshot = self.matrix_cache.get_or_build(key, build, diagnostics=cache_details)
+                phase.set(matrix_cache_hit=snapshot is not None and not built,
+                          matrix_built=built, streaming_fallback=snapshot is None, **cache_details)
             if snapshot is None:
                 return self._rank_stream(db, signature, vector, dimensions, where, params, limit)
             records, blocks = snapshot
+            scoring_started = time.perf_counter()
             matches = {}
             for matrix, rows in blocks:
                 scores = matrix @ vector
@@ -334,6 +354,9 @@ class VisualIndex:
                     old = matches.get(record_id)
                     if old is None or score > old[0]:
                         matches[record_id] = score, frame_id, at_ms
+            record_interval("visual.matrix_score", scoring_started, block_count=len(blocks),
+                            record_count=len(records), frame_count=sum(len(rows) for _matrix, rows in blocks))
+            sort_started = time.perf_counter()
             ordered = sorted(matches, key=lambda identity: (
                 -matches[identity][0], records[identity][1], records[identity][2], identity))
             result = []
@@ -342,6 +365,7 @@ class VisualIndex:
                 result.append({**json.loads(records[identity][0]), "visual_similarity": score,
                     "visual_signature": signature, "hit_frame_id": frame_id, "seek_ms": at_ms,
                     "evidence_ids": [frame_id], "retrieval_branches": ["visual"]})
+            record_interval("visual.top_results", sort_started, result_count=len(result))
             return result
 
     def _matrix_snapshot(self, db, signature, dimensions, where, params, budget):
@@ -349,6 +373,7 @@ class VisualIndex:
         # Conservative retained-memory accounting includes Python strings and
         # row tuples, not just numeric payload. Read buffers remain 512 rows.
         size = 2048
+        note_matrix_build(attempted_retained_bytes=size, retained_bytes_phase="initial")
         for row in db.execute(f"""SELECT r.id,r.data,v.evidence_digest FROM records r
                 JOIN visual_records v ON v.record_id=r.id
                 WHERE v.signature=? AND {where}""", [signature, *params]):
@@ -359,8 +384,11 @@ class VisualIndex:
             size += 128 + sys.getsizeof(row["id"]) + sys.getsizeof(value)
             size += sum(sys.getsizeof(item) for item in value)
             if size > budget:
+                note_matrix_build(fallback_reason="retained_budget_exceeded",
+                                  attempted_retained_bytes=size, retained_bytes_phase="records")
                 return None
             records[row["id"]] = value
+        note_matrix_build(attempted_retained_bytes=size, retained_bytes_phase="records")
         rows = db.execute(f"""SELECT l.record_id,l.frame_id,l.at_ms,c.vector,c.dimensions
             FROM visual_links l JOIN visual_cache c
               ON c.signature=l.signature AND c.cache_key=l.cache_key
@@ -380,13 +408,16 @@ class VisualIndex:
                 continue
             size += 256 + len(vectors) * dimensions * 4 + len(accepted) * 8
             size += sum(sys.getsizeof(row) + sum(sys.getsizeof(item) for item in row) for row in accepted)
+            note_matrix_build(attempted_retained_bytes=size, retained_bytes_phase="vectors")
             if size > budget:
+                note_matrix_build(fallback_reason="retained_budget_exceeded")
                 return None
             matrix = np.stack(vectors)
             matrix.setflags(write=False)
             blocks.append((matrix, tuple(accepted)))
         return (MappingProxyType(records), tuple(blocks)), size
 
+    @timed("visual.streaming_rank.work")
     def _rank_stream(self, db, signature, vector, dimensions, where, params, limit):
         matches = {}
         # Filter in SQL before scoring; a small selected work must not lose its

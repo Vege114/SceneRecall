@@ -1,0 +1,426 @@
+{
+  "schema": "search-client-timing-v1",
+  "server": {
+    "schema": "search-timing-v1",
+    "request_id": "7cbc476d861c459ea844148f2083ffb9",
+    "total_ms": 83898.855,
+    "boundary": "application middleware entry to response headers ready; excludes socket ingress and body transfer",
+    "attributes": {
+      "query_kind": "visual",
+      "character_filter": false,
+      "query_characters": 14,
+      "filter_count": 2,
+      "enhancements": false,
+      "visual_verification": false,
+      "snapshot_retries": 0,
+      "result_count": 10,
+      "status_code": 200
+    },
+    "spans": [
+      {
+        "id": 0,
+        "parent_id": null,
+        "name": "http.application",
+        "start_ms": 0.013,
+        "end_ms": 83898.849,
+        "elapsed_ms": 83898.836,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 1,
+        "parent_id": 0,
+        "name": "http.handler",
+        "start_ms": 1.068,
+        "end_ms": 83898.627,
+        "elapsed_ms": 83897.56,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 2,
+        "parent_id": 1,
+        "name": "search.engine",
+        "start_ms": 1.655,
+        "end_ms": 45819.844,
+        "elapsed_ms": 45818.19,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 3,
+        "parent_id": 2,
+        "name": "snapshot.acquire",
+        "start_ms": 1.678,
+        "end_ms": 5896.527,
+        "elapsed_ms": 5894.848,
+        "attributes": {
+          "attempt": 0
+        },
+        "status": "ok"
+      },
+      {
+        "id": 4,
+        "parent_id": 3,
+        "name": "snapshot.revision.work",
+        "start_ms": 1.812,
+        "end_ms": 5896.05,
+        "elapsed_ms": 5894.238,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 5,
+        "parent_id": 4,
+        "name": "query.character_names.revision",
+        "start_ms": 4984.732,
+        "end_ms": 5896.029,
+        "elapsed_ms": 911.297,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 6,
+        "parent_id": 2,
+        "name": "query.character_names",
+        "start_ms": 5896.545,
+        "end_ms": 6622.303,
+        "elapsed_ms": 725.758,
+        "attributes": {
+          "matched_count": 2,
+          "changed": false
+        },
+        "status": "ok"
+      },
+      {
+        "id": 7,
+        "parent_id": 2,
+        "name": "recall.parallel",
+        "start_ms": 6622.323,
+        "end_ms": 40341.19,
+        "elapsed_ms": 33718.867,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 8,
+        "parent_id": 7,
+        "name": "recall.lexical",
+        "start_ms": 6622.362,
+        "end_ms": 7694.967,
+        "elapsed_ms": 1072.605,
+        "attributes": {
+          "candidate_count": 50,
+          "warning_count": 0
+        },
+        "status": "ok"
+      },
+      {
+        "id": 9,
+        "parent_id": 7,
+        "name": "recall.semantic",
+        "start_ms": 6622.383,
+        "end_ms": 6622.391,
+        "elapsed_ms": 0.007,
+        "attributes": {
+          "candidate_count": 0,
+          "warning_count": 0
+        },
+        "status": "ok"
+      },
+      {
+        "id": 10,
+        "parent_id": 7,
+        "name": "recall.visual",
+        "start_ms": 6622.395,
+        "end_ms": 40341.166,
+        "elapsed_ms": 33718.77,
+        "attributes": {
+          "candidate_count": 50,
+          "warning_count": 0
+        },
+        "status": "ok"
+      },
+      {
+        "id": 11,
+        "parent_id": 10,
+        "name": "visual.model_identity",
+        "start_ms": 6622.403,
+        "end_ms": 6660.089,
+        "elapsed_ms": 37.686,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 12,
+        "parent_id": 11,
+        "name": "encoder.identity.work",
+        "start_ms": 6622.407,
+        "end_ms": 6659.076,
+        "elapsed_ms": 36.669,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 13,
+        "parent_id": 10,
+        "name": "visual.query_cache_lookup",
+        "start_ms": 6660.097,
+        "end_ms": 6661.071,
+        "elapsed_ms": 0.974,
+        "attributes": {
+          "query_cache_hit": true
+        },
+        "status": "ok"
+      },
+      {
+        "id": 14,
+        "parent_id": 10,
+        "name": "visual.rank",
+        "start_ms": 6661.085,
+        "end_ms": 40341.142,
+        "elapsed_ms": 33680.057,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 15,
+        "parent_id": 7,
+        "name": "recall.concept",
+        "start_ms": 6661.126,
+        "end_ms": 17014.244,
+        "elapsed_ms": 10353.118,
+        "attributes": {
+          "candidate_count": 0,
+          "warning_count": 0
+        },
+        "status": "ok"
+      },
+      {
+        "id": 16,
+        "parent_id": 8,
+        "name": "lexical.sql_tokenize.work",
+        "start_ms": 6671.316,
+        "end_ms": 7662.003,
+        "elapsed_ms": 990.687,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 17,
+        "parent_id": 14,
+        "name": "visual.rank.work",
+        "start_ms": 6692.003,
+        "end_ms": 40308.829,
+        "elapsed_ms": 33616.827,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 18,
+        "parent_id": 17,
+        "name": "visual.matrix_cache",
+        "start_ms": 6693.868,
+        "end_ms": 6693.908,
+        "elapsed_ms": 0.039,
+        "attributes": {
+          "matrix_cache_hit": false,
+          "matrix_built": false,
+          "streaming_fallback": true,
+          "cache_status": "fallback",
+          "fallback_reason": "retained_budget_exceeded",
+          "memoized_fallback": true,
+          "build_attempted": false,
+          "attempted_retained_bytes": 269410176,
+          "retained_bytes_phase": "vectors",
+          "cache_budget_bytes": 268435456
+        },
+        "status": "ok"
+      },
+      {
+        "id": 19,
+        "parent_id": 17,
+        "name": "visual.streaming_rank.work",
+        "start_ms": 6693.917,
+        "end_ms": 40308.743,
+        "elapsed_ms": 33614.825,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 20,
+        "parent_id": 2,
+        "name": "results.merge_rank",
+        "start_ms": 40341.197,
+        "end_ms": 40341.561,
+        "elapsed_ms": 0.364,
+        "attributes": {
+          "candidate_count": 99
+        },
+        "status": "ok"
+      },
+      {
+        "id": 21,
+        "parent_id": 2,
+        "name": "results.provider_rerank",
+        "start_ms": 40341.564,
+        "end_ms": 40341.567,
+        "elapsed_ms": 0.004,
+        "attributes": {
+          "enabled": false
+        },
+        "status": "ok"
+      },
+      {
+        "id": 22,
+        "parent_id": 2,
+        "name": "results.deduplicate_select",
+        "start_ms": 40341.569,
+        "end_ms": 40342.579,
+        "elapsed_ms": 1.009,
+        "attributes": {
+          "result_count": 10
+        },
+        "status": "ok"
+      },
+      {
+        "id": 23,
+        "parent_id": 2,
+        "name": "snapshot.validate",
+        "start_ms": 40342.622,
+        "end_ms": 45819.825,
+        "elapsed_ms": 5477.203,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 24,
+        "parent_id": 23,
+        "name": "snapshot.revision.work",
+        "start_ms": 40345.117,
+        "end_ms": 45819.565,
+        "elapsed_ms": 5474.448,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 25,
+        "parent_id": 24,
+        "name": "query.character_names.revision",
+        "start_ms": 45012.192,
+        "end_ms": 45819.544,
+        "elapsed_ms": 807.352,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 26,
+        "parent_id": 1,
+        "name": "canonical.source_records",
+        "start_ms": 45819.879,
+        "end_ms": 76331.643,
+        "elapsed_ms": 30511.764,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 27,
+        "parent_id": 26,
+        "name": "canonical.source_records.work",
+        "start_ms": 45819.956,
+        "end_ms": 76293.939,
+        "elapsed_ms": 30473.983,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 28,
+        "parent_id": 1,
+        "name": "canonical.enrich",
+        "start_ms": 76331.653,
+        "end_ms": 76332.143,
+        "elapsed_ms": 0.49,
+        "attributes": {
+          "candidate_count": 10,
+          "result_count": 10
+        },
+        "status": "ok"
+      },
+      {
+        "id": 29,
+        "parent_id": 1,
+        "name": "snapshot.validate",
+        "start_ms": 76332.15,
+        "end_ms": 83853.57,
+        "elapsed_ms": 7521.42,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 30,
+        "parent_id": 29,
+        "name": "snapshot.revision.work",
+        "start_ms": 76332.558,
+        "end_ms": 83853.352,
+        "elapsed_ms": 7520.794,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 31,
+        "parent_id": 30,
+        "name": "query.character_names.revision",
+        "start_ms": 82675.859,
+        "end_ms": 83853.331,
+        "elapsed_ms": 1177.472,
+        "attributes": {},
+        "status": "ok"
+      },
+      {
+        "id": 32,
+        "parent_id": 1,
+        "name": "response.json",
+        "start_ms": 83853.586,
+        "end_ms": 83855.018,
+        "elapsed_ms": 1.432,
+        "attributes": {
+          "bytes": 142228
+        },
+        "status": "ok"
+      }
+    ]
+  },
+  "client": {
+    "fetch_started_at": 156762.69999992847,
+    "json_parsed_at": 241125.5,
+    "fetch_to_headers_ms": 84361.70000004768,
+    "headers_to_json_ms": 1.100000023841858,
+    "request_to_json_ms": 84362.80000007153,
+    "client_server_remainder_ms": 463.94500007152965,
+    "resource": {
+      "browser_before_request_ms": 1.4000000953674316,
+      "request_to_first_byte_ms": 84358.09999990463,
+      "body_transfer_ms": 1
+    }
+  },
+  "presentation": {
+    "trigger": "pointer_click",
+    "click_time_source": "event_timestamp",
+    "click_to_submit_ms": 0.5999999046325684,
+    "click_to_result_commit_ms": 84365.5,
+    "submit_to_result_commit_ms": 84364.90000009537,
+    "submit_to_fetch_ms": 0,
+    "json_to_result_commit_ms": 2.100000023841858,
+    "debounce_ms": 0,
+    "submit_to_paint_opportunity_ms": 85523.10000002384,
+    "click_to_paint_opportunity_ms": 85523.69999992847
+  },
+  "boundaries": {
+    "click": "pointer click event timestamp (or click handler entry fallback); excludes pointer-down to release; keyboard/programmatic submit has no click measurement",
+    "submit": "form submit handler entry",
+    "results": "React result DOM committed",
+    "paint": "second requestAnimationFrame opportunity; excludes image loading and is not proof of pixels displayed",
+    "remainder": "request-to-JSON duration minus application middleware duration; includes transport, unmeasured ingress, body transfer, parsing and scheduling",
+    "parallel": "parent spans contain children; parallel child durations overlap and must not be added"
+  }
+}

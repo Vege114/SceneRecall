@@ -4,6 +4,17 @@ from __future__ import annotations
 import threading
 import uuid
 from collections import OrderedDict
+from contextvars import ContextVar
+
+
+_matrix_build_details = ContextVar("matrix_build_details", default=None)
+
+
+def note_matrix_build(**values):
+    """Attach known accounting to this build only, never keys or source content."""
+    details = _matrix_build_details.get()
+    if details is not None:
+        details.update(values)
 
 
 def initialize_revision(db):
@@ -80,13 +91,28 @@ class MatrixCache:
             return value[0]
         return None
 
-    def get_or_build(self, key, builder):
+    def _fallback_details(self, key, details):
+        details.update(cache_status="fallback", cache_budget_bytes=self._max_bytes)
+        if not self._max_bytes:
+            details["fallback_reason"] = "cache_disabled"
+        else:
+            details.update(self._oversized.get(key) or {"fallback_reason": "unknown_memoized"})
+            details["memoized_fallback"] = True
+
+    def get_or_build(self, key, builder, *, diagnostics=None):
+        details = diagnostics if diagnostics is not None else {}
+        details.clear()
+        details.update(cache_status="miss", fallback_reason=None, memoized_fallback=False,
+                       build_attempted=False, attempted_retained_bytes=None, retained_bytes_phase=None)
         with self._lock:
+            details["cache_budget_bytes"] = self._max_bytes
             value = self._get(key)
             if value is not None:
+                details.update(cache_status="hit", cached_retained_bytes=self._entries[key][1])
                 return value
             if not self._max_bytes or key in self._oversized:
                 self._counts["fallbacks"] += 1
+                self._fallback_details(key, details)
                 return None
             self._counts["misses"] += 1
         # Double check after joining a concurrent builder. Only one construction
@@ -95,26 +121,39 @@ class MatrixCache:
             with self._lock:
                 value = self._get(key)
                 if value is not None:
+                    details.update(cache_status="hit", cached_retained_bytes=self._entries[key][1])
                     return value
                 if not self._max_bytes or key in self._oversized:
                     self._counts["fallbacks"] += 1
+                    self._fallback_details(key, details)
                     return None
                 budget, epoch = self._max_bytes, self._epoch
+                details.update(build_budget_bytes=budget, build_attempted=True)
+            token = _matrix_build_details.set(details)
             try:
                 built = builder(budget)
             except MemoryError:
+                details["fallback_reason"] = "allocation_error"
                 built = None
+            finally:
+                _matrix_build_details.reset(token)
             with self._lock:
                 if built is None:
                     self._counts["fallbacks"] += 1
+                    details.update(cache_status="fallback",
+                                   fallback_reason=details["fallback_reason"] or "builder_declined")
                     if epoch == self._epoch:
-                        self._oversized[key] = None
+                        self._oversized[key] = {field: details[field] for field in (
+                            "fallback_reason", "attempted_retained_bytes", "retained_bytes_phase")}
                         while len(self._oversized) > 128:
                             self._oversized.popitem(last=False)
                     return None
                 value, size = built
+                details.update(cache_status="built", attempted_retained_bytes=size, retained_bytes_phase="complete")
                 self._counts["builds"] += 1
                 if epoch != self._epoch or size > self._max_bytes:
+                    details.update(cache_status="built_uncached_epoch" if epoch != self._epoch else "built_uncached_budget",
+                                   cache_budget_bytes=self._max_bytes)
                     return value
                 while self._entries and self._bytes + size > self._max_bytes:
                     _, (_, old_size) = self._entries.popitem(last=False)

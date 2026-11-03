@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import io
+import json
 import mimetypes
 import os
 import secrets
@@ -31,6 +32,7 @@ from .native_picker import FilePickerBusy, FilePickerInput, FilePickerUnavailabl
 from .providers import ProviderManager
 from .search import SearchEngine, SearchSnapshotChanged
 from .scenes import SceneStore
+from .search_timing import current_trace, record_interval, timed, trace_request, trace_span
 
 DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", "embedding", "query", "decision", "answer")},
             "defaults": {"analysis_strategy": "scene-chunks-v1", "retrieval_mode": "core",
@@ -52,7 +54,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     with getattr(providers, "_lock", nullcontext()):
         recover_concurrency(library.root / "private")
     search = SearchEngine(library.root / "indexes", providers)
-    from .visual_encoder import VisualEncoder
+    from .character_query import CharacterQueryResolver
+    search.character_resolver = CharacterQueryResolver(library)
+    from .search_timing_encoder import TimedVisualEncoder as VisualEncoder
     search.visual_encoder = VisualEncoder(library.root / "private")
     queue = JobQueue(library, providers, search)
     from .startup import StartupPreparation
@@ -118,6 +122,20 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    @app.middleware("http")
+    async def search_timing(request: Request, call_next):
+        if request.url.path != "/api/search" or request.method != "POST":
+            return await call_next(request)
+        with trace_request() as trace:
+            with trace_span("http.application"):
+                response = await call_next(request)
+            snapshot = trace.snapshot()
+            snapshot["attributes"]["status_code"] = response.status_code
+            response.headers["X-Search-Request-ID"] = trace.request_id
+            response.headers["X-Search-Timing"] = json.dumps(snapshot, separators=(",", ":"), ensure_ascii=True)
+            response.headers["Server-Timing"] = f"search;dur={snapshot['total_ms']:.3f}"
+            return response
 
     @app.exception_handler(ValueError)
     async def invalid(request, exc):
@@ -564,8 +582,16 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         return public_job(result)
 
     @app.post("/api/search")
+    @timed("http.handler")
     async def query(payload: SearchInput):
         query_started = perf_counter()
+        trace = current_trace()
+        if trace is not None:
+            kind = payload.filters.get("kind", "all")
+            trace.attributes.update(query_kind=kind if kind in {"visual", "subtitle", "scene", "audio"} else "all",
+                                    character_filter=bool(payload.filters.get("character") or payload.filters.get("character_id")),
+                                    query_characters=len(payload.query), filter_count=len(payload.filters),
+                                    enhancements=payload.enhancements, visual_verification=payload.visual_verification)
         if preparation.started and preparation.states["index"]["status"] != "ready":
             raise HTTPException(503, preparation.states["index"].get("message", "搜索索引正在准备，请稍后再试"),
                                 headers={"Retry-After": "2"})
@@ -574,7 +600,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         result = await search.search(payload.query, filters=payload.filters, limit=payload.limit,
                                     **{k + "_profile_id": bindings.get(k) if k == "embedding" or payload.enhancements else None
                                        for k in ("embedding", "query", "decision", "answer")})
+        effective_query = search.completed_query_text(payload.query)
         from .execution import run_in_thread
+        @timed("canonical.source_records.work")
         def current_candidates():
             current = {}
             for owner in search.result_asset_ids(result.get("results", [])):
@@ -585,10 +613,12 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     continue
             return current
         canonical_started = perf_counter()
-        actual_records = await run_in_thread(current_candidates)
+        with trace_span("canonical.source_records"):
+            actual_records = await run_in_thread(current_candidates)
         canonical_ms = (perf_counter() - canonical_started) * 1000
         results = []
         changed = False
+        enrichment_started = perf_counter()
         for record in result.get("results", []):
             # Never let generated or stale result IDs turn into source citations.
             if record["id"] in actual_records:
@@ -636,7 +666,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     ranking["thumbnail"] = ranking["hit_frame_id"]
                 if canonical.get("evidence_type") == "retrieval_window":
                     from .retrieval_events import event_seek
-                    timing = event_seek(payload.query, canonical)
+                    timing = event_seek(effective_query, canonical)
                     if timing is not None:
                         ranking.update(timing)
                         if not ranking.get("hit_frame_id"):
@@ -645,7 +675,7 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                     ranking.update(match_type="partial", match_reason="前序理解已更新，当前片段的上下文待刷新")
                     changed = True
                 from .search import unverified_character_names
-                uncertain_names = unverified_character_names(payload.query, canonical)
+                uncertain_names = unverified_character_names(effective_query, canonical)
                 if uncertain_names:
                     ranking.update(match_type="partial", unverified_character_names=uncertain_names,
                                    match_reason="匹配到候选角色，画面人物的实名尚未确认")
@@ -660,17 +690,25 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                                        "start_ms": min(r["start_ms"] for r in sources), "end_ms": max(r["end_ms"] for r in sources)}))
             else:
                 changed = True
+        record_interval("canonical.enrich", enrichment_started,
+                        candidate_count=len(result.get("results", [])), result_count=len(results))
         if changed:
             result["explanation"] = None
             result.setdefault("degraded", []).append("资料已有新修正，已显示最新原文；请重建索引更新排序")
         response = {**result, "results": results}
         if payload.visual_verification:
             from .retrieval_verification import verify_candidates
-            response = await verify_candidates(library, providers, bindings.get("vision"), payload.query, response)
+            with trace_span("visual_verification"):
+                response = await verify_candidates(library, providers, bindings.get("vision"), effective_query, response)
         await search.check_completed_query()
         app.state.search_http_diagnostics = {"canonical_ms": canonical_ms,
                                              "total_ms": (perf_counter() - query_started) * 1000}
-        return response
+        if trace is not None:
+            trace.attributes["result_count"] = len(results)
+        with trace_span("response.json") as phase:
+            rendered = JSONResponse(response)
+            phase.set(bytes=len(rendered.body))
+        return rendered
 
     @app.get("/api/index/status")
     def index_status():
