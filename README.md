@@ -8,6 +8,23 @@
 
 本地动画资料库：整理视频、字幕与角色证据，用自然语言找回画面和片段。采用 Python / FastAPI 与 React / TypeScript，支持本地模型和可选的外部 AI 服务。
 
+## 近期功能入口（2026-11-03）
+
+人物处理、参考资料和作品知识按以下八组提供。它们保留人工确认与来源校验：候选相似度、角色设定或姓名展开均不能直接证明当前画面中的人物身份与事件。
+
+| 功能 | 用户可见变化 | 使用说明 |
+| --- | --- | --- |
+| 大角色表的场景分析 | 启用本地人物匹配时，先按当前画面候选选择相关档案，再约束发送给模型的资料体积；名单尾部角色仍可入选 | [场景角色名单](docs/SCENE_LOCAL_ROSTER.md) |
+| 离线权重预检 | 人物检测／CCIP 缺少本地权重时，在加载推理运行库前列出所缺文件和缓存位置，不隐式下载 | [视觉模型预检](docs/VISUAL_MODEL_PREFLIGHT.md) |
+| 角色确认保存队列 | 跨角色暂存勾选，按顺序保存；逐项显示结果，保留失败项供重试，并提示冲突及未保存选择 | [角色确认队列](docs/CHARACTER_CONFIRMATION_QUEUE.md) |
+| Bangumi 参考图分批缓存 | 主角参考优先，分批继续缓存；复用完整本地图、补齐损坏文件，显示剩余数量和失败原因 | [参考图缓存](docs/BANGUMI_REFERENCE_CACHE.md) |
+| 人物裁剪 PNG 保留 | 在视听身份配置中选择跟随部署、保留或不保留；缺少普通裁剪时从持久证据按需重建预览 | [PNG 保留策略](docs/PNG_RETENTION.md) |
+| 作品知识资料卡与 LightRAG | 导入有出处的文字，核对概念、角色和关系资料卡；可显式建库并选择基线／LightRAG 检索 | [知识库说明](docs/LIGHTRAG.md) |
+| 已保存 Bangumi 档案转知识 | 复用本地档案准备来源和待核对角色资料卡；重复整理保留人工决定，不额外联网或调用模型 | [Bangumi 知识资料](docs/BANGUMI_KNOWLEDGE.md) |
+| 参考图寻找影片候选 | 用已确认概念参考图与已有影片特征比较，查看原帧并填写依据后，才能确认出场 | [参考图候选发现](docs/REFERENCE_DISCOVERY.md) |
+
+LightRAG 仍是实验选项，默认使用基线；[既有小样本实验](docs/LIGHTRAG_EXPERIMENT_20261028.md)尚未证明留出集净提升。本轮工程回归不替代检索质量验收，[PNG 四集验证](docs/PNG_VALIDATION_20261031.md)也仍未完成。分组测试与完整套件状态见[验证记录](docs/VALIDATION.md#八组功能分拆与累计回归2026-11-03)。
+
 ## 基础环境
 
 | 依赖 | 要求与来源 |
@@ -72,8 +89,11 @@ uv run scenerecall --data-dir "$HOME/SceneRecallLibrary" --port 8765
 | 人物检测 / CCIP | 独立 Python 3.12、imgutils 0.19、NumPy 1.26、ONNX Runtime | [视觉依赖](scripts/requirements-visual-windows.txt)；`SCENERECALL_VISUAL_PYTHON` |
 | 图文编码 | 独立 Python 3.12、PyTorch、Transformers / OpenCLIP | [检索依赖](scripts/requirements-retrieval-windows.txt)；资料库 `private/retrieval-encoder.json` |
 | LR-ASD | 独立 Python 3.10、NumPy 1.23、PyTorch | [LR-ASD 依赖](scripts/requirements-lrasd-windows.txt)；视听身份设置中的解释器、源码与模型包目录 |
+| 作品知识（可选） | 独立 Python 3.12、LightRAG 1.5.7、FastEmbed 0.9.1 | [知识库接入与试验说明](docs/LIGHTRAG.md)；模型与设置 → 作品知识库 |
 
 imgutils 的 NumPy 1.x 与 pyannote 4 的 NumPy 2.x 要求冲突，**不要将 `visual-identity` 与 `audio` 装入同一环境**。图文编码配置需固定模型 revision 和本地路径；Windows requirements 中的 CUDA 12.8 版本是已验证配置，其他平台需使用相应构建。
+
+作品设定库支持有出处的 Markdown／纯文本资料卡、内部概念及角色关联、基线／LightRAG 对照和确认片段。默认本地 CPU 多语言 embedding，文本抽取可用已有 Codex 或兼容 API 连接；知识检索和参考图候选发现均可复用 core 画面索引。安装、核对、索引重建和评估命令见 [LightRAG 文档](docs/LIGHTRAG.md)。
 
 ## 开源与许可
 
