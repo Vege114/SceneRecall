@@ -65,7 +65,7 @@ def test_source_asset_movement_invalidates_reference_with_operation_snapshot(vis
     assert all(row["source"]["kind"] != "frame_crop" for row in current)
 
 
-def test_queue_resolves_only_shown_crops_and_counts_missing_files_exactly(visual, monkeypatch):
+def test_queue_resolves_only_shown_crops_and_keeps_reconstructible_missing_files(visual, monkeypatch):
     service, _identity = prepared(visual, times=tuple(index * 6000 for index in range(20)))
     raw = service.pipeline.reviews("asset_one")["regions"]
     Path(raw[-1]["crop_path"]).unlink()
@@ -80,7 +80,7 @@ def test_queue_resolves_only_shown_crops_and_counts_missing_files_exactly(visual
     monkeypatch.setattr(character_confirmation, "confined_path", counted)
     monkeypatch.setattr(visual_identity, "confined_path", counted)
     role = service.queue("asset_one")["roles"][0]
-    assert role["available_count"] == 19 and len(role["candidates"]) == 3
+    assert role["available_count"] == 20 and len(role["candidates"]) == 3
     assert len(resolved) == 4  # One confined directory and the three shown files.
 
 

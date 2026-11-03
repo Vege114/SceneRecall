@@ -880,11 +880,25 @@ class ProviderManager:
         content = []
         for frame in frames:
             path = Path(frame["path"])
-            if path.stat().st_size > 16 * 1024 * 1024:
+            person_crop = frame.get("person_crop")
+            if person_crop is not None:
+                from .crop_artifacts import MAX_CROP_SOURCE_BYTES, rebuild_crop_content
+
+                if not isinstance(person_crop, dict) or path.stat().st_size > MAX_CROP_SOURCE_BYTES:
+                    raise ProviderError("人物裁剪原帧无效或超过 20 MiB")
+                try:
+                    image_bytes = rebuild_crop_content(path.read_bytes(), person_crop)
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    raise ProviderError("人物裁剪来源或像素校验失败") from exc
+                if len(image_bytes) > 16 * 1024 * 1024:
+                    raise ProviderError("人物裁剪超过 16 MB，请减小图像尺寸")
+                mime = "image/png"
+            elif path.stat().st_size > 16 * 1024 * 1024:
                 raise ProviderError("证据帧超过 16 MB，请减小图像尺寸")
-            mime = {".png": "image/png", ".webp": "image/webp"}.get(path.suffix.lower(), "image/jpeg")
-            image_bytes = path.read_bytes()
-            if frame.get("box") is not None:
+            else:
+                mime = {".png": "image/png", ".webp": "image/webp"}.get(path.suffix.lower(), "image/jpeg")
+                image_bytes = path.read_bytes()
+            if person_crop is None and frame.get("box") is not None:
                 from PIL import Image
 
                 x, y, width, height = Entity.valid_portrait_box(frame["box"])

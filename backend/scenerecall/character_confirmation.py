@@ -10,15 +10,15 @@ import hashlib
 import os
 import stat
 import threading
-from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
 from .characters import CharacterStore, checked_box, scope_id
+from .crop_artifacts import rebuild_crop_bytes
 from .library import atomic_json, confined_path, digest, now, read_json, safe_id
 from .models import Contract
-from .visual_identity import VisualIdentityPipeline, _image, _png, image_quality
+from .visual_identity import VisualIdentityPipeline, _image, image_quality
 
 
 class ConfirmationDecision(Contract):
@@ -199,7 +199,8 @@ class CharacterConfirmation:
                     pending = pending_regions.get((asset["id"], region["id"]), set()) & allowed
                     if (not pending and region["match"].get("status") == "confirmed"
                             or not pending and region["match"].get("source") == "human" and region["match"].get("status") == "unknown"
-                            or not crop_exists(region["id"])):
+                            or not crop_exists(region["id"]) and not self.pipeline.crop_available(
+                                asset["id"], region, registry=frame_registry, asset=asset)):
                         continue
                     shot = frame_shots.get(region["frame_id"])
                     if not shot:
@@ -307,7 +308,7 @@ class CharacterConfirmation:
             registry_frames = read_json(self.library.asset_dir(source_asset_id) / "frames" / "registry.json", {})
             if region["at_ms"] != registry_frames.get(region["frame_id"], {}).get("at_ms"):
                 raise ValueError("人物裁剪时间与注册帧不一致")
-            frame = self.library.frame_paths(source_asset_id, [region["frame_id"]], registry=registry_frames)[region["frame_id"]]
+            self.library.frame_paths(source_asset_id, [region["frame_id"]], registry=registry_frames)
             box = checked_box(region["box"])
             if box is None:
                 raise ValueError("人物裁剪缺少区域")
@@ -322,14 +323,20 @@ class CharacterConfirmation:
                         and region["match"].get("version", 0) > previous.get("prior_review_version", 0)):
                     raise ValueError("该区域在确认后已被人工修改，请在人物复核中处理，不能重试覆盖")
                 decision["prior_review_version"] = previous.get("prior_review_version", region["match"].get("version", 0))
-                picture = _image(frame.read_bytes())
-                x, y, width, height = box
-                cropped = picture.crop((round(x * picture.width), round(y * picture.height),
-                                        round((x + width) * picture.width), round((y + height) * picture.height)))
-                encoded = _png(cropped)
+                try:
+                    # Reuse the detector's verified exact pixel bounds. A .5
+                    # coordinate can round differently after normalization.
+                    encoded = rebuild_crop_bytes(self.library, source_asset_id, raw, registry=registry_frames)
+                except ValueError as exc:
+                    raise ValueError("原片裁剪已变化或未通过单人、尺寸、清晰度检查") from exc
+                cropped = _image(encoded)
+                # The immutable crop digest survives discarded PNGs and keeps
+                # confirmation bound to the pixels originally recognized.
+                expected_crop = raw.get("crop_sha256") or hashlib.sha256(
+                    self.pipeline.crop_bytes(source_asset_id, raw)).hexdigest()
                 if (not region.get("quality", {}).get("accepted")
                         or not image_quality(cropped, single_character=True)["accepted"]
-                        or hashlib.sha256(encoded).digest() != hashlib.sha256(Path(region["crop_path"]).read_bytes()).digest()):
+                        or hashlib.sha256(encoded).hexdigest() != expected_crop):
                     raise ValueError("原片裁剪已变化或未通过单人、尺寸、清晰度检查")
                 existing = next((row for row in self.gallery.list(source_asset_id, character_id, _catalog=catalog)["references"]
                                  if row["source"].get("confirmation_id") == key), None)

@@ -6,6 +6,7 @@ The raw descriptions remain immutable; display/search resolve participant IDs.
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 
 def project_audio_evidence(evidence, current_records):
@@ -59,9 +60,24 @@ def identity_context(context, result, frames, *, top_k=5):
         ("id", "entity_id", "local_id", "frame_id", "at_ms", "box", "quality", "match") if key in row} for row in regions]
     # A bounded number of clear current crops supplements the partition sheets;
     # every region still has an original frame/box for audit.
-    context["region_images"] = [{"id": row.get("id", row.get("entity_id")), "frame_id": row["frame_id"],
-        "local_id": row["local_id"], "path": row["crop_path"], "at_ms": row["at_ms"]}
-        for row in regions if row.get("crop_path")][:8]
+    original_frames = {frame["id"]: frame for frame in frames}
+    context["region_images"] = []
+    for row in regions:
+        image = {"id": row.get("id", row.get("entity_id")), "frame_id": row["frame_id"],
+                 "local_id": row["local_id"], "at_ms": row["at_ms"]}
+        if row.get("crop_path") and Path(row["crop_path"]).is_file():
+            image["path"] = row["crop_path"]
+        else:
+            original = original_frames.get(row["frame_id"], {})
+            if not original.get("path"):
+                continue
+            # Carry only the provenance needed for the shared exact crop
+            # decoder. Provider payloads never include these internal fields.
+            image.update(path=original["path"], person_crop={key: copy.deepcopy(row[key]) for key in
+                ("box", "crop_box_pixels", "source_frame_sha256", "crop_sha256") if key in row})
+        context["region_images"].append(image)
+        if len(context["region_images"]) == 8:
+            break
     by_character = {}
     for reference in result.get("references", []):
         if reference["character_id"] in selected:

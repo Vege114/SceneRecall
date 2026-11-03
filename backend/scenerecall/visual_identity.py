@@ -24,6 +24,8 @@ from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps, ImageStat
 
 from .characters import CharacterStore, checked_box, external_sources, scope_id
+from .crop_artifacts import (configured_crop_retention, crop_available, crop_bytes, crop_path, crop_retention,
+                             rebuild_crop_bytes, temporary_crop)
 from .file_io import atomic_replace
 from .library import atomic_json, confined_path, digest, now, read_json, safe_id, uid
 
@@ -31,6 +33,12 @@ from .library import atomic_json, confined_path, digest, now, read_json, safe_id
 PREPROCESS_VERSION = "single-person-rgb-ccip384-v1"
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 DEFAULT_MODEL = "ccip-caformer-24-randaug-pruned"
+
+
+def recognition_settings(config):
+    """Crop storage choices do not change frozen inference inputs or evidence."""
+    return {key: value for key, value in config.items()
+            if key not in {"crop_retention", "crop_retention_effective"}}
 
 
 class IdentityUnavailable(RuntimeError):
@@ -442,14 +450,18 @@ class VisualIdentityPipeline:
 
     def settings(self, asset_id):
         self.library.get_asset(asset_id)
-        return {"enabled": False, "model": DEFAULT_MODEL, "top_k": 5, "calibration": None,
-                **read_json(self._directory(asset_id) / "settings.json", {})}
+        settings = {"enabled": False, "model": DEFAULT_MODEL, "top_k": 5, "calibration": None,
+                    "crop_retention": "default", **read_json(self._directory(asset_id) / "settings.json", {})}
+        settings["crop_retention_effective"] = crop_retention(settings["crop_retention"])
+        return settings
 
     def configure(self, asset_id, payload):
-        if set(payload) - {"enabled", "model", "top_k", "calibration"}:
+        if set(payload) - {"enabled", "model", "top_k", "calibration", "crop_retention"}:
             raise ValueError("视觉身份设置包含未知字段")
         with self.library.lock:
             settings = {**self.settings(asset_id), **payload}
+            settings.pop("crop_retention_effective", None)
+            crop_retention(settings["crop_retention"])
             if (type(settings["enabled"]) is not bool or type(settings["top_k"]) is not int
                     or not 1 <= settings["top_k"] <= 20 or settings["model"] not in {
                         DEFAULT_MODEL, "ccip-caformer-6-randaug-pruned_fp32", "ccip-caformer-5_fp32"}):
@@ -464,18 +476,27 @@ class VisualIdentityPipeline:
                                for key in ("max_distance", "min_margin"))):
                     raise ValueError("视觉阈值必须提供相同模型/聚合算法的标注集校准记录")
             atomic_json(self._directory(asset_id) / "settings.json", settings)
-            return settings
+            return self.settings(asset_id)
 
-    def _feature(self, path, model_version, backend, metrics):
-        content = Path(path).read_bytes()
+    def _feature(self, path, model_version, backend, metrics, *, content=None, saved_feature=None):
+        content = Path(path).read_bytes() if content is None else content
         key = digest([hashlib.sha256(content).hexdigest(), model_version, PREPROCESS_VERSION])
         location = self.library.root / "cache" / "identity-features" / f"{key}.json"
         cached = read_json(location)
         if cached is not None:
             metrics["feature_cache_hits"] += 1
             return cached["feature"]
+        if saved_feature:
+            if any(type(value) not in {int, float} or not math.isfinite(value) for value in saved_feature):
+                raise ValueError("Invalid saved CCIP feature")
+            metrics["feature_cache_hits"] += 1
+            return saved_feature
         started = time.monotonic()
-        feature = backend.feature(path)
+        if path is None:
+            with temporary_crop(content) as temporary:
+                feature = backend.feature(temporary)
+        else:
+            feature = backend.feature(path)
         if not feature or any(type(value) not in {int, float} or not math.isfinite(value) for value in feature):
             raise ValueError("CCIP 返回了无效特征")
         metrics["feature_ms"] += round((time.monotonic() - started) * 1000)
@@ -484,15 +505,59 @@ class VisualIdentityPipeline:
                                "feature": feature})
         return feature
 
+    def crop_bytes(self, asset_id, region):
+        if isinstance(region, str):
+            region = read_json(self._directory(asset_id) / "regions" / f"{safe_id(region)}.json")
+            if region is None:
+                raise FileNotFoundError("Person region does not exist")
+        return crop_bytes(self.library, asset_id, region)
+
+    def crop_available(self, asset_id, region, *, registry=None, asset=None):
+        return crop_available(self.library, asset_id, region, registry, asset)
+
+    def apply_crop_retention(self, asset_id, regions, config=None):
+        """Apply a frozen task's policy on resume, including legacy preludes.
+
+        Only the listed owned ordinary crops are touched, after a successful
+        reconstruction verifies that deleting the copy cannot lose evidence.
+        """
+        config = self.settings(asset_id) if config is None else config
+        policy = configured_crop_retention(config)
+        if policy != "discard":
+            return {"removed_crops": 0, "removed_bytes": 0}
+        removed = {"removed_crops": 0, "removed_bytes": 0}
+        for row in regions:
+            region_id = safe_id(row["id"])
+            path = crop_path(self.library, asset_id, region_id)
+            if not path.is_file():
+                continue
+            raw_path = self._directory(asset_id) / "regions" / f"{region_id}.json"
+            raw = read_json(raw_path)
+            if raw is None or any(raw.get(key) != row.get(key) for key in ("id", "frame_id", "at_ms", "box")):
+                raise ValueError("Person crop has no durable region metadata")
+            rebuilt = rebuild_crop_bytes(self.library, asset_id, raw)
+            if path.read_bytes() != rebuilt:
+                raise ValueError("Stored crop differs from its source frame")
+            raw.update(crop_retention="discard", crop_sha256=hashlib.sha256(rebuilt).hexdigest())
+            atomic_json(raw_path, raw)
+            row.update(crop_retention="discard", crop_sha256=raw["crop_sha256"])
+            removed["removed_bytes"] += path.stat().st_size
+            path.unlink()
+            removed["removed_crops"] += 1
+        return removed
+
     def run(self, asset_id, frames, config=None, checkpoint=None, progress=None):
         config = config or {}
+        retention = configured_crop_retention(config)
         checkpoint = checkpoint or (lambda: None)
         started = time.monotonic()
         asset = self.library.get_asset(asset_id)
         result = {"asset_id": asset_id, "status": "disabled", "regions": [], "selected_profiles": [], "references": [],
+                  "crop_retention": retention,
                   "metrics": {"model_load_ms": 0, "detection_ms": 0, "feature_ms": 0, "matching_ms": 0,
                               "feature_extractions": 0, "feature_cache_hits": 0, "detection_calls": 0,
-                              "detection_cache_hits": 0, "rejected_references": 0, "total_ms": 0}}
+                              "detection_cache_hits": 0, "rejected_references": 0, "total_ms": 0,
+                              "crop_count": 0, "crop_encoded_bytes": 0, "crop_retained_bytes": 0}}
         if not config.get("enabled", False):
             result["degraded_reason"] = "视觉身份识别未启用"
             return result
@@ -587,12 +652,28 @@ class VisualIdentityPipeline:
                     count = sum(x0 <= (other[0] + other[2]) / 2 <= x1 and y0 <= (other[1] + other[3]) / 2 <= y1
                                 for other in boxes)
                     quality = image_quality(cropped, single_character=count == 1, person_count=count)
-                    crop_path = self._directory(asset_id) / "crops" / f"{region_id}.png"
-                    if not crop_path.exists():
-                        _write_bytes(crop_path, _png(cropped))
+                    encoded = _png(cropped)
+                    crop_sha256 = hashlib.sha256(encoded).hexdigest()
+                    location = crop_path(self.library, asset_id, region_id)
+                    metrics["crop_count"] += 1
+                    metrics["crop_encoded_bytes"] += len(encoded)
+                    if retention == "retain":
+                        if not location.exists():
+                            _write_bytes(location, encoded)
+                        elif location.read_bytes() != encoded:
+                            raise ValueError("Stored crop differs from its source frame")
+                        metrics["crop_retained_bytes"] += len(encoded)
                     match = match_candidates([], [], model_version=version)
-                    if quality["accepted"] and references:
-                        feature = self._feature(crop_path, version, backend, metrics)
+                    feature = None
+                    if quality["accepted"]:
+                        previous = read_json(self._directory(asset_id) / "regions" / f"{region_id}.json", {})
+                        saved_feature = (previous.get("feature") if previous.get("crop_sha256") == crop_sha256
+                                         and previous.get("model_version") == version
+                                         and previous.get("preprocessing") == PREPROCESS_VERSION else None)
+                        feature = self._feature(location if retention == "retain" else None,
+                                                version, backend, metrics, content=encoded,
+                                                saved_feature=saved_feature)
+                    if feature and references:
                         match_key = digest(["reference-trust-v1", region_id, version,
                                             [(row["id"], row["version"], row["character_id"], row["sha256"], row["status"])
                                                                for row in references], config.get("calibration"),
@@ -610,7 +691,11 @@ class VisualIdentityPipeline:
                     match = stamp_match(match, references, config)
                     region = {"id": region_id, "entity_id": region_id, "local_id": f"P{index + 1}",
                               "frame_id": identifier, "at_ms": at_ms, "box": normalized_box, "quality": quality,
-                              "crop_path": str(crop_path), "match": match, "model_version": version,
+                              "crop_path": str(location), "match": match, "model_version": version,
+                              "crop_retention": retention, "crop_sha256": crop_sha256,
+                              "crop_box_pixels": [round(value) for value in box],
+                              "source_frame_sha256": hashlib.sha256(content).hexdigest(),
+                              "source_fingerprint": asset["fingerprint"], "feature": feature,
                               "preprocessing": PREPROCESS_VERSION}
                     if config.get("identity_policy") == POLICY_VERSION:
                         region.update(source_fingerprint=asset["fingerprint"], identity_policy=POLICY_VERSION)
@@ -620,6 +705,10 @@ class VisualIdentityPipeline:
                     if not history_path.exists():
                         atomic_json(history_path, region)
                     atomic_json(self._directory(asset_id) / "regions" / f"{region_id}.json", region)
+                    if retention == "discard":
+                        # Persist provenance/features before removing an older
+                        # development copy of this exact region.
+                        location.unlink(missing_ok=True)
                     result["regions"].append(region)
                 if progress is not None:
                     progress(frame_number, len(frames))
@@ -656,7 +745,7 @@ class VisualIdentityPipeline:
             # Absolute paths persisted by an earlier machine/backup are never
             # authority to read a file. Reconstruct from the owning asset/id.
             if _crop_paths:
-                row["crop_path"] = str(confined_path(self._directory(asset_id), f"crops/{identifier}.png"))
+                row["crop_path"] = str(crop_path(self.library, asset_id, identifier))
             else:
                 # Metadata-only queues validate their owned crop directory in
                 # bulk and resolve selected image paths before exposing them.
@@ -859,7 +948,7 @@ def validate_visual_artifacts(library):
             if row["at_ms"] != frame_registry.get(frame_id, {}).get("at_ms"):
                 raise ValueError("人物区域备份时间与证据帧不一致")
             library.frame_path(asset_id, frame_id)
-            _image(confined_path(directory, f"crops/{identity}.png").read_bytes())
+            _image(crop_bytes(library, asset_id, row))
             if row.get("match", {}).get("status") not in {"confirmed", "candidate", "unknown"}:
                 raise ValueError("人物身份关联状态无效")
         decisions = read_json(directory / "decisions.json", {"decisions": {}, "audit": []})

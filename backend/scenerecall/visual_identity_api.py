@@ -5,11 +5,11 @@ import asyncio
 from typing import Literal
 
 from fastapi import File, Form, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import Field
 
 from .characters import CharacterStore
-from .library import confined_path, read_json, safe_id
+from .library import read_json
 from .models import Contract
 from .visual_identity import MAX_IMAGE_BYTES, ReferenceGallery, VisualIdentityPipeline
 
@@ -53,10 +53,13 @@ def _public_reference(row):
     return {key: value for key, value in row.items() if key != "path"}
 
 
+def _public_region(row):
+    return {key: value for key, value in row.items() if key not in {"crop_path", "feature"}}
+
+
 def _public_reviews(result):
     result = {key: value for key, value in result.items() if key not in {"selected_profiles", "references"}}
-    result["regions"] = [{key: value for key, value in row.items() if key != "crop_path"}
-                         for row in result["regions"]]
+    result["regions"] = [_public_region(row) for row in result["regions"]]
     return result
 
 
@@ -157,12 +160,9 @@ def register_visual_identity_routes(app, library, search):
             SceneStore(library).invalidate_identity_inferences(asset_id, region_ids=[region_id])
         if search is not None:
             search.sync_asset(library.records(asset_id), asset_id)
-        return {key: value for key, value in result.items() if key != "crop_path"}
+        return _public_region(result)
 
     @app.get("/api/assets/{asset_id}/identity/regions/{region_id}/image")
     def identity_crop(asset_id: str, region_id: str):
-        library.get_asset(asset_id)
-        location = pipeline._directory(asset_id)
-        if read_json(location / "regions" / f"{safe_id(region_id)}.json") is None:
-            raise FileNotFoundError("人物区域不存在")
-        return FileResponse(confined_path(location, f"crops/{safe_id(region_id)}.png"), media_type="image/png")
+        return Response(pipeline.crop_bytes(asset_id, region_id), media_type="image/png",
+                        headers={"Cache-Control": "no-store"})

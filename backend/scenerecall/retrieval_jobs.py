@@ -289,16 +289,17 @@ class RetrievalJobMixin:
     async def retrieval_identity(self, job_id, windows, frames, state):
         """Run/cache local person evidence independently from a generative provider."""
         from .retrieval_identity import VERSION as identity_version, gallery_identity, observation
-        from .visual_identity import VisualIdentityPipeline
+        from .visual_identity import VisualIdentityPipeline, recognition_settings
         job = self.checkpoint(job_id)
         config, asset_id = job["config"], job["asset_id"]
         pipeline = VisualIdentityPipeline(self.library)
-        if (pipeline.settings(asset_id) != config["visual_identity_settings"]
+        if (recognition_settings(pipeline.settings(asset_id)) != recognition_settings(config["visual_identity_settings"])
                 or gallery_identity(pipeline, asset_id) != config["visual_identity_gallery"]):
             raise ValueError("本地人物配置或角色参考已变化，请新建人物匹配任务")
         wanted = {fid for unit in windows for fid in unit["local_frame_ids"]}
         selected = [frame for frame in frames if frame["id"] in wanted]
-        signature = digest([identity_version, config["source_fingerprint"], config["visual_identity_settings"],
+        signature = digest([identity_version, config["source_fingerprint"],
+                            recognition_settings(config["visual_identity_settings"]),
                             config["visual_identity_gallery"], sorted(wanted)])
         run = self.library.asset_dir(asset_id) / "analyses" / job["run_id"]
         path = run / "retrieval-local-identity.json"
@@ -319,6 +320,7 @@ class RetrievalJobMixin:
             saved = {"input_signature": signature, "visual": visual}
             atomic_json(path, saved)
         visual = saved["visual"]
+        pipeline.apply_crop_retention(asset_id, visual.get("regions", []), config["visual_identity_settings"])
         if visual.get("status") not in {"completed", "disabled"}:
             raise ValueError("本地人物成功回执状态无效")
         store = RetrievalStore(self.library)
@@ -365,7 +367,7 @@ class RetrievalJobMixin:
         from .execution import bounded_map
         from .identity_scene import identity_context
         from .retrieval_protocol import VERSION as prompt_version, validate_batch
-        from .visual_identity import VisualIdentityPipeline
+        from .visual_identity import VisualIdentityPipeline, recognition_settings
         from .jobs import model_identity
 
         job = self.checkpoint(job_id)
@@ -379,7 +381,8 @@ class RetrievalJobMixin:
         wanted = {fid for unit in units for fid in unit["local_frame_ids"]}
         selected = [f for f in frames if f["id"] in wanted]
         visual_pipeline = VisualIdentityPipeline(self.library)
-        if config["visual_identity_settings"] != visual_pipeline.settings(asset_id):
+        if (recognition_settings(config["visual_identity_settings"])
+                != recognition_settings(visual_pipeline.settings(asset_id))):
             raise ValueError("视觉身份配置已变化，请新建任务")
         started = time.perf_counter()
         self.update(job_id, stage="identity", message="正在准备局部视觉身份候选")
@@ -392,6 +395,7 @@ class RetrievalJobMixin:
             if visual.get("status") not in {"completed", "disabled"}:
                 raise ValueError("必需的视觉身份准备失败；已发布核心检索结果保留")
             atomic_json(identity_path, visual)
+        visual_pipeline.apply_crop_retention(asset_id, visual.get("regions", []), config["visual_identity_settings"])
         self._retrieval_metric(job_id, "identity", started)
         started = time.perf_counter()
         self.update(job_id, stage="local_records", message="正在生成有序局部观察和事件")

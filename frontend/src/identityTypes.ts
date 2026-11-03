@@ -1,6 +1,12 @@
 import type { CharacterProfile } from './types';
 
 export type IdentityStatus = 'confirmed' | 'candidate' | 'unknown';
+export type CropRetention = 'default' | 'retain' | 'discard';
+export interface VisualSettings {
+  enabled: boolean; model: string; top_k: number; calibration: Record<string, unknown> | null;
+  crop_retention?: CropRetention;
+  crop_retention_effective?: 'retain' | 'discard';
+}
 export interface CharacterConfirmationCandidate {
   region_id: string; asset_id: string; asset_title: string; frame_id: string; at_ms: number;
   box: number[]; crop_url: string; shot_id: string; distance?: number | null;

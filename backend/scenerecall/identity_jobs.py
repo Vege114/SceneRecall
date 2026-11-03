@@ -54,12 +54,16 @@ class IdentityJobMixin:
         return self.library.asset_dir(job["asset_id"]) / "analyses" / job["run_id"] / "identity-prelude.json"
 
     async def prepare_scene_identity(self, job_id, frames, cues):
+        from .visual_identity import recognition_settings
+
         job = self.checkpoint(job_id)
         config, asset_id = job["config"], job["asset_id"]
         settings = config.get("identity_settings")
         if settings is None:  # Frozen pre-upgrade tasks retain their inputs.
             return
-        if settings != self.identity_settings(asset_id):
+        current = self.identity_settings(asset_id)
+        if (recognition_settings(settings["visual"]) != recognition_settings(current["visual"])
+                or settings["audio"] != current["audio"]):
             raise ValueError("视听身份配置已变化，请新建任务；已提取特征可复用")
         header = digest([self.library.get_asset(asset_id)["fingerprint"], config["start_ms"],
                          config["end_ms"], settings, [frame["id"] for frame in frames]])
@@ -68,6 +72,9 @@ class IdentityJobMixin:
         if saved is not None:
             if saved.get("header") != header:
                 raise ValueError("视听身份断点与当前素材或配置不一致")
+            from .visual_identity import VisualIdentityPipeline
+            VisualIdentityPipeline(self.library).apply_crop_retention(
+                asset_id, saved.get("visual", {}).get("regions", []), settings["visual"])
             return
         from .visual_identity import VisualIdentityPipeline
         from .audio_identity import AudioIdentityService

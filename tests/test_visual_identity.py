@@ -155,6 +155,7 @@ def test_multiple_people_are_cropped_with_frame_local_ids_never_cross_shot_merge
 def test_public_reviews_skip_discarded_crop_paths_but_images_validate_them(visual, monkeypatch):
     import scenerecall.visual_identity as identity_module
     import scenerecall.visual_identity_api as routes
+    import scenerecall.crop_artifacts as crop_module
 
     library, characters, gallery = visual
     add_reference(gallery, add_role(characters))
@@ -181,7 +182,7 @@ def test_public_reviews_skip_discarded_crop_paths_but_images_validate_them(visua
         def reject_crop(base, relative):
             raise ValueError("crop escaped its asset")
 
-        monkeypatch.setattr(routes, "confined_path", reject_crop)
+        monkeypatch.setattr(crop_module, "confined_path", reject_crop)
         with pytest.raises(ValueError, match="crop escaped"):
             client.get(image_url)
 
@@ -518,5 +519,7 @@ def test_restored_absolute_crop_path_is_never_authority_and_validation_checks_ow
     assert pipeline.project_result("asset_one", result)["regions"][0]["crop_path"] == original
     validate_visual_artifacts(library)
     Path(original).unlink()
+    validate_visual_artifacts(library)  # A missing rebuildable copy is valid.
+    library.frame_path("asset_one", result["regions"][0]["frame_id"]).unlink()
     with pytest.raises(FileNotFoundError):
         validate_visual_artifacts(library)
