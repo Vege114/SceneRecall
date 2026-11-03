@@ -28,6 +28,7 @@ from .search_timing import current_trace, record_interval, timed, trace_span
 jieba.setLogLevel(logging.WARNING)
 _query_embeddings = ContextVar("query_embeddings", default=None)
 _completed_query = ContextVar("completed_query", default=None)
+_knowledge_details = ContextVar("knowledge_details", default=None)
 ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character", "character_id",
                    "concept_id", "project_id", "anime_id", "folder_id", "tag"}
 STOP_WORDS = {
@@ -692,9 +693,16 @@ class SearchEngine:
 
     async def _concept(self, query: str, filters: dict) -> list[dict]:
         from .visual_index import evidence_digest
-        candidates = (await run_in_thread(self.knowledge_provider.search, query, filters, self)
-                      if self.knowledge_provider is not None else
-                      await run_in_thread(self.concept_lookup, query, filters))
+        if self.knowledge_provider is not None and hasattr(self.knowledge_provider, "asearch"):
+            recalled = await self.knowledge_provider.asearch(query, filters, self)
+            candidates = recalled["record_candidates"]
+            details = _knowledge_details.get()
+            if details is not None:
+                details.update(knowledge_hits=recalled["knowledge_hits"], knowledge_diagnostics=recalled["diagnostics"])
+        else:
+            candidates = (await run_in_thread(self.knowledge_provider.search, query, filters, self)
+                          if self.knowledge_provider is not None else
+                          await run_in_thread(self.concept_lookup, query, filters))
         if not isinstance(candidates, list):
             raise ValueError("作品概念召回须返回记录列表")
         # The callback receives original constraints; its output is fenced again
@@ -707,6 +715,20 @@ class SearchEngine:
                 raise ValueError("作品概念召回包含无效记录")
             row = current.get(candidate.get("id"))
             if row is None or row["id"] in seen or evidence_digest(row) != evidence_digest(candidate):
+                continue
+            if candidate.get("match_basis") == "knowledge_character_appearance":
+                from .knowledge_service import confirmed_character_evidence
+                character_scope = candidate.get("matched_character_scope_id")
+                if not character_scope:
+                    continue
+                evidence, bindings, matched = confirmed_character_evidence(candidate, set(candidate.get("matched_character_ids", [])), character_scope)
+                if not evidence:
+                    continue
+                selected.append({**row, "match_basis": "knowledge_character_appearance",
+                    "matched_character_ids": matched, "identity_binding_ids": bindings, "evidence_ids": evidence,
+                    "matched_character_scope_id": character_scope,
+                    "event_verified": False, "retrieval_branches": ["concept"]})
+                seen.add(row["id"])
                 continue
             if (candidate.get("match_basis") != "setting_concept_appearance"
                     or not candidate.get("concept_bindings")
@@ -724,6 +746,13 @@ class SearchEngine:
     def _where(filters: dict) -> tuple[str, list]:
         clauses, params = [], []
         for key, value in filters.items():
+            if key == "_knowledge_assets":
+                if not value:
+                    clauses.append("0")
+                else:
+                    clauses.append(f"r.asset_id IN ({','.join('?' for _ in value)})")
+                    params.extend(value)
+                continue
             if key not in ALLOWED_FILTERS or value is None or value == "":
                 continue
             if key == "character":
@@ -842,7 +871,8 @@ class SearchEngine:
     @timed("search.engine")
     async def search(self, query: str, filters: dict | None = None, embedding_profile_id: str | None = None,
                      query_profile_id: str | None = None, decision_profile_id: str | None = None,
-                     answer_profile_id: str | None = None, limit: int = 10) -> dict:
+                     answer_profile_id: str | None = None, limit: int = 10, knowledge_mode="baseline",
+                     knowledge_scope_id=None, knowledge_target=None) -> dict:
         query = query.strip()
         if not query or len(query) > 2000:
             raise ValueError("检索问题长度须为 1–2000 个字符")
@@ -850,10 +880,18 @@ class SearchEngine:
         filters = {key: value for key, value in (filters or {}).items() if key in ALLOWED_FILTERS}
         degraded = []
         filters = copy.deepcopy(filters)
+        if knowledge_mode != "baseline" or knowledge_scope_id or knowledge_target:
+            filters.update(_knowledge_mode=knowledge_mode, _knowledge_scope=knowledge_scope_id,
+                           _knowledge_target=knowledge_target)
+        if knowledge_scope_id and self.knowledge_provider is not None:
+            store = getattr(self.knowledge_provider, "store", None)
+            if store is not None:
+                filters["_knowledge_assets"] = await run_in_thread(lambda: store.scope_view(knowledge_scope_id)["asset_ids"])
         diagnostics = {"branches_ms": {}}
         self.clear_completed_query()
         started = time.perf_counter()
         cache_token = _query_embeddings.set({})
+        knowledge_token = _knowledge_details.set({})
         try:
             for attempt in range(2):
                 attempt_filters = copy.deepcopy(filters)
@@ -922,6 +960,7 @@ class SearchEngine:
                         raise
         finally:
             _query_embeddings.reset(cache_token)
+            _knowledge_details.reset(knowledge_token)
             diagnostics["total_ms"] = (time.perf_counter() - started) * 1000
             self.query_diagnostics = diagnostics
 
@@ -960,6 +999,8 @@ class SearchEngine:
                         if not knowledge_available:
                             raise ValueError("作品知识版本不可用，请检查资料")
                         rows = await self._concept(query, scoped)
+                    except SearchSnapshotChanged:
+                        raise
                     except (OSError, ValueError, RuntimeError) as exc:
                         warnings.append("作品概念检索不可用，已保留其他召回结果：" + str(exc))
                 return rows, warnings
@@ -1030,7 +1071,7 @@ class SearchEngine:
             candidates.append({**record, "score": scores[record["id"]],
                                "match_type": "full" if exact else "partial",
                                "match_reason": ("设定匹配该实体；画面证据仅确认出场，未证明当前功能或动作"
-                                                if record.get("match_basis") == "setting_concept_appearance" else
+                                                if record.get("match_basis") in {"setting_concept_appearance", "knowledge_character_appearance"} else
                                                 "台词原文包含查询文本" if exact else "包含相关证据，组合条件尚待核对")})
         record_interval("results.merge_rank", merge_started, candidate_count=len(candidates))
         rerank_started = time.perf_counter()
@@ -1049,7 +1090,7 @@ class SearchEngine:
                         continue
                     candidate = by_id[judgment["id"]]
                     match_type = judgment["match_type"]
-                    if (candidate.get("context_stale") or candidate.get("match_basis") == "setting_concept_appearance") and match_type == "full":
+                    if (candidate.get("context_stale") or candidate.get("match_basis") in {"setting_concept_appearance", "knowledge_character_appearance"}) and match_type == "full":
                         match_type = "partial"
                     reranked.append({**candidate, "score": judgment["score"],
                                      "match_type": match_type,
@@ -1087,4 +1128,6 @@ class SearchEngine:
                 explanation = answer.data["text"]
             except ProviderError as exc:
                 degraded.append("解释生成失败，已使用证据摘要：" + str(exc))
-        return {"results": chosen, "degraded": list(dict.fromkeys(degraded)), "explanation": explanation}
+        details = _knowledge_details.get() or {}
+        degraded.extend(details.get("knowledge_diagnostics", {}).get("degraded", []))
+        return {"results": chosen, "degraded": list(dict.fromkeys(degraded)), "explanation": explanation, **details}

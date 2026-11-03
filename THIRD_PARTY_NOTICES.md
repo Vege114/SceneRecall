@@ -67,6 +67,10 @@
 | Transformers | [Apache-2.0](https://github.com/huggingface/transformers/blob/main/LICENSE) |
 | OpenCLIP | [MIT](https://github.com/mlfoundations/open_clip/blob/main/LICENSE) |
 | faster-whisper | [MIT](https://github.com/SYSTRAN/faster-whisper/blob/master/LICENSE)，Copyright (c) 2023 SYSTRAN |
+| LightRAG / lightrag-hku 1.5.7 | [MIT 原文副本](licenses/LightRAG-MIT.txt)，固定版本的独立知识运行环境 |
+| FastEmbed 0.9.1 | [Apache-2.0 原文副本](licenses/FastEmbed-Apache-2.0.txt)，本地 ONNX 文本 embedding |
+
+可选本地知识 embedding 使用 [paraphrase-multilingual-MiniLM-L12-v2](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2) 的 [Qdrant ONNX 量化版本](https://huggingface.co/Qdrant/paraphrase-multilingual-MiniLM-L12-v2-onnx-Q)，Apache-2.0。权重由用户显式下载，不随源码仓库分发；下载清单记录固定 revision、逐文件哈希及上游 README。
 
 FFmpeg / ffprobe 由用户安装后作为外部进程运行。其[上游许可说明](https://github.com/FFmpeg/FFmpeg/blob/master/LICENSE.md)区分 LGPL-2.1-or-later、启用 GPL 组件及其他构建情况；实际二进制应查供应方声明、`ffmpeg -L` 和构建参数，不能统一视作某一种宽松许可。
 

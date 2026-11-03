@@ -73,6 +73,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             await preparation.stop()
             await queue.stop()
             await search.visual_encoder.close()
+            if getattr(app.state, "knowledge_runtime", None):
+                await app.state.knowledge_runtime.close()
 
     app = FastAPI(title="SceneRecall", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.library, app.state.providers, app.state.search, app.state.jobs = library, providers, search, queue
@@ -338,8 +340,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     from .work_entity_api import register_work_entity_routes
     work_entities = register_work_entity_routes(app, library,
         refresh=refresh_asset_search)
-    from .knowledge_recall import WorkEntityRecall
-    search.knowledge_provider = WorkEntityRecall(work_entities)
+    from .knowledge_api import register_knowledge_routes
+    register_knowledge_routes(app, library, providers, search, queue, work_entities)
 
     @app.get("/api/assets")
     def assets():
@@ -598,6 +600,8 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         bindings = settings()["bindings"]
         search.clear_completed_query()
         result = await search.search(payload.query, filters=payload.filters, limit=payload.limit,
+                                    knowledge_mode=payload.knowledge_mode, knowledge_scope_id=payload.knowledge_scope_id,
+                                    knowledge_target=payload.knowledge_target,
                                     **{k + "_profile_id": bindings.get(k) if k == "embedding" or payload.enhancements else None
                                        for k in ("embedding", "query", "decision", "answer")})
         effective_query = search.completed_query_text(payload.query)
@@ -655,6 +659,17 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                                                          if branch != "concept"]
                         ranking.update(match_type="partial", match_reason="作品绑定已更新，当前记录仅作为待核对候选")
                         changed = True
+                        if not ranking["retrieval_branches"]:
+                            continue
+                elif record.get("match_basis") == "knowledge_character_appearance":
+                    from .knowledge_service import confirmed_character_evidence
+                    evidence, identity_bindings, matched = confirmed_character_evidence(
+                        canonical, set(record.get("matched_character_ids", [])), record.get("matched_character_scope_id"))
+                    if not evidence or not record.get("matched_character_scope_id"):
+                        continue
+                    ranking.update(match_basis="knowledge_character_appearance", event_verified=False,
+                        match_type="partial", matched_character_ids=matched, identity_binding_ids=identity_bindings,
+                        matched_character_scope_id=record["matched_character_scope_id"], evidence_ids=evidence)
                 if ranking.get("hit_frame_id") not in canonical.get("evidence_frame_ids", []):
                     ranking.pop("hit_frame_id", None)
                     ranking.pop("seek_ms", None)

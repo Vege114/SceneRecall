@@ -17,6 +17,7 @@ Desktop.ini
 .venv-visual-gpu-windows/
 .venv-lrasd-windows/
 .venv-retrieval-windows/
+.venv-knowledge/
 .cache/
 __pycache__/
 *.pyc

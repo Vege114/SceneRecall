@@ -143,6 +143,17 @@ class SearchInput(Contract):
     limit: int = Field(default=10, ge=1, le=50)
     enhancements: bool = False
     visual_verification: bool = False
+    knowledge_mode: Literal["baseline", "lightrag"] = "baseline"
+    knowledge_scope_id: str | None = Field(default=None, max_length=180)
+    knowledge_target: dict | None = None
+
+    @field_validator("knowledge_target")
+    @classmethod
+    def valid_knowledge_target(cls, value):
+        if value is not None:
+            from .knowledge_store import KnowledgeTarget
+            return KnowledgeTarget.model_validate(value).model_dump(exclude_none=True)
+        return None
 
 
 class CharacterEditInput(Contract):

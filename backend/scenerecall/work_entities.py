@@ -23,6 +23,7 @@ from .visual_identity import MAX_IMAGE_BYTES, _image, _png, _write_bytes
 
 VERSION = "work-entities-v1"
 MAX_PACKAGE_BYTES = 32 * 1024 * 1024
+VISIBLE_CONCEPT_TYPES = {"prop", "mecha", "place", "organization_symbol"}
 
 
 class EntitySource(Contract):
@@ -46,6 +47,10 @@ class SettingFact(Contract):
     text: str = Field(min_length=1, max_length=2000)
     source_ids: list[str] = Field(min_length=1, max_length=16)
     applicability: str = Field(default="", max_length=1000)
+    conditions: list[str] = Field(default_factory=list, max_length=32)
+    costs: list[str] = Field(default_factory=list, max_length=32)
+    exceptions: list[str] = Field(default_factory=list, max_length=32)
+    review_status: Literal["manual", "candidate", "reviewed", "rejected", "revoked"] = "manual"
 
 
 class EntityForm(Contract):
@@ -60,25 +65,35 @@ class CharacterReference(Contract):
 
 
 class EntityRelation(Contract):
+    id: str | None = Field(default=None, min_length=1, max_length=180)
     predicate: str = Field(min_length=1, max_length=200)
     target_concept_id: str | None = None
     character_ref: CharacterReference | None = None
     source_ids: list[str] = Field(min_length=1, max_length=16)
+    applicability: str = Field(default="", max_length=1000)
+    conditions: list[str] = Field(default_factory=list, max_length=32)
+    costs: list[str] = Field(default_factory=list, max_length=32)
+    exceptions: list[str] = Field(default_factory=list, max_length=32)
+    review_status: Literal["manual", "candidate", "reviewed", "rejected", "revoked"] = "manual"
 
     @model_validator(mode="after")
     def one_target(self):
+        if self.id is not None:
+            safe_id(self.id)
         if (self.target_concept_id is None) == (self.character_ref is None):
             raise ValueError("实体关系须且只能引用一个作品概念或现有角色")
         return self
 
 
 class EntityInput(Contract):
-    type: Literal["prop", "mecha", "place", "organization_symbol"]
+    type: Literal["prop", "mecha", "place", "organization_symbol", "organization", "technology",
+                  "ability", "rule", "term", "abstract_concept"]
     name: str = Field(min_length=1, max_length=200)
     original_name: str = Field(default="", max_length=200)
     translated_names: list[str] = Field(default_factory=list, max_length=32)
     aliases: list[str] = Field(default_factory=list, max_length=64)
     appearance: str = Field(default="", max_length=6000)
+    definition: str = Field(default="", max_length=6000)
     forms: list[EntityForm] = Field(default_factory=list, max_length=16)
     facts: list[SettingFact] = Field(default_factory=list, max_length=64)
     relations: list[EntityRelation] = Field(default_factory=list, max_length=32)
@@ -95,6 +110,9 @@ class EntityInput(Contract):
         fact_ids = [safe_id(row.id) for row in self.facts]
         if len(set(fact_ids)) != len(fact_ids):
             raise ValueError("设定事实 ID 重复")
+        relation_ids = [row.id for row in self.relations if row.id is not None]
+        if len(set(relation_ids)) != len(relation_ids):
+            raise ValueError("设定关系 ID 重复")
         if any(not set(row.source_ids) <= set(ids) for row in [*self.facts, *self.relations]):
             raise ValueError("设定事实或关系引用了不存在的资料来源")
         if any(not name.strip() or len(name) > 200 for name in [*self.aliases, *self.translated_names]):
@@ -156,6 +174,14 @@ class WorkEntityStore:
                 or not isinstance(value.get("entities"), dict) or not isinstance(value.get("bindings"), dict)
                 or type(value.get("revision")) is not int):
             raise ValueError("作品实体资料库结构无效")
+        # Additive migration. Legacy IDs and manual provenance remain intact;
+        # a later audited write persists these deterministic defaults.
+        value.setdefault("work_version_id", "workversion_" + digest(scope))
+        for identity, row in value["entities"].items():
+            row.setdefault("definition", "")
+            for position, relation in enumerate(row.get("relations", [])):
+                if not relation.get("id"):
+                    relation["id"] = "relation_" + digest([identity, position, relation])
         return value
 
     def scope(self, asset_id):
@@ -174,7 +200,7 @@ class WorkEntityStore:
                     raise ValueError("素材已有作品实体归属，不能隐式跨作品重绑定")
             identity = uid("workscope")
             value = {"schema_version": SCHEMA, "version": VERSION, "work_scope_id": identity,
-                     "title": title.strip(), "work_version": version, "revision": 0,
+                     "title": title.strip(), "work_version": version, "work_version_id": uid("workversion"), "revision": 0,
                      "entities": {}, "bindings": {}, "audit": [{"action": "create_scope", "at": now()}]}
             atomic_json(self._path(identity), value)
             for asset_id in asset_ids:
@@ -200,7 +226,8 @@ class WorkEntityStore:
     def scope_view(self, scope):
         saved = self._read(scope)
         assets = [asset for asset, identity in self._memberships()["assets"].items() if identity == scope]
-        return {key: copy.deepcopy(saved[key]) for key in ("work_scope_id", "title", "work_version", "revision")} | {
+        return {key: copy.deepcopy(saved[key]) for key in (
+            "work_scope_id", "title", "work_version", "work_version_id", "revision")} | {
             "asset_ids": assets, "entity_count": len([row for row in saved["entities"].values() if row["status"] == "active"])}
 
     def _required(self, asset_id):
@@ -264,6 +291,8 @@ class WorkEntityStore:
             saved = self._required(asset_id)
             self._check_relations(saved, data)
             identity = uid("concept")
+            for relation in data["relations"]:
+                relation["id"] = relation.get("id") or uid("relation")
             row = {**data, "concept_id": identity, "work_scope_id": saved["work_scope_id"],
                    "status": "active", "version": 1, "references": [], "created_at": now(), "updated_at": now()}
             saved["entities"][identity] = row
@@ -282,6 +311,8 @@ class WorkEntityStore:
                 raise FileNotFoundError("作品实体不存在或属于另一作品")
             data = EntityInput.model_validate({**{key: row[key] for key in EntityInput.model_fields},
                                               **payload}).model_dump()
+            for relation in data["relations"]:
+                relation["id"] = relation.get("id") or uid("relation")
             self._check_relations(saved, data)
             before = copy.deepcopy(row)
             row.update(data, version=row["version"] + 1, updated_at=now())
@@ -381,6 +412,8 @@ class WorkEntityStore:
             concept = saved["entities"].get(data["concept_id"]) if data["concept_id"] else None
             if data["concept_id"] and (concept is None or concept["status"] != "active"):
                 raise ValueError("绑定目标不属于当前作品或已撤销")
+            if concept and concept["type"] not in VISIBLE_CONCEPT_TYPES and data["status"] == "confirmed":
+                raise ValueError("抽象概念没有可确认的画面出场；请关联可见实体、角色、台词或事件证据")
             record = next((row for row in self.library.records(asset_id) if row["id"] == data["record_id"]), None)
             if record is None or (record["kind"] not in {"visual", "scene"}
                                   and record.get("evidence_type") != "retrieval_window"):
@@ -438,7 +471,8 @@ class WorkEntityStore:
                     or binding["source_fingerprint"] != fingerprint):
                 continue
             concept = saved["entities"].get(binding["concept_id"])
-            if binding["status"] != "confirmed" or not concept or concept["status"] != "active":
+            if (binding["status"] != "confirmed" or not concept or concept["status"] != "active"
+                    or concept["type"] not in VISIBLE_CONCEPT_TYPES):
                 continue
             bindings.append({**copy.deepcopy(binding), "concept_name": concept["name"],
                              "concept_type": concept["type"], "aliases": concept["aliases"]})
@@ -471,8 +505,19 @@ class WorkEntityStore:
         for row in saved["entities"].values():
             if row["status"] != "active":
                 continue
+            facts = [fact for fact in row["facts"]
+                     if fact.get("review_status", "manual") in {"manual", "reviewed"}]
+            relations = [relation for relation in row.get("relations", [])
+                         if relation.get("review_status", "manual") in {"manual", "reviewed"}]
             text = " ".join([row["name"], row["original_name"], *row["translated_names"], *row["aliases"],
-                             row["appearance"], *(fact["text"] for fact in row["facts"])])
+                             row["appearance"], row.get("definition", ""), row.get("applicability", ""),
+                             *(fact["text"] for fact in facts), *(relation["predicate"] for relation in relations),
+                             *(saved["entities"].get(relation.get("target_concept_id"), {}).get("name", "")
+                               for relation in relations),
+                             *(value for statement in [*facts, *relations]
+                               for value in [statement.get("applicability", ""),
+                                             *statement.get("conditions", []), *statement.get("costs", []),
+                                             *statement.get("exceptions", [])])])
             score = len(terms & set(tokenize(text)))
             if query and normalize(query) in normalize(text):
                 score += 10

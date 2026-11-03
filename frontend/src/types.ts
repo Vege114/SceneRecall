@@ -493,6 +493,8 @@ export interface SearchResponse {
   client_timing?: import('./searchTiming').SearchClientTiming;
   results: SearchResult[];
   degraded: string[];
+  knowledge_hits?: import('./components/KnowledgePanel').KnowledgeHit[];
+  knowledge_diagnostics?: Record<string, unknown>;
   explanation?: string;
   verification?: { status: string; request_count?: number | null; candidate_count?: number; deadline_ms?: number; reason?: string };
 }
@@ -511,7 +513,7 @@ export const KIND_LABELS: Record<AssetKind, string> = { movie: '电影', animati
 export function keyframeReason(reason?: string): string { return ({ stable_pose: '稳定姿态', representative_pose: '代表姿态', content_change: '画面内容变化', shot_representative: '镜头代表帧' } as Record<string, string>)[reason || ''] || '内容代表帧'; }
 
 export function stageLabel(stage?: string): string {
-  const retrieval: Record<string, string> = { retrieval_sampling: '检索画面采样', sampling: '检索画面采样', visual_index: '直接视觉索引', subtitle_index: '字幕索引', local_records: '局部事件记录', final_publish: '发布检索索引' };
+  const retrieval: Record<string, string> = { knowledge: '作品知识建库', knowledge_build: '作品知识建库', knowledge_index: '作品知识索引', retrieval_sampling: '检索画面采样', sampling: '检索画面采样', visual_index: '直接视觉索引', subtitle_index: '字幕索引', local_records: '局部事件记录', final_publish: '发布检索索引' };
   if (stage && retrieval[stage]) return retrieval[stage];
   return ({ character_confirmation: '角色确认', analysis: '分析与索引', visual_identity: '人物检测与匹配', identity: '身份复核', audio: '音频识别', audio_extraction: '音频提取', diarization: '说话人分段', voice_matching: '声音匹配', audio_sync: '音画复核', transcript: '台词整理', preparation: '视觉分块', context_refresh: '更新连续理解', deep_analysis: '深入理解', keyframes: '关键帧扫描', keyframe_scan: '关键帧扫描', vision: '深入理解', subtitle: '字幕识别', embedding: '语义向量', probe: '媒体探测', shots: '镜头检测', segmentation: '镜头检测', import: '校验视频与提取字幕', import_profile: '同步作品档案', import_index: '建立搜索索引', index: '更新索引', queued: '等待处理' } as Record<string, string>)[stage || ''] || stage || '准备中';
 }

@@ -1,0 +1,88 @@
+{
+  "version": "knowledge-evaluation-v1",
+  "title": "少女☆歌劇 レヴュースタァライト TV 第1集",
+  "annotation_status": "pending",
+  "work_scope_id": null,
+  "asset_id": "asset_49d289a62d9740babce8",
+  "notes": "真实问题与少量官方摘录；不是已经完成片段标注的质量验收集。先导入并人工核对资料卡、内部角色ID和原帧，再填写 expected。null 表示尚未标注，[] 才表示确认无答案。跨作品及撤销案例需按 setup 实际建立独立样本；工具不会自动伪造。",
+  "sources": [
+    {
+      "key": "official_ep1",
+      "title": "官方动画故事介绍：第01話 舞台少女（节选）",
+      "url": "https://revuestarlight.com/animation/story/",
+      "content": "愛城華恋は舞台で生きてゆくことを夢みる舞台少女。\n神楽ひかり。彼女こそ幼い日に別れた華恋の幼馴染みで、憧れの舞台「スタァライト」に一緒に立つことを約束した運命の舞台少女だった……",
+      "retrieval_note": "2026-10-28 官方网页搜索索引中核对的第1集介绍节选；并非完整HTML快照。应在导入时保留这些确切字节、URL和内容哈希。"
+    },
+    {
+      "key": "official_introduction",
+      "title": "BS-TBS 官方动画介绍（节选）",
+      "url": "https://bs.tbs.co.jp/anime/revuestarlight/",
+      "content": "スタァに魅入られた『舞台少女』たちは、夢の舞台に立つために演劇の学び舎『聖翔音楽学園』に集う。\nそれは『トップスタァ』の座をかけた、オーディションへの誘い。\n9人の舞台少女たちの、キラめきをかけた『レヴュー』。",
+      "retrieval_note": "官方播出方简介的短节选；只支持这里明示的学习场所、术语和竞争目标，不能推导能力、生命代价或具体事件已经发生。"
+    },
+    {
+      "key": "official_characters",
+      "title": "官方动画角色列表（姓名节选）",
+      "url": "https://revuestarlight.com/animation/character/",
+      "content": "愛城華恋\n神楽ひかり\n星見純那",
+      "retrieval_note": "仅确认官方角色姓名，不据此生成角色关系、外观或影片身份绑定。"
+    }
+  ],
+  "seed_concepts": [
+    {"key":"school_org","type":"organization","name":"圣翔音乐学园","original_name":"聖翔音楽学園","aliases":["Seisho Music Academy"],"definition":"舞台少女学习演剧的学校组织；组织与校舍的可见出场分别维护。"},
+    {"key":"school_place","type":"place","name":"圣翔音乐学园校舍","original_name":"聖翔音楽学園","aliases":["圣翔学园校舍"],"definition":"圣翔音乐学园作为学习场所的空间概念。具体画面须人工核对。"},
+    {"key":"stage_girl","type":"term","name":"舞台少女","original_name":"舞台少女","aliases":["Stage Girl"],"definition":"向往舞台、为站上梦想舞台而学习的少女这一作品术语。"},
+    {"key":"top_star","type":"term","name":"Top Star","original_name":"トップスタァ","aliases":["顶尖明星","顶点之星"],"definition":"官方简介将其描述为选拔所争取的位置。"},
+    {"key":"audition","type":"rule","name":"选拔目标","original_name":"オーディション","aliases":["Audition","试演选拔"],"definition":"官方简介说明选拔以 Top Star 的位置为目标；这里只保存目标描述，不补全胜负细则。"},
+    {"key":"revue","type":"term","name":"Revue","original_name":"レヴュー","aliases":["舞台竞演","雷威"],"definition":"官方简介将其与舞台少女及キラめき的竞争联系起来。"},
+    {"key":"kirameki","type":"abstract_concept","name":"闪耀","original_name":"キラめき","aliases":["Kirameki","光芒"],"definition":"官方简介中被用于描述 Revue 所争取内容的抽象术语；此摘录不证明任何特殊能力或代价。"},
+    {"key":"starlight_play","type":"term","name":"Starlight 剧目","original_name":"スタァライト","aliases":["憧憬的舞台剧"],"definition":"第1集官方介绍中，华恋与光约定一起站上的憧憬舞台。"},
+    {"key":"promise","type":"abstract_concept","name":"华恋与光的舞台约定","aliases":["童年的约定"],"definition":"华恋与幼时伙伴光约定一起站上 Starlight 的舞台；约定本身不等于当前履约事件。"},
+    {"key":"stage_place","type":"place","name":"演剧舞台","aliases":["舞台空间"],"definition":"演剧演出的舞台空间；泛指场所，不把任意舞台自动确认为特定剧目。"}
+  ],
+  "seed_cards": [
+    {"key":"school_definition","target_key":"school_org","source_key":"official_introduction","quote":"演劇の学び舎『聖翔音楽学園』","text":"圣翔音乐学园是舞台少女学习演剧的学校。","review_status":"candidate"},
+    {"key":"school_location","target_key":"school_place","source_key":"official_introduction","quote":"夢の舞台に立つために演劇の学び舎『聖翔音楽学園』に集う。","text":"舞台少女聚集在圣翔音乐学园，为梦想中的舞台而学习。具体校舍画面需另外确认。","review_status":"candidate"},
+    {"key":"stage_girl_definition","target_key":"stage_girl","source_key":"official_introduction","quote":"スタァに魅入られた『舞台少女』たちは、夢の舞台に立つために","text":"舞台少女向往明星和梦想中的舞台。","review_status":"candidate"},
+    {"key":"top_star_goal","target_key":"top_star","source_key":"official_introduction","quote":"『トップスタァ』の座をかけた、オーディションへの誘い。","text":"Top Star 的位置是官方简介所说的选拔目标。","review_status":"candidate"},
+    {"key":"audition_goal","target_key":"audition","source_key":"official_introduction","quote":"『トップスタァ』の座をかけた、オーディションへの誘い。","text":"选拔以争取 Top Star 的位置为目标；本资料不包含完整胜负条件。","review_status":"candidate"},
+    {"key":"revue_description","target_key":"revue","source_key":"official_introduction","quote":"9人の舞台少女たちの、キラめきをかけた『レヴュー』。","text":"Revue 是官方简介中九位舞台少女围绕闪耀所进行的竞争。","review_status":"candidate"},
+    {"key":"kirameki_description","target_key":"kirameki","source_key":"official_introduction","quote":"キラめきをかけた『レヴュー』","text":"闪耀与 Revue 的竞争相关；资料没有说明它等同于停止时间或其他能力。","review_status":"candidate"},
+    {"key":"starlight_promise","target_key":"starlight_play","source_key":"official_ep1","quote":"憧れの舞台「スタァライト」に一緒に立つことを約束した","text":"华恋与光憧憬的 Starlight 舞台，也是两人约定一起站上的舞台。","review_status":"candidate"},
+    {"key":"childhood_promise","target_key":"promise","source_key":"official_ep1","quote":"神楽ひかり。彼女こそ幼い日に別れた華恋の幼馴染みで、憧れの舞台「スタァライト」に一緒に立つことを約束した","text":"光是华恋幼时分开的青梅竹马；二人约定共同站上 Starlight 的舞台。","review_status":"candidate"},
+    {"key":"stage_space","target_key":"stage_place","source_key":"official_introduction","quote":"夢の舞台に立つために","text":"登上梦想中的舞台是舞台少女追求的目标；任意舞台画面不自动证明特定剧目正在上演。","review_status":"candidate"}
+  ],
+  "annotation_requirements": [
+    "先人工核对来源、翻译和概念区分，再将资料卡从 candidate 改为 reviewed。",
+    "引用既有爱城华恋、神乐光等内部 character_id，新增角色关系卡；不按名称自动建角色。",
+    "核对12–20个概念或角色出场，保存原帧和record_id；未完成时如实报告实际样本数。",
+    "为纯视觉问题标注真实时间区间；未观看原帧前不得填写时间戳。",
+    "需要另一作品、资料撤销、绑定撤销的查询分别准备独立测试状态，避免在不同模式之间改变覆盖。"
+  ],
+  "queries": [
+    {"id":"q01","split":"development","category":"name","query":"圣翔音乐学园","expected_target_labels":["school_org","school_place"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q02","split":"development","category":"multilingual","query":"聖翔音楽学園","expected_target_labels":["school_org","school_place"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q03","split":"development","category":"multilingual","query":"Seisho Music Academy","expected_target_labels":["school_org","school_place"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q04","split":"development","category":"description","query":"少女们为了登上梦想舞台而学习演剧的学校","expected_target_labels":["school_org","school_place"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q05","split":"development","category":"paraphrase","query":"培养未来舞台演员的那所学校","expected_target_labels":["school_org","school_place"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q06","split":"development","category":"name","query":"舞台少女","expected_target_labels":["stage_girl"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q07","split":"development","category":"abstract_term","query":"闪耀在 Revue 中是什么","expected_target_labels":["kirameki","revue"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q08","split":"development","category":"rule","query":"选拔想要争取的最高位置是什么","expected_target_labels":["audition","top_star"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q09","split":"development","category":"relation","query":"华恋与光约定一起登上的舞台是什么","expected_target_labels":["starlight_play","promise"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q10","split":"development","category":"character_relation","query":"神乐光与华恋是什么关系","expected_target_labels":["promise"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q11","split":"development","category":"visual","query":"红色舞台幕布","expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null,"film_spans":null}},
+    {"id":"q12","split":"development","category":"visual","query":"两个人在舞台上面对面","expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null,"film_spans":null}},
+    {"id":"q13","split":"development","category":"knowledge_without_film","query":"两人约定共同站上 Starlight 的舞台","expected_target_labels":["promise"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q14","split":"development","category":"ability_vs_event","query":"华恋正在发动停止时间的能力","expected":{"knowledge_ids":null,"target_refs":null,"record_ids":[],"event_assertion_allowed":false}},
+    {"id":"q15","split":"development","category":"wrong_premise","query":"圣翔音乐学园的高达驾驶训练基地","expected":{"knowledge_ids":null,"target_refs":null,"record_ids":[],"event_assertion_allowed":false}},
+    {"id":"q16","split":"development","category":"revoked_source","query":"闪耀是 Revue 争取的内容吗","setup":"独立副本撤销支持闪耀资料卡的来源；所有模式使用同一撤销后状态。","enabled":false,"expected":{"knowledge_ids":[],"target_refs":[],"record_ids":null}},
+    {"id":"q17","split":"held_out","category":"paraphrase","query":"为追逐舞台梦想而聚集的演剧学园","expected_target_labels":["school_org","school_place"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q18","split":"held_out","category":"multilingual","query":"トップスタァ","expected_target_labels":["top_star"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q19","split":"held_out","category":"relation_paraphrase","query":"童年时约好再一同登台的两人和那出剧目","expected_target_labels":["promise","starlight_play"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q20","split":"held_out","category":"abstract_term","query":"Kirameki 与舞台竞演的联系","expected_target_labels":["kirameki","revue"],"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q21","split":"held_out","category":"visual","query":"舞台上的聚光灯照着人物","expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null,"film_spans":null}},
+    {"id":"q22","split":"held_out","category":"cross_work","query":"另一部作品中同名的舞台少女","setup":"创建明确的第二作品作用域及同名概念；为该查询填写第二作用域，验证不会返回本作品片段。","enabled":false,"work_scope_id":null,"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":null}},
+    {"id":"q23","split":"held_out","category":"revoked_binding","query":"圣翔音乐学园校舍","setup":"在独立副本中撤销该概念所有出场绑定；知识资料保留。","enabled":false,"expected":{"knowledge_ids":null,"target_refs":null,"record_ids":[]}},
+    {"id":"q24","split":"held_out","category":"no_answer","query":"绿色恐龙驾驶飞机飞过圣翔音乐学园","expected":{"knowledge_ids":null,"target_refs":null,"record_ids":[],"event_assertion_allowed":false}}
+  ]
+}

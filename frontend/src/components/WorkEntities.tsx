@@ -2,20 +2,21 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, assetLink, formatTime, message, post } from '../api';
 import type { Observation, SceneChunk } from '../types';
 import { Alert, Field, Spinner } from './ui';
+import KnowledgePanel from './KnowledgePanel';
 
-type EntityKind = 'prop' | 'mecha' | 'place' | 'organization_symbol';
+type EntityKind = 'prop' | 'mecha' | 'place' | 'organization_symbol' | 'organization' | 'technology' | 'ability' | 'rule' | 'term' | 'abstract_concept';
 type ReferenceView = 'whole_scene' | 'landmark' | 'object_region';
 interface Reference { id: string; image_url: string; status: string; view: ReferenceView }
 interface WorkEntity {
   concept_id: string; type: EntityKind; name: string; original_name: string; translated_names: string[];
-  aliases: string[]; appearance: string; applicability: string; forms: unknown[]; facts: unknown[];
+  aliases: string[]; definition?: string; appearance: string; applicability: string; forms: unknown[]; facts: unknown[];
   relations: unknown[]; sources: unknown[]; references: Reference[]; version: number;
 }
 interface Scope { work_scope_id: string | null; title?: string; work_version?: string; asset_ids?: string[] }
 interface Occurrence { record_id: string; asset_id: string; start_ms: number; end_ms: number }
-const labels: Record<EntityKind, string> = { prop: '道具', mecha: '机体', place: '场所', organization_symbol: '组织符号' };
+const labels: Record<EntityKind, string> = { prop: '道具', mecha: '机体', place: '场所', organization_symbol: '组织符号', organization: '组织与势力', technology: '技术', ability: '能力', rule: '世界规则', term: '术语', abstract_concept: '抽象概念' };
 const parts = (text: string) => text.split(/[,，、\n]/).map((part) => part.trim()).filter(Boolean);
-const blank = { type: 'prop' as EntityKind, name: '', original_name: '', translated_names: [] as string[], aliases: [] as string[], appearance: '', applicability: '', forms: [], facts: [], relations: [], sources: [] };
+const blank = { type: 'prop' as EntityKind, name: '', original_name: '', translated_names: [] as string[], aliases: [] as string[], definition: '', appearance: '', applicability: '', forms: [], facts: [], relations: [], sources: [] };
 function jsonArray(text: string, label: string): unknown[] {
   const data = JSON.parse(text || '[]');
   if (!Array.isArray(data)) throw new Error(`${label}须为 JSON 数组`);
@@ -36,6 +37,7 @@ function EntityEditor({ assetId, entity, onSaved, onCancel }: { assetId: string;
   const [translated, setTranslated] = useState(initial.translated_names.join('、'));
   const [aliases, setAliases] = useState(initial.aliases.join('、'));
   const [appearance, setAppearance] = useState(initial.appearance);
+  const [definition, setDefinition] = useState(initial.definition || '');
   const [applicability, setApplicability] = useState(initial.applicability);
   const [advanced, setAdvanced] = useState(Object.fromEntries(['forms', 'facts', 'relations', 'sources'].map((key) => [key, JSON.stringify(initial[key as 'forms'], null, 2)])));
   const [reason, setReason] = useState('');
@@ -44,7 +46,7 @@ function EntityEditor({ assetId, entity, onSaved, onCancel }: { assetId: string;
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError('');
     try {
-      const data = { type, name: name.trim(), original_name: original.trim(), translated_names: parts(translated), aliases: parts(aliases), appearance, applicability, ...Object.fromEntries(Object.entries(advanced).map(([key, value]) => [key, jsonArray(value, key)])) };
+      const data = { type, name: name.trim(), original_name: original.trim(), translated_names: parts(translated), aliases: parts(aliases), definition, appearance, applicability, ...Object.fromEntries(Object.entries(advanced).map(([key, value]) => [key, jsonArray(value, key)])) };
       const path = `/assets/${encodeURIComponent(assetId)}/work-entities`;
       if (entity) await api(`${path}/${encodeURIComponent(entity.concept_id)}`, { method: 'PATCH', body: JSON.stringify({ changes: data, reason }) });
       else await post(path, data);
@@ -62,7 +64,9 @@ function EntityEditor({ assetId, entity, onSaved, onCancel }: { assetId: string;
       <Field label="别名"><input value={aliases} onChange={(event) => setAliases(event.target.value)} /></Field>
       <Field label="适用阶段与版本"><input value={applicability} onChange={(event) => setApplicability(event.target.value)} /></Field>
     </div>
+    <Field label="概念定义"><textarea value={definition} onChange={(event) => setDefinition(event.target.value)} /></Field>
     <Field label="区分性外观"><textarea value={appearance} onChange={(event) => setAppearance(event.target.value)} /></Field>
+    <p className="helper">没有可见外形的能力、规则和术语可以留空。</p>
     <details><summary>形态、设定事实、关系和出处（JSON）</summary>
       <p className="helper">设定事实须填写来源 ID。功能与归属只用于寻找实体出场，不能证明画面中正在发动功能或当前驾驶者。</p>
       {([['forms', '不同形态', '[{"name":"展开形态","appearance":"外观特征"}]'], ['sources', '资料出处', '[{"id":"source_1","kind":"manual","title":"人工整理","url":"","note":""}]'], ['facts', '设定事实', '[{"id":"fact_1","kind":"function","text":"能停止时间","source_ids":["source_1"],"applicability":""}]'], ['relations', '必要关系', '[{"predicate":"属于","target_concept_id":"概念ID","source_ids":["source_1"]}]']] as const).map(([key, label, example]) => <Field key={key} label={`${label} JSON`} hint={`示例：${example}`}><textarea rows={4} value={advanced[key]} onChange={(event) => setAdvanced({ ...advanced, [key]: event.target.value })} /></Field>)}
@@ -136,7 +140,7 @@ export default function WorkEntities({ assetId, title, records, initialBinding, 
   };
   return <section className="work-entities" aria-label="作品图文实体资料库">
     <h2>作品图文设定库</h2>
-    <p className="helper">跨集复用道具、机体与场所。当前画面、人工绑定、作品设定与事件判断分别保存；来源链接只作出处。</p>
+    <p className="helper">跨集复用实体、人物关系、能力与世界规则。当前画面、人工绑定、作品设定与事件判断分别保存；来源链接只作出处。</p>
     {error && <Alert tone="error">{error}</Alert>}
     {!scope ? <Spinner label="读取作品实体资料" /> : !scope.work_scope_id ? <>
       <form onSubmit={(event) => { event.preventDefault(); void mutate(() => post('/work-entity-scopes', { title: scopeTitle, version, asset_ids: [assetId] })); }}>
@@ -151,11 +155,13 @@ export default function WorkEntities({ assetId, title, records, initialBinding, 
       </form>
     </> : <>
       <div className="work-scope"><strong>{scope.title}</strong> {scope.work_version}<p>共享资料库 ID：<code>{scope.work_scope_id}</code> · {scope.asset_ids?.length || 1} 集</p></div>
+      <KnowledgePanel assetId={assetId} scopeId={scope.work_scope_id} entities={entities} />
       <div className="button-row"><button className="button secondary" onClick={() => setEdit('new')} disabled={busy}>新增实体</button><label className="button secondary">导入资料包<input type="file" accept=".zip" aria-label="导入作品实体资料包" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void mutate(() => { const data = new FormData(); data.set('file', file); return api(`${base}/work-entities/import`, { method: 'POST', body: data }); }); }} /></label></div>
       {edit && <EntityEditor key={edit === 'new' ? 'new' : edit.concept_id} assetId={assetId} entity={edit === 'new' ? undefined : edit} onSaved={changed} onCancel={() => setEdit(null)} />}
       <Field label="当前作品实体"><select value={selected} onChange={(event) => setSelected(event.target.value)}><option value="">选择实体</option>{entities.map((entity) => <option value={entity.concept_id} key={entity.concept_id}>{labels[entity.type]} · {entity.name}</option>)}</select></Field>
       {selectedEntity && <>
         <article className="work-entity-details"><h3>{selectedEntity.name} <small>{labels[selectedEntity.type]} · v{selectedEntity.version}</small></h3><code>{selectedEntity.concept_id}</code><p>{[selectedEntity.original_name, ...selectedEntity.translated_names, ...selectedEntity.aliases].filter(Boolean).join(' · ')}</p><p>{selectedEntity.appearance}</p><p>{selectedEntity.applicability}</p>
+          {selectedEntity.definition && <p>{selectedEntity.definition}</p>}
           <details><summary>设定事实、形态、关系与出处</summary><pre className="json-report">{JSON.stringify({ forms: selectedEntity.forms, facts: selectedEntity.facts, relations: selectedEntity.relations, sources: selectedEntity.sources }, null, 2)}</pre></details>
           <button className="button secondary" onClick={() => setEdit(selectedEntity)}>编辑实体资料</button>
         </article>

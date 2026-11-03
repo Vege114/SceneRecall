@@ -9,7 +9,7 @@ import sys
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 from .library import digest
 
@@ -20,9 +20,22 @@ class KnowledgeRecallProvider(Protocol):
         ...
 
     def search(self, query: str, filters: dict, engine) -> list[dict]:
-        """Return projected candidates; callers must recheck current indexed evidence."""
+        """Return candidates; callers recheck current indexed evidence."""
         ...
 
+
+class KnowledgeRecallResult(TypedDict):
+    knowledge_hits: list[dict]
+    record_candidates: list[dict]
+    diagnostics: dict
+
+
+class AsyncKnowledgeRecallProvider(Protocol):
+    """Optional asynchronous counterpart; synchronous providers remain valid."""
+
+    def revision(self, filters: dict, engine) -> str: ...
+
+    async def asearch(self, query: str, filters: dict, engine) -> KnowledgeRecallResult: ...
 
 def _size(value, seen=None):
     """Account shared index references only once, including Python containers."""

@@ -1,0 +1,11 @@
+[project]
+name = "scenerecall-knowledge-runtime"
+version = "1.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastembed==0.9.1",
+    "lightrag-hku==1.5.7",
+]
+
+[tool.uv]
+package = false

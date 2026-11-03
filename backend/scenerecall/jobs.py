@@ -22,6 +22,7 @@ from .pipeline import EpisodePipelineMixin
 from .identity_jobs import IdentityJobMixin
 from .retrieval_jobs import RetrievalJobMixin
 from .task_lifecycle import TaskLifecycleMixin
+from .knowledge_jobs import KnowledgeJobMixin
 
 CODEX_COST_BUDGET_MESSAGE = "Codex CLI 使用账户订阅额度，无法按 API 单价计算金额预算；请移除费用预算并保留请求数预算"
 
@@ -84,7 +85,7 @@ def canonical_ocr_frames(frames: list[dict], start_ms: int, end_ms: int, interva
     return result
 
 
-class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
+class JobQueue(KnowledgeJobMixin, TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodePipelineMixin, SceneJobMixin, WorkflowQueueMixin):
     def __init__(self, library: Library, providers, search):
         from .characters import CharacterStore
 
@@ -635,6 +636,8 @@ class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodeP
                 await self.import_files(job_id)
             elif job["type"] == "keyframe_scan":
                 await self.scan_plan(job_id)
+            elif job["type"] == "knowledge_build":
+                await self.build_knowledge(job_id)
             elif job["type"] == "proxy":
                 from .media import create_proxy
                 path = self.library.require_source(job["asset_id"])
