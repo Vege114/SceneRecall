@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from scenerecall.jobs import JobQueue
 from scenerecall.knowledge_api import register_knowledge_routes
+from scenerecall.knowledge_jobs import discovery_view
 from scenerecall.library import atomic_json
 from scenerecall.providers import ProviderManager
 from scenerecall.retrieval_store import RetrievalStore
@@ -151,6 +152,34 @@ def test_graph_candidate_endpoint_reads_actual_generation_file_without_model_cal
     assert response.json()["status"]["enabled"] is False
 
 
+def test_reference_candidate_http_confirmation_updates_current_binding_and_search(knowledge_http):
+    client, service, search, queue, scope = knowledge_http
+    base, _, _, concept = source_card(client, service, scope, kind="prop")
+    ref = service.store.add_reference("episode-one", concept["concept_id"], image_bytes(), confirmed=True)
+    search.visual_encoder = Encoder()
+    frame = {"id": "registered-frame", "at_ms": 200, "pts": 200, "time_base": [1, 1000],
+             "path": str(service.library.frame_path("episode-one", "registered-frame"))}
+
+    async def prepare():
+        await search.index_visual(service.library.records("episode-one"), [frame])
+        job = queue.add("reference_discovery", {"work_scope_id": scope})
+        queue.update(job["id"], status="running")
+        await queue.discover_references(job["id"])
+
+    asyncio.run(prepare())
+    candidate = discovery_view(service.knowledge, search, scope)["candidates"][0]
+    assert candidate["reference_ids"] == [ref["id"]]
+    assert service.store.scope("episode-one")["bindings"] == {}
+    route = base + "/reference-candidates/" + candidate["candidate_id"] + "/confirm"
+    assert client.post(route, json={"reason": ""}).status_code in {400, 422}
+    confirmed = client.post(route, json={"reason": "核对原帧金色表盘"})
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["decision_source"] == "human"
+    response = client.post(base + "/query", json={"query": "量子代偿"})
+    assert response.status_code == 200, response.text
+    row = next(row for row in response.json()["film_hits"] if row["id"] == candidate["record_id"])
+    assert row["event_verified"] is False and row["match_type"] == "partial"
+    assert concept["concept_id"] in row["matched_concept_ids"]
 
 
 @pytest.mark.parametrize("requested_scope", ["cast-current", "cast-foreign"])

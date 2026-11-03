@@ -183,7 +183,25 @@ def register_knowledge_routes(app, library, providers, search, queue, entities):
         return {"knowledge_hits": result.get("knowledge_hits", []), "film_hits": film,
                 "diagnostics": result.get("knowledge_diagnostics", {}), "degraded": result.get("degraded", [])}
 
+    @app.post(prefix + "/reference-discovery")
+    def discover(scope: str):
+        knowledge.scope_catalog(scope)
+        for job in queue.list():
+            if (job["type"] == "reference_discovery" and job["config"].get("work_scope_id") == scope
+                    and job["status"] in {"queued", "running", "pausing", "cancelling"}):
+                return job
+        return queue.add("reference_discovery", {"work_scope_id": scope})
 
+    @app.get(prefix + "/reference-candidates")
+    def reference_candidates(scope: str):
+        from .knowledge_jobs import discovery_view
+        return discovery_view(knowledge, search, scope)
 
+    @app.post(prefix + "/reference-candidates/{candidate_id}/confirm")
+    async def confirm_reference(scope: str, candidate_id: str, payload: dict = Body(...)):
+        from .knowledge_jobs import confirm_discovery
+        result = await run_in_thread(confirm_discovery, knowledge, search, scope, candidate_id, payload.get("reason", ""))
+        await run_in_thread(search.sync_asset, library.records(result["asset_id"]), result["asset_id"])
+        return result
 
     return service

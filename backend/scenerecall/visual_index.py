@@ -504,7 +504,7 @@ class VisualIndex:
             concepts.setdefault(key, set()).add(concept)
         return items, stats, concepts
 
-    async def match_references(self, records, references, encoder):
+    async def match_references(self, records, references, encoder, *, detailed=False):
         """Select relevant dossiers from pixels, never confirm their identity.
 
         The caller supplies only references from the work's confirmed bank.
@@ -564,11 +564,23 @@ class VisualIndex:
         self._check_files(items, stats)
         with self.engine._lock:
             self.engine._check_generation(generation)
-        return await asyncio.to_thread(self._match_reference_vectors, records, signature, dimensions, vectors, concepts)
+        details = None
+        if detailed:
+            details = {}
+            for key, item in items.items():
+                details[key] = {}
+                for reference in references:
+                    if (reference.get("status", "confirmed") == "confirmed"
+                            and reference.get("source_fingerprint") == item["source_fingerprint"]
+                            and reference.get("work_scope_id", reference.get("asset_id")) == item.get("work_scope_id", item.get("asset_id"))
+                            and reference.get("bbox", reference.get("box")) == item.get("bbox", item.get("box"))):
+                        details[key].setdefault(reference["concept_id"], []).append(reference["id"])
+        return await asyncio.to_thread(self._match_reference_vectors, records, signature, dimensions, vectors, concepts, details)
 
-    def _match_reference_vectors(self, records, signature, dimensions, references, concepts):
+    def _match_reference_vectors(self, records, signature, dimensions, references, concepts, details=None):
         supplied = {row["id"]: evidence_digest(row) for row in records}
         best = {}
+        winners = {}
         keys = list(references)
         with self.engine._db() as db:
             db.execute("BEGIN")
@@ -588,12 +600,12 @@ class VisualIndex:
             for position in range(0, len(identities), 256):
                 group = identities[position:position + 256]
                 placeholders = ",".join("?" for _ in group)
-                rows = db.execute(f"""SELECT l.record_id,c.vector,c.dimensions FROM visual_links l
+                rows = db.execute(f"""SELECT l.record_id,l.frame_id,l.at_ms,c.vector,c.dimensions FROM visual_links l
                     JOIN visual_cache c ON c.signature=l.signature AND c.cache_key=l.cache_key
                     JOIN records r ON r.id=l.record_id
                     WHERE l.signature=? AND l.record_id IN ({placeholders})""", [signature, *group])
                 while batch := rows.fetchmany(512):
-                    vectors, positions = [], {}
+                    vectors, positions, metadata = [], {}, []
                     for row in batch:
                         if row["dimensions"] != dimensions:
                             continue
@@ -602,6 +614,7 @@ class VisualIndex:
                             continue
                         positions.setdefault(row["record_id"], []).append(len(vectors))
                         vectors.append(vector)
+                        metadata.append((row["frame_id"], row["at_ms"]))
                     if not vectors:
                         continue
                     matrix = np.stack(vectors)
@@ -616,8 +629,13 @@ class VisualIndex:
                                     continue
                                 current = best.setdefault(record_id, {})
                                 for concept in concepts[key]:
+                                    if details is not None and score > current.get(concept, -1.):
+                                        winner = indices[int(np.argmax(scores[indices, ref_keys.index(key)]))]
+                                        frame_id, at_ms = metadata[winner]
+                                        winners[(record_id, concept)] = {"frame_id": frame_id, "at_ms": at_ms,
+                                            "reference_ids": details[key].get(concept, []), "encoder_signature": signature}
                                     current[concept] = max(current.get(concept, -1.), score)
-        return {record_id: [{"concept_id": concept, "similarity": similarity}
+        return {record_id: [{"concept_id": concept, "similarity": similarity, **winners.get((record_id, concept), {})}
                             for concept, similarity in sorted(values.items(), key=lambda pair: (-pair[1], pair[0]))[:5]]
                 for record_id, values in best.items()}
 

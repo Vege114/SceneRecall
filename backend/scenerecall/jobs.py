@@ -638,6 +638,8 @@ class JobQueue(KnowledgeJobMixin, TaskLifecycleMixin, RetrievalJobMixin, Identit
                 await self.scan_plan(job_id)
             elif job["type"] == "knowledge_build":
                 await self.build_knowledge(job_id)
+            elif job["type"] == "reference_discovery":
+                await self.discover_references(job_id)
             elif job["type"] == "proxy":
                 from .media import create_proxy
                 path = self.library.require_source(job["asset_id"])

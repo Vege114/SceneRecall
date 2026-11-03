@@ -12,6 +12,7 @@ export interface KnowledgeHit extends Partial<Card> { target_name?: string; has_
 interface FilmHit { id?: string; record_id?: string; asset_id: string; start_ms: number; end_ms: number; match_basis?: string }
 interface QueryResponse { knowledge_hits: KnowledgeHit[]; film_hits?: FilmHit[]; record_candidates?: FilmHit[]; diagnostics?: Record<string, unknown>; degraded?: string[] }
 interface Concept { concept_id: string; name: string; type?: string }
+interface ReferenceCandidate { candidate_id: string; concept_id: string; reference_ids: string[]; asset_id: string; record_id: string; frame_id: string; at_ms: number; start_ms: number; end_ms: number; similarity: number; status: string }
 interface GraphCandidate { entity_name?: string; id?: string; description?: string; source_id?: string; graph_kind?: string }
 interface GraphRelation { source?: string; target?: string; src_id?: string; tgt_id?: string; description?: string }
 interface Alignment { upstream_key: string; target_refs: KnowledgeTarget[]; supporting_card_ids: string[]; status: string }
@@ -78,6 +79,9 @@ export default function KnowledgePanel({ assetId, scopeId, entities }: { assetId
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState('baseline');
   const [result, setResult] = useState<QueryResponse | null>(null);
+  const [referenceCandidates, setReferenceCandidates] = useState<ReferenceCandidate[]>([]);
+  const [referenceStale, setReferenceStale] = useState(false);
+  const [referenceReason, setReferenceReason] = useState('');
   const [graphCandidates, setGraphCandidates] = useState<GraphCandidate[]>([]);
   const [alignments, setAlignments] = useState<Alignment[]>([]);
   const [upstreamKey, setUpstreamKey] = useState('');
@@ -136,6 +140,10 @@ export default function KnowledgePanel({ assetId, scopeId, entities }: { assetId
     void operate('query', async () => { setResult(await post<QueryResponse>(`${base}/query`, { query: query.trim() || '出场', mode, filters: { asset_id: assetId }, ...(explicitTarget ? { target_ref: explicitTarget } : {}) })); });
   };
   const filmHits = result?.film_hits || result?.record_candidates || [];
+  const loadReferenceCandidates = async () => {
+    const response = await api<{ candidates?: ReferenceCandidate[]; stale?: boolean }>(`${base}/reference-candidates`);
+    setReferenceCandidates(response.candidates || []); setReferenceStale(!!response.stale);
+  };
   const targetOptions = <><option value="">选择内部概念或角色</option><optgroup label="作品概念">{entities.map((row) => <option value={`concept:${row.concept_id}`} key={row.concept_id}>{row.name}</option>)}</optgroup>{characters && <optgroup label="现有角色">{characters.profiles.map((row) => <option value={`character:${row.id}`} key={row.id}>{row.name}</option>)}</optgroup>}</>;
   return <details className="advanced knowledge-panel" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>知识资料与检索 · LightRAG 实验</summary>
@@ -179,6 +187,13 @@ export default function KnowledgePanel({ assetId, scopeId, entities }: { assetId
       </details>
       <form onSubmit={(event) => search(event)}><h3>查询知识与影片证据</h3><Field label="知识检索模式"><select value={mode} onChange={(event) => { setMode(event.target.value); setResult(null); }}><option value="baseline">词法知识基线</option><option value="lightrag">LightRAG 实验</option></select></Field><Field label="知识问题"><input value={query} onChange={(event) => setQuery(event.target.value)} required /></Field><button className="button primary" disabled={!!busy || !query.trim()}>{busy === 'query' ? <Spinner label="查询中" /> : '检索知识与片段'}</button></form>
       {result && <section aria-live="polite"><h3>知识命中 · {result.knowledge_hits?.length || 0}</h3>{result.degraded?.length ? <Alert>{result.degraded.join('；')}</Alert> : null}<KnowledgeResults hits={result.knowledge_hits || []} onAppearances={(ref) => search(undefined, ref)} />{!result.knowledge_hits?.length && <p className="helper">没有找到有效知识资料。</p>}<h3>已确认影片关联 · {filmHits.length}</h3>{filmHits.length ? <ul>{filmHits.map((row, index) => <li key={row.id || row.record_id || index}><a href={assetLink(row.asset_id, row.start_ms)}>{formatTime(row.start_ms)} — {formatTime(row.end_ms)}</a> <span className="tag">出场证据 · 非事件确认</span></li>)}</ul> : <p className="helper">没有已确认影片证据；相关设定仍可在上方查看出处。</p>}{result.diagnostics && <details><summary>耗时与调用诊断</summary><pre className="json-report">{JSON.stringify(result.diagnostics, null, 2)}</pre></details>}</section>}
+      <details><summary>参考图候选发现 · 无 VLM</summary>
+        <p className="helper">复用本作品已有影片帧特征，与已确认参考图比较。相似度结果保持候选，核对原帧后才能保存出场绑定。</p>
+        <div className="button-row"><button type="button" className="button secondary" disabled={!!busy} onClick={() => void operate('reference-discovery', async () => { const job = await post<{ id?: string; job_id?: string }>(`${base}/reference-discovery`); setNotice(`参考图发现任务已提交：${job.job_id || job.id || '请查看任务队列'}`); })}>发现参考图候选</button><button type="button" className="button secondary" disabled={!!busy} onClick={() => void operate('reference-candidates', loadReferenceCandidates)}>刷新参考图候选</button></div>
+        {referenceStale && <Alert>这些候选的参考图或影片证据已变化，请重新运行发现任务。</Alert>}
+        <Field label="参考图出场核对依据"><input value={referenceReason} onChange={(event) => setReferenceReason(event.target.value)} placeholder="说明原帧中哪些特征支持此概念出场" /></Field>
+        <div className="work-reference-list">{referenceCandidates.map((candidate) => <article key={candidate.candidate_id}><h4>{entities.find((entity) => entity.concept_id === candidate.concept_id)?.name || candidate.concept_id}</h4>{candidate.reference_ids[0] && <img src={`/api/work-entity-scopes/${encodeURIComponent(scopeId)}/entities/${encodeURIComponent(candidate.concept_id)}/references/${encodeURIComponent(candidate.reference_ids[0])}/image`} alt="已核对概念参考图" loading="lazy" />}<img src={`/api/assets/${encodeURIComponent(candidate.asset_id)}/frames/${encodeURIComponent(candidate.frame_id)}`} alt="候选影片原帧" loading="lazy" /><p>相似度 {candidate.similarity.toFixed(4)} · {formatTime(candidate.at_ms)} · {candidate.status === 'confirmed' ? '已人工确认' : '仅为候选'}</p><a href={assetLink(candidate.asset_id, candidate.at_ms)}>播放候选片段</a><button type="button" className="button small secondary" disabled={!!busy || referenceStale || !referenceReason.trim() || candidate.status === 'confirmed'} onClick={() => void operate('reference-confirm', async () => { await post(`${base}/reference-candidates/${encodeURIComponent(candidate.candidate_id)}/confirm`, { reason: referenceReason }); await loadReferenceCandidates(); setNotice('人工出场绑定已保存，知识召回现在可使用该影片关联。'); })}>核对并确认出场</button></article>)}</div>
+      </details>
     </>}
   </details>;
 }

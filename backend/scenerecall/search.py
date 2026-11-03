@@ -599,7 +599,9 @@ class SearchEngine:
     async def index_visual(self, records: list[dict], frames: list[dict], encoder=None, progress=None) -> dict:
         return await self.visual_index.build(records, frames, encoder or self.visual_encoder, progress)
 
-    async def match_visual_references(self, records: list[dict], references: list[dict], encoder=None) -> dict:
+    async def match_visual_references(self, records: list[dict], references: list[dict], encoder=None, *, detailed=False) -> dict:
+        if detailed:
+            return await self.visual_index.match_references(records, references, encoder or self.visual_encoder, detailed=True)
         return await self.visual_index.match_references(records, references, encoder or self.visual_encoder)
 
     async def _visual(self, query: str, filters: dict, degraded: list[str]) -> list[dict]:

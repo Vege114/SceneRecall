@@ -116,6 +116,26 @@ describe('Knowledge evidence workflow', () => {
     expect(fetch.mock.calls.filter(([, options]) => options?.method && options.method !== 'GET')).toHaveLength(1);
   });
 
+  it('keeps reference similarities as candidates until the user provides a confirmation reason', async () => {
+    const initialFetch = setup();
+    const fetch = vi.fn(async (input: string, options?: RequestInit) => {
+      if (input === `${base}/reference-candidates`) return new Response(JSON.stringify({ stale: false, candidates: [{ candidate_id: 'candidate_one', concept_id: 'concept_one', reference_ids: ['reference_one'], asset_id: 'asset_one', record_id: 'record_one', frame_id: 'frame_one', at_ms: 1500, start_ms: 1000, end_ms: 3000, similarity: .8, status: 'candidate' }] }));
+      return initialFetch(input, options);
+    });
+    vi.stubGlobal('fetch', fetch); const user = userEvent.setup(); mountPanel(); await screen.findByText('整理资料卡');
+    await user.click(screen.getByText('参考图候选发现 · 无 VLM'));
+    await user.click(screen.getByRole('button', { name: '刷新参考图候选' }));
+    await screen.findByText(/相似度 0.8000/);
+    const confirm = screen.getByRole('button', { name: '核对并确认出场' }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(fetch.mock.calls.some(([url]) => url.endsWith('/confirm'))).toBe(false);
+    await user.type(screen.getByLabelText('参考图出场核对依据'), '核对原帧的金色表壳');
+    await user.click(confirm);
+    await waitFor(() => expect(fetch.mock.calls.some(([url]) => url.endsWith('/candidate_one/confirm'))).toBe(true));
+    const request = fetch.mock.calls.find(([url]) => url.endsWith('/candidate_one/confirm'))!;
+    expect(JSON.parse(request[1]!.body as string)).toEqual({ reason: '核对原帧的金色表壳' });
+  });
+
   it('uses local multilingual embeddings by default and preserves an optional API configuration', async () => {
     const fetch = setup(); const user = userEvent.setup();
     const profile = { id: 'codex', name: 'Codex 连接', model: '', provider_type: 'codex_cli', capabilities: ['query'] } as Profile;
