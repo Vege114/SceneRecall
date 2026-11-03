@@ -9,6 +9,34 @@ from pathlib import Path
 import sys
 
 
+def cached_weight_snapshots(model):
+    """Resolve every required weight offline before importing the ML runtime."""
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.constants import HF_HUB_CACHE
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    filenames = [("deepghs/ccip_onnx", f"{model}/{name}")
+                 for name in ("model_feat.onnx", "model_metrics.onnx")]
+    filenames.append(("deepghs/anime_person_detection", "person_detect_v1.1_m/model.onnx"))
+    snapshots = []
+    for repo_id, filename in filenames:
+        try:
+            path = Path(hf_hub_download(repo_id=repo_id, filename=filename, local_files_only=True))
+            if not path.is_file():
+                raise FileNotFoundError(path)
+        except (LocalEntryNotFoundError, OSError) as exc:
+            raise RuntimeError(
+                f"未缓存必需视觉权重：{repo_id}/{filename}；缓存目录：{HF_HUB_CACHE}。"
+                "请预先缓存所选模型，或在界面选择已有的本地模型；运行时不会联网或自动切换模型。"
+            ) from exc
+        # Cache commit directory is part of the feature key. Do not hash model
+        # names alone across mutable snapshots or substitute another model.
+        parts = path.parts
+        commit = parts[parts.index("snapshots") + 1] if "snapshots" in parts else str(path.stat().st_mtime_ns)
+        snapshots.append(f"{repo_id}@{commit}")
+    return snapshots
+
+
 def configure_onnx_runtime():
     """Opt-in CUDA DLL loading and FP32 parity controls for an isolated worker.
 
@@ -73,23 +101,12 @@ def main():
             request = json.loads(line)
             with contextlib.redirect_stdout(sys.stderr):
                 if backend is None:
+                    snapshots = cached_weight_snapshots(model)
                     runtime = configure_onnx_runtime()
                     import numpy as np
-                    from huggingface_hub import hf_hub_download
                     from imgutils.detect import detect_person
                     from imgutils.metrics import ccip_extract_feature, ccip_difference
                     from PIL import Image
-                    filenames = [("deepghs/ccip_onnx", f"{model}/{name}")
-                                 for name in ("model_feat.onnx", "model_metrics.onnx")]
-                    filenames.append(("deepghs/anime_person_detection", "person_detect_v1.1_m/model.onnx"))
-                    snapshots = []
-                    for repo_id, filename in filenames:
-                        path = Path(hf_hub_download(repo_id=repo_id, filename=filename, local_files_only=True))
-                        # Cache commit directory is part of the feature key. Do
-                        # not hash model names alone across mutable snapshots.
-                        parts = path.parts
-                        commit = parts[parts.index("snapshots") + 1] if "snapshots" in parts else str(path.stat().st_mtime_ns)
-                        snapshots.append(f"{repo_id}@{commit}")
                     version = f"imgutils-{importlib.metadata.version('dghs-imgutils')}:{model}:" + ";".join(snapshots)
                     # Load all three ONNX sessions here so model-load time is
                     # charged to startup, not hidden in the first video frame.
