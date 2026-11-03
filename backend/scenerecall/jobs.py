@@ -246,7 +246,8 @@ class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodeP
                 from .scene_jobs import prompt_versions
                 config["scene_prompt_versions"] = prompt_versions()
                 config["identity_settings"] = self.identity_settings(request.asset_id)
-            context = self.character_context(request.asset_id, scene=strategy == "scene-chunks-v1")
+            context = self.character_context(request.asset_id, scene=strategy == "scene-chunks-v1",
+                                             defer_limits=self._scene_visual_selection(config))
             config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}
             config["sampling_strategy"] = strategy
             if request.model_fields_set & {"window_ms", "frames_per_window"}:
@@ -316,15 +317,17 @@ class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodeP
             return None
         return ((2048 * text_count + 4096 * frames + context_tokens) * a + MAX_OUTPUT_TOKENS * b) / 1_000_000
 
-    def character_context(self, asset_id: str, expected: dict | None = None, *, scene: bool = False) -> dict:
+    def character_context(self, asset_id: str, expected: dict | None = None, *, scene: bool = False,
+                          defer_limits: bool = False) -> dict:
         context = self.characters.context(asset_id)
         context["membership_revision"] = self.library.get_asset(asset_id).get("membership_revision", 0)
         keys = ("scope_id", "revision", "membership_revision") if expected and "membership_revision" in expected else ("scope_id", "revision")
         if expected is not None and any(context[key] != expected.get(key) for key in keys):
             raise CharacterContextChanged("角色档案已修改，此任务使用的是旧版档案。已完成结果保留；请在角色档案中按新版档案重新识别")
-        if scene:
+        if scene and not defer_limits:
             context = self._bounded_scene_profiles(context)
-        ProviderManager.character_context_text(context)
+        if not defer_limits:
+            ProviderManager.character_context_text(context)
         references = []
         from .visual_identity import ReferenceGallery
         allowed = {profile["id"] for profile in context["profiles"]}
@@ -376,7 +379,10 @@ class JobQueue(TaskLifecycleMixin, RetrievalJobMixin, IdentityJobMixin, EpisodeP
                     and config.get("analysis_strategy") != "retrieval-first-v1"
                     and (not self.unified_task(config) or job.get("workflow_progress", {}).get(
                         "character_confirmation", {}).get("status") == "completed")):
-                self.character_context(job["asset_id"], config.get("character_snapshot"))
+                if config.get("analysis_strategy") == "scene-chunks-v1":
+                    self._scene_context(job["asset_id"], config)
+                else:
+                    self.character_context(job["asset_id"], config.get("character_snapshot"))
             if (job["type"] == "analysis" and "subtitle" in config.get("stages", [])
                     and self.library.get_asset(job["asset_id"])["subtitle_mode"] != "embedded"):
                 raise ValueError("字幕来源已切换为文字字幕，请创建只包含画面理解的新任务")

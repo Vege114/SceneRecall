@@ -50,7 +50,8 @@ class TaskLifecycleMixin:
         job = self.get(job_id)
         self._check_workflow_scope(job)
         config = copy.deepcopy(job["config"])
-        context = self.character_context(job["asset_id"], scene=config.get("analysis_strategy") == "scene-chunks-v1")
+        context = self.character_context(job["asset_id"], scene=config.get("analysis_strategy") == "scene-chunks-v1",
+                                         defer_limits=self._scene_visual_selection(config))
         config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}
         if config.get("analysis_strategy") == "retrieval-first-v1":
             from .retrieval_identity import gallery_identity

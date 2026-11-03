@@ -516,6 +516,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         inputs = run / "scene-inputs" / f"{digest([stage, versions[stage], unit])}.json"
         frozen = read_json(inputs)
         if frozen is None:
+            args = self._scene_request_args(job["config"], stage, args)
             if stage == "preparation" and versions[stage] in {prompt_versions()[stage], "scene-visual-preparation-v4"}:
                 images += sum(len((args[4] or {}).get(key, [])) for key in ("reference_frames", "region_images")) if len(args) > 4 else 0
             frozen = {"args": args, "images": images}
@@ -545,6 +546,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         # Preserve paid successes above. An unsuccessful frozen input must not
         # overrule a later human correction on the next actual model request.
         refreshed = await self._scene_local_context(job_id, self.refresh_scene_request_identity, job_id, stage, args)
+        refreshed = self._scene_request_args(job["config"], stage, refreshed)
         if canonical(refreshed) != canonical(args):
             previous_key = key
             atomic_json(run / "scene-input-history" / f"{key}.json", frozen)
@@ -843,8 +845,32 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             return context
         raise ValueError("完整角色名单超过上下文上限，请启用本地视觉匹配选择相关档案；角色未被静默截断")
 
+    @staticmethod
+    def _scene_visual_selection(config):
+        return (config.get("analysis_strategy") == STRATEGY
+                and bool(config.get("identity_settings", {}).get("visual", {}).get("enabled")))
+
+    def _scene_request_args(self, config, stage, args):
+        """Bound selected dossiers, keeping frame evidence under its existing limits."""
+        if not self._scene_visual_selection(config) or stage not in {"preparation", "deep_analysis"}:
+            return args
+        index = 4 if stage == "preparation" else 3
+        if len(args) <= index or args[index] is None:
+            return args
+        context = args[index]
+        # The full allowed roster is retained until local, per-region selection.
+        # Region evidence keeps the provider's bounded split/retry contract; it
+        # must not consume the smaller dossier budget or be silently removed.
+        evidence = {key: context[key] for key in ("reference_frames", "identity_regions", "region_images")
+                    if key in context}
+        bounded = self._bounded_scene_profiles({key: value for key, value in context.items() if key not in evidence})
+        result = list(args)
+        result[index] = {**bounded, **evidence}
+        return result
+
     def _scene_context(self, asset_id, config):
-        context = self.character_context(asset_id, config["character_snapshot"], scene=True)
+        context = self.character_context(asset_id, config["character_snapshot"], scene=True,
+                                         defer_limits=self._scene_visual_selection(config))
         ids = {p["id"] for p in context["profiles"]}
         context["reference_frames"] = [f for f in context["reference_frames"] if f["character_id"] in ids]
         return context
@@ -1413,7 +1439,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     references.setdefault(reference["character_id"], reference)
                 allowed = {entry["id"] for entry in context["profiles"]}
                 context["reference_frames"] = [reference for identity, reference in references.items() if identity in allowed][:8]
-                context = self._bounded_scene_profiles(context)
+                if not self._scene_visual_selection(config):
+                    context = self._bounded_scene_profiles(context)
                 allowed = {entry["id"] for entry in context["profiles"]}
                 context["reference_frames"] = [reference for reference in context["reference_frames"]
                                                if reference["character_id"] in allowed]
