@@ -174,7 +174,8 @@ export interface ImportInput {
   subtitle_mode: SubtitleMode; subtitle_path: string | null; subtitle_stream_index?: number | null; subtitle_offset_ms: number;
   anime_profile?: AnimeProfileSelection;
 }
-export interface ImportItem { item_id: string; name: string; status: string; phase?: string; asset_id?: string; error?: string; warnings?: string[]; input?: ImportInput }
+export interface BangumiKnowledgeImportReceipt { status?: string; source_count?: number; card_count?: number; created_sources?: number; created_cards?: number; warnings?: string[] }
+export interface ImportItem { item_id: string; name: string; status: string; phase?: string; asset_id?: string; error?: string; warnings?: string[]; input?: ImportInput; knowledge_import?: BangumiKnowledgeImportReceipt }
 export interface KeyframePlan {
   id: string; plan_id?: string; job_id: string; status: string; error?: string; progress?: number; message?: string;
   frames?: { id: string; at_ms: number; thumbnail_url: string; reason?: string }[];

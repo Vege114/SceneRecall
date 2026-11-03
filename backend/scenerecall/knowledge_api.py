@@ -27,6 +27,8 @@ class KnowledgeQuery(Contract):
         return None
 
 
+class BangumiKnowledgeImport(Contract):
+    asset_id: str = Field(min_length=1, max_length=180)
 
 
 def register_knowledge_routes(app, library, providers, search, queue, entities):
@@ -38,7 +40,17 @@ def register_knowledge_routes(app, library, providers, search, queue, entities):
     search.knowledge_provider = service
     prefix = "/api/work-entity-scopes/{scope}/knowledge"
 
+    @app.post("/api/assets/{asset_id}/knowledge/bangumi")
+    async def prepare_bangumi_knowledge(asset_id: str):
+        # Use the server-owned archive. This endpoint never fetches a supplied
+        # URL, accepts a client dossier or invokes a model.
+        from .bangumi_knowledge import sync_bangumi_knowledge
+        return await run_in_thread(sync_bangumi_knowledge, library, asset_id)
 
+    @app.post(prefix + "/bangumi")
+    async def import_bangumi_knowledge(scope: str, payload: BangumiKnowledgeImport):
+        from .bangumi_knowledge import sync_bangumi_knowledge
+        return await run_in_thread(sync_bangumi_knowledge, library, payload.asset_id, scope_id=scope)
 
     @app.get("/api/knowledge/settings")
     def settings():

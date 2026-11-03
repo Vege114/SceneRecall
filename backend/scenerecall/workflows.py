@@ -179,6 +179,21 @@ class WorkflowQueueMixin:
                     index_asset_ids.update(await self._local_work(job_id, bind_profile))
                     timings["import_profile"] = round((time.perf_counter() - started) * 1000)
                     self.checkpoint(job_id)
+                elif (existing.get("anime_profile") or {}).get("mode") == "bangumi":
+                    # Episodes may inherit an already selected project archive
+                    # without an explicit anime_profile in this import item.
+                    def prepare_inherited_knowledge(check):
+                        from .anime_profiles import AnimeProfileStore
+                        check()
+                        AnimeProfileStore(self.library)._prepare_knowledge([existing["id"]])
+
+                    await self._local_work(job_id, prepare_inherited_knowledge)
+                receipt = read_json(self.library.asset_dir(existing["id"]) / "knowledge" / "bangumi-import.json")
+                if receipt:
+                    items[item_id]["knowledge_import"] = receipt
+                    items[item_id]["warnings"] = list(dict.fromkeys([
+                        *items[item_id].get("warnings", []), *receipt.get("warnings", []),
+                    ]))
                 items[item_id]["phase"] = "import_index"
                 self.update(job_id, stage="import_index", items=list(items.values()),
                             message=f"正在建立搜索索引：{items[item_id]['name']}")

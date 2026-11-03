@@ -105,6 +105,47 @@ def test_link_reads_cached_server_data_and_rejects_arbitrary_urls(client):
     assert client.app.state.bangumi.client.calls == [("dossier", 42)]
 
 
+def test_archive_knowledge_failure_is_recorded_without_failing_video_import(client, video, monkeypatch):
+    def fail(*args, **kwargs):
+        raise ValueError("private storage path must not appear in task errors")
+
+    monkeypatch.setattr("scenerecall.bangumi_knowledge.sync_bangumi_knowledge", fail)
+    payload = import_request(video, selection={"mode": "bangumi", "subject_id": 42})
+    job = client.post("/api/imports", json=payload).json()
+    done = execute(client, job["id"])
+    assert done["status"] == "completed", done
+    asset_id = done["items"][0]["asset_id"]
+    receipt = read_json(client.app.state.library.asset_dir(asset_id) / "knowledge" / "bangumi-import.json")
+    assert receipt["status"] == "error"
+    assert receipt["warnings"] == [receipt["error"]]
+    assert "private storage" not in str(receipt)
+    assert client.app.state.library.get_asset(asset_id)["anime_profile"]["mode"] == "bangumi"
+
+
+def test_idempotent_profile_apply_retries_preparation_and_preserves_partial_status(client, video, monkeypatch):
+    calls = []
+
+    def prepare(library, asset_id):
+        calls.append(asset_id)
+        return {"status": "partial", "source_count": 1, "card_count": 0, "warnings": ["部分角色详情未取得"]}
+
+    monkeypatch.setattr("scenerecall.bangumi_knowledge.sync_bangumi_knowledge", prepare)
+    payload = import_request(video, selection={"mode": "bangumi", "subject_id": 42})
+    job = client.post("/api/imports", json=payload).json()
+    done = execute(client, job["id"])
+    assert done["status"] == "completed", done
+    asset_id = done["items"][0]["asset_id"]
+    profile = client.app.state.library.get_asset(asset_id)["anime_profile"]
+    # Legacy dossiers may gain an empty warnings field on their first merge.
+    client.app.state.bangumi.apply_asset(asset_id, {"mode": "bangumi", "subject_id": 42}, profile["dossier"])
+    profile = client.app.state.library.get_asset(asset_id)["anime_profile"]
+    before = len(calls)
+    result = client.app.state.bangumi.apply_asset(asset_id, {"mode": "bangumi", "subject_id": 42}, profile["dossier"])
+    assert result == profile and calls[before:] == [asset_id]
+    receipt = read_json(client.app.state.library.asset_dir(asset_id) / "knowledge" / "bangumi-import.json")
+    assert receipt["status"] == "partial" and receipt["warnings"] == ["部分角色详情未取得"]
+
+
 def test_fresh_legacy_cache_upgrades_names_locally_and_retains_conversion_source(client):
     path = client.app.state.library.root / "runtime" / "bangumi" / "42.json"
     old = archive()
@@ -204,6 +245,41 @@ def test_latest_roster_date_is_recorded_even_when_no_metadata_changed():
     middle["fetched_at"] = "2026-10-07T00:00:00Z"
     middle["characters"].append({"id": 8, "name": "Older-only", "aliases": []})
     assert [value["id"] for value in merge_dossier(merged, middle)["characters"]] == [7]
+
+
+def test_knowledge_refresh_uses_latest_text_without_changing_additive_cast_merge():
+    first = archive()
+    first["fetched_at"] = "2026-10-01T00:00:00Z"
+    first["characters"].append({"id": 8, "name": "已移除角色", "description": "旧名单"})
+    refreshed = archive()
+    refreshed["fetched_at"] = "2026-10-28T00:00:00Z"
+    refreshed["subject"]["summary"] = "更新后的作品说明"
+    refreshed["characters"][0]["description"] = "更新后的角色说明"
+    refreshed["characters"][0]["infobox"] = [{"key": "所属", "value": "新组织"}]
+    merged = merge_dossier(first, refreshed)
+    assert merged["subject"]["summary"] == first["subject"]["summary"]
+    assert merged["characters"][0]["description"] == first["characters"][0]["description"]
+    snapshot = merged["knowledge_snapshot"]
+    assert snapshot["subject"]["summary"] == "更新后的作品说明"
+    assert snapshot["characters"][0]["description"] == "更新后的角色说明"
+    assert snapshot["characters"][0]["infobox"] == [{"key": "所属", "value": "新组织"}]
+    assert [row["id"] for row in snapshot["characters"]] == [7]
+    assert snapshot["fetched_at"] == refreshed["fetched_at"]
+    assert merge_dossier(merged, first)["knowledge_snapshot"] == snapshot
+    assert merge_dossier(merged, refreshed) == merged
+
+
+@pytest.mark.parametrize("timestamp", ["2026-09-01T00:00:00Z", "not-a-date"])
+def test_older_source_snapshot_does_not_replace_knowledge_even_when_cast_fills_missing_fields(timestamp):
+    latest = archive()
+    latest["fetched_at"] = "2026-10-28T00:00:00Z"
+    latest["characters"][0]["description"] = ""
+    older = archive()
+    older["fetched_at"] = timestamp
+    merged = merge_dossier(latest, older)
+    assert merged["characters"][0]["description"] == older["characters"][0]["description"]
+    assert merged["knowledge_snapshot"]["characters"][0]["description"] == ""
+    assert merged["knowledge_snapshot"]["fetched_at"] == latest["fetched_at"]
 
 
 def test_legacy_unknown_dates_keep_the_saved_roster_until_a_valid_refresh_arrives():

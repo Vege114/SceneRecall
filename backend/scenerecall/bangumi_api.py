@@ -1,6 +1,7 @@
 """Public archive reads behind SceneRecall's local-session authorization."""
 from pydantic import Field
 
+from .execution import run_in_thread
 from .models import AnimeProfileSelection, Contract
 
 
@@ -47,7 +48,7 @@ def register_bangumi_routes(app, library, search):
         selection = payload.model_dump(exclude_none=True)
         check_binding(project.get("anime_profile"), selection)
         dossier = await app.state.bangumi.dossier(payload.subject_id) if payload.mode == "bangumi" else None
-        app.state.bangumi.apply_project(project_id, selection, dossier)
+        await run_in_thread(app.state.bangumi.apply_project, project_id, selection, dossier)
         await search.rebuild_from_source(library.records)
         return library.organization.get_project(project_id)
 
@@ -60,6 +61,6 @@ def register_bangumi_routes(app, library, search):
         selection = payload.model_dump(exclude_none=True)
         check_binding(asset.get("anime_profile"), selection)
         dossier = await app.state.bangumi.dossier(payload.subject_id) if payload.mode == "bangumi" else None
-        result = app.state.bangumi.apply_asset(asset_id, selection, dossier)
+        result = await run_in_thread(app.state.bangumi.apply_asset, asset_id, selection, dossier)
         await search.rebuild_from_source(library.records)
         return result

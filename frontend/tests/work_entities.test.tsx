@@ -12,7 +12,8 @@ function setup(initialScope: object = scope) {
   const fetch = vi.fn(async (url: string, options?: RequestInit) => {
     if (url === '/api/work-entity-scopes' && options?.method === 'POST') currentScope = scope;
     if (url.endsWith('/work-entity-scope') && options?.method === 'PUT') currentScope = scope;
-    const value = url.endsWith('/work-entity-scope') ? currentScope : url.endsWith('/work-entities') ? { entities: [concept] } : url.endsWith('/occurrences') ? { occurrences: [{ record_id: 'window_one', asset_id: 'asset', start_ms: 1000, end_ms: 4000 }] } : {};
+    if (url.endsWith('/knowledge/bangumi') && options?.method === 'POST') currentScope = scope;
+    const value = url.endsWith('/knowledge/bangumi') ? { source_count: 3, card_count: 2, created_cards: 2, warnings: [] } : url.endsWith('/work-entity-scope') ? currentScope : url.endsWith('/work-entities') ? { entities: [concept] } : url.endsWith('/occurrences') ? { occurrences: [{ record_id: 'window_one', asset_id: 'asset', start_ms: 1000, end_ms: 4000 }] } : {};
     return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
   });
   vi.stubGlobal('fetch', fetch);
@@ -24,6 +25,19 @@ function mount(initialBinding?: { recordId: string; entityId: string }) {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Work entity local workflows', () => {
+  it('prepares an existing Bangumi archive and reloads its scope without a manual ID or model build', async () => {
+    const fetch = setup({ work_scope_id: null }); const user = userEvent.setup(); mount();
+    await screen.findByText('为本集创建作品资料库');
+    await user.click(screen.getByRole('button', { name: '从已有 Bangumi 档案准备知识资料' }));
+    await screen.findByText('workscope_one');
+    expect(screen.getByText(/3 份来源、2 张资料卡，新增候选 2 张/)).toBeTruthy();
+    expect(screen.getByText('知识资料与检索 · LightRAG 实验')).toBeTruthy();
+    const request = fetch.mock.calls.find(([url]) => url === '/api/assets/asset/knowledge/bangumi')!;
+    expect(request[1]?.method).toBe('POST');
+    expect(JSON.parse(request[1]!.body as string)).toEqual({});
+    expect(fetch.mock.calls.some(([url]) => url === '/api/work-entity-scopes' || url.endsWith('/build') || url.endsWith('/work-entity-bindings'))).toBe(false);
+  });
+
   it('creates an explicitly scoped dossier for this asset without guessing an anime identifier', async () => {
     const fetch = setup({ work_scope_id: null }); const user = userEvent.setup(); mount();
     await screen.findByText('为本集创建作品资料库');

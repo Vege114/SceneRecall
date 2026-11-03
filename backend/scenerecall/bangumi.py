@@ -253,10 +253,43 @@ def character_names(raw: dict) -> dict:
 def normalize_dossier_names(dossier: dict) -> dict:
     """Upgrade cached and durable snapshots locally, without another network read."""
     result = copy.deepcopy(dossier)
+    # Keep the observed knowledge separate from the cast's additive name and
+    # description merge. Otherwise refreshing a source could keep serving its
+    # old, already reviewed description as if it were the latest API response.
+    snapshot = _knowledge_snapshot(dossier)
     for character in result.get("characters", []):
         character.update(character_names(character))
     result["name_schema_version"] = NAME_SCHEMA_VERSION
+    if snapshot is not None:
+        result["knowledge_snapshot"] = snapshot
     return result
+
+
+def _knowledge_snapshot(dossier: dict) -> dict | None:
+    """Copy only received catalogue fields, without recursively copying dossiers."""
+    subject = dossier.get("subject")
+    fetched_at = dossier.get("fetched_at")
+    if (dossier.get("source") != "bangumi" or not isinstance(subject, dict)
+            or type(subject.get("id")) is not int or not isinstance(fetched_at, str)):
+        return None
+    existing = dossier.get("knowledge_snapshot")
+    if (isinstance(existing, dict) and existing.get("source") == "bangumi"
+            and existing.get("fetched_at") == fetched_at
+            and isinstance(existing.get("subject"), dict)
+            and existing["subject"].get("id") == subject["id"]
+            and isinstance(existing.get("characters"), list)):
+        subject = existing["subject"]
+        characters = existing["characters"]
+    else:
+        characters = dossier.get("characters", [])
+    subject_fields = ("id", "name", "name_cn", "nameCN", "aliases", "summary", "infobox", "url",
+                      "type", "date", "platform", "eps", "episodes")
+    character_fields = ("id", "name", "name_cn", "name_ja", "name_en", "aliases", "name_variants",
+                        "description", "summary", "infobox", "url", "role", "relation_type", "detail_error")
+    return {"source": "bangumi", "fetched_at": fetched_at,
+            "subject": {key: copy.deepcopy(subject[key]) for key in subject_fields if key in subject},
+            "characters": [{key: copy.deepcopy(character[key]) for key in character_fields if key in character}
+                           for character in characters if isinstance(character, dict)]}
 
 
 def _subject(raw: dict) -> dict:
@@ -394,14 +427,14 @@ class BangumiClient:
 
         detailed = await asyncio.gather(*(detail(relation) for relation in relations))
         warnings.extend(message for _, message in detailed if message)
-        return {
+        return normalize_dossier_names({
             "source": "bangumi",
             "name_schema_version": NAME_SCHEMA_VERSION,
             "subject": _subject(raw_subject),
             "characters": [character for character, _ in detailed],
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "warnings": warnings,
-        }
+        })
 
     @staticmethod
     def _items(result: Any) -> list[dict]:

@@ -73,6 +73,49 @@ describe('Knowledge evidence workflow', () => {
     expect(JSON.parse(request[1]!.body as string)).toMatchObject({ mode: 'lightrag', filters: { asset_id: 'asset_one' } });
   });
 
+  it('reuses the saved Bangumi archive and reloads candidate cards without approving or building them', async () => {
+    const fallback = setup(); let imported = false;
+    const fetch = vi.fn(async (input: string, options?: RequestInit) => {
+      let value: unknown;
+      if (input === `${base}/bangumi`) {
+        imported = true;
+        value = { source_count: 3, card_count: 2, created_sources: 2, created_cards: 1, warnings: ['部分角色没有简介'] };
+      } else if (input === `${base}/cards` && imported) {
+        value = { cards: [
+          { card_id: 'reviewed_one', title: '已核对的学校资料', text: '保留原有核对结果', target_ref: { kind: 'concept', concept_id: 'concept_one' }, review_status: 'reviewed' },
+          { card_id: 'bangumi_one', title: '小光的 Bangumi 简介', text: '来源里的角色说明', target_ref: { kind: 'character', asset_id: 'asset_one', character_scope_id: 'cast_one', character_id: 'char_one' }, review_status: 'candidate' },
+        ] };
+      } else return fallback(input, options);
+      return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup(); mountPanel();
+    await screen.findByText('整理资料卡');
+    await user.click(screen.getByRole('button', { name: '整理已有 Bangumi 资料' }));
+    await screen.findByText(/新增 2 份来源、1 张待核对资料卡/);
+    expect(screen.getByText(/部分角色没有简介/)).toBeTruthy();
+    expect(screen.getByText('保留原有核对结果')).toBeTruthy();
+    expect(screen.getByText('小光的 Bangumi 简介')).toBeTruthy();
+    expect(screen.getByText('抽取候选 / 待核对')).toBeTruthy();
+    const request = fetch.mock.calls.find(([url]) => url === `${base}/bangumi`)!;
+    expect(request[1]?.method).toBe('POST');
+    expect(JSON.parse(request[1]!.body as string)).toEqual({ asset_id: 'asset_one' });
+    expect(fetch.mock.calls.some(([url, options]) => url.endsWith('/build') || url.includes('/bangumi/subject') || options?.method === 'PATCH')).toBe(false);
+  });
+
+  it('shows an unavailable Bangumi archive without changing cards or starting a model task', async () => {
+    const fallback = setup();
+    const fetch = vi.fn(async (input: string, options?: RequestInit) => input === `${base}/bangumi`
+      ? new Response(JSON.stringify({ detail: '这部动画尚未保存 Bangumi 档案' }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+      : fallback(input, options));
+    vi.stubGlobal('fetch', fetch);
+    const user = userEvent.setup(); mountPanel(); await screen.findByText('整理资料卡');
+    await user.click(screen.getByRole('button', { name: '整理已有 Bangumi 资料' }));
+    await screen.findByText('这部动画尚未保存 Bangumi 档案');
+    expect((screen.getByRole('button', { name: '整理已有 Bangumi 资料' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(fetch.mock.calls.filter(([, options]) => options?.method && options.method !== 'GET')).toHaveLength(1);
+  });
+
   it('uses local multilingual embeddings by default and preserves an optional API configuration', async () => {
     const fetch = setup(); const user = userEvent.setup();
     const profile = { id: 'codex', name: 'Codex 连接', model: '', provider_type: 'codex_cli', capabilities: ['query'] } as Profile;

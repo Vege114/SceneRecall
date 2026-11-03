@@ -86,6 +86,7 @@ export default function WorkEntities({ assetId, title, records, initialBinding, 
   const [version, setVersion] = useState('');
   const [scopeId, setScopeId] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [upload, setUpload] = useState<File | null>(null);
   const [source, setSource] = useState('');
@@ -121,7 +122,7 @@ export default function WorkEntities({ assetId, title, records, initialBinding, 
   }, [base, selected, entities]);
   const changed = async () => { await load(); await onSaved(); };
   const mutate = async (action: () => Promise<unknown>) => {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setNotice('');
     try { await action(); await changed(); } catch (error) { setError(message(error)); } finally { setBusy(false); }
   };
   const referencePath = `${base}/work-entities/${encodeURIComponent(selected)}/references`;
@@ -142,7 +143,14 @@ export default function WorkEntities({ assetId, title, records, initialBinding, 
     <h2>作品图文设定库</h2>
     <p className="helper">跨集复用实体、人物关系、能力与世界规则。当前画面、人工绑定、作品设定与事件判断分别保存；来源链接只作出处。</p>
     {error && <Alert tone="error">{error}</Alert>}
+    {notice && <Alert tone="success">{notice}</Alert>}
     {!scope ? <Spinner label="读取作品实体资料" /> : !scope.work_scope_id ? <>
+      <section aria-label="从 Bangumi 准备知识资料"><h3>从已保存档案开始</h3><p className="helper">适用于已关联 Bangumi 的动画。使用本地档案准备作品资料库、来源正文和角色候选卡，不重新联网读取，也不调用模型。之后核对资料卡再建库。</p>
+        <button type="button" className="button secondary" disabled={busy} onClick={() => void mutate(async () => {
+          const imported = await post<{ source_count: number; card_count: number; created_cards: number; warnings?: string[] }>(`${base}/knowledge/bangumi`, {});
+          setNotice(`Bangumi 知识资料已准备：${imported.source_count} 份来源、${imported.card_count} 张资料卡，新增候选 ${imported.created_cards} 张。${imported.warnings?.length ? ` 提示：${imported.warnings.join('；')}` : ''}`);
+        })}>从已有 Bangumi 档案准备知识资料</button>
+      </section>
       <form onSubmit={(event) => { event.preventDefault(); void mutate(() => post('/work-entity-scopes', { title: scopeTitle, version, asset_ids: [assetId] })); }}>
         <h3>为本集创建作品资料库</h3>
         <Field label="作品资料库名称"><input required value={scopeTitle} onChange={(event) => setScopeTitle(event.target.value)} /></Field>

@@ -144,6 +144,27 @@ def test_cached_snapshot_name_upgrade_is_pure_and_idempotent():
     assert converted["source"] == "opencc"
 
 
+def test_knowledge_snapshot_retains_observed_fields_before_local_name_upgrade():
+    dossier = {"source": "bangumi", "fetched_at": "2026-10-28T01:00:00Z",
+               "subject": {"id": 42, "name": "作品", "summary": "原始简介\n第二行",
+                           "infobox": [{"key": "别名", "value": ["Work"]}], "rating": {"score": 9}},
+               "characters": [{"id": 7, "name": "櫻木麗", "name_cn": "", "description": "原始角色说明",
+                               "infobox": [{"key": "所属", "value": "舞台部"}],
+                               "role": "主角", "url": "https://bgm.tv/character/7"}]}
+    upgraded = normalize_dossier_names(dossier)
+    snapshot = upgraded["knowledge_snapshot"]
+    assert "knowledge_snapshot" not in dossier
+    assert upgraded["characters"][0]["name_cn"] == "樱木丽"
+    assert snapshot["characters"][0]["name_cn"] == ""
+    assert snapshot["characters"][0]["description"] == "原始角色说明"
+    assert snapshot["characters"][0]["infobox"] == dossier["characters"][0]["infobox"]
+    assert snapshot["subject"]["summary"] == "原始简介\n第二行"
+    assert "rating" not in snapshot["subject"] and "knowledge_snapshot" not in snapshot
+    assert normalize_dossier_names(upgraded) == upgraded
+    snapshot["characters"][0]["infobox"][0]["value"] = "改动"
+    assert dossier["characters"][0]["infobox"][0]["value"] == "舞台部"
+
+
 async def test_reject_non_anime_subject_before_character_fetch():
     client = FixtureClient({("subject", "get", "1"): {"id": 1, "name": "书籍", "type": 1}})
     with pytest.raises(BangumiError, match="不是动画"):

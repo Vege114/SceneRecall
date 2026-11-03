@@ -118,6 +118,7 @@ export function AnimeArchivePreview({ profile }: { profile: AnimeProfile }) {
     {subject.image_url && <img src={subject.image_url} alt={`${subject.name_cn || subject.name}的 Bangumi 封面`} loading="lazy" referrerPolicy="no-referrer" />}
     <div><strong>{subject.name_cn || subject.name}</strong>{subject.name_cn && subject.name !== subject.name_cn && <span>{subject.name}</span>}
       <p className="helper">{subject.date ? `${subject.date} · ` : ''}Bangumi 初始档案 · {characters.length} 份现成角色资料</p>
+      <p className="helper">导入时会将条目已有的作品简介、角色说明和资料字段保存为知识来源，并为已有角色整理待核对资料卡。核对后可用于知识建库；条目缺少的能力、规则等设定可继续补充。</p>
       {subject.summary && <details><summary>作品简介</summary><p className="anime-summary">{subject.summary}</p></details>}
       {characters.length > 0 && <p className="anime-cast">{characters.slice(0, 8).map((character) => character.name_cn || character.name).join('、')}{characters.length > 8 ? '…' : ''}</p>}
       <a href={subject.url} target="_blank" rel="noreferrer"><ExternalLink size={12} />查看 Bangumi 条目</a>

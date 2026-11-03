@@ -37,6 +37,7 @@ describe('Bangumi animation import', () => {
     expect(screen.queryByLabelText('作品类型')).toBeNull();
     expect(importButton().disabled).toBe(true);
     await screen.findByRole('link', { name: '查看 Bangumi 条目' });
+    expect(screen.getByText(/导入时会将条目已有的作品简介、角色说明和资料字段保存为知识来源/)).toBeTruthy();
     expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({ query: '星海' });
     expect(JSON.parse(String(fetch.mock.calls[1][1]?.body))).toEqual({ reference: '42' });
     await user.click(screen.getByText('粘贴多个绝对路径'));

@@ -6,7 +6,7 @@ import copy
 from datetime import datetime, timezone
 
 from .bangumi import BangumiClient, BangumiError, normalize_dossier_names, parse_subject_reference
-from .library import atomic_json, read_json
+from .library import atomic_json, now, read_json
 
 
 def validate_profile(profile):
@@ -76,7 +76,7 @@ def merge_dossier(previous, incoming):
               else previous)
     result = copy.deepcopy(previous)
     for key, value in incoming.items():
-        if key not in {"characters", "subject", "fetched_at", "warnings"} and not result.get(key):
+        if key not in {"characters", "subject", "fetched_at", "warnings", "knowledge_snapshot"} and not result.get(key):
             result[key] = copy.deepcopy(value)
     for key, value in incoming["subject"].items():
         if not result["subject"].get(key) and value:
@@ -106,6 +106,8 @@ def merge_dossier(previous, incoming):
             result["characters"].append(existing)
     result["warnings"] = copy.deepcopy(roster.get("warnings", []))
     result["fetched_at"] = roster["fetched_at"]
+    if "knowledge_snapshot" in roster:
+        result["knowledge_snapshot"] = copy.deepcopy(roster["knowledge_snapshot"])
     return result
 
 
@@ -179,10 +181,39 @@ class AnimeProfileStore:
     def apply_asset(self, asset_id, selection, dossier=None, *, for_import=False):
         with self.library.lock:
             self.library.get_asset(asset_id)
-            return self._apply(selection, dossier, asset_id=asset_id, for_import=for_import)
+            result = self._apply(selection, dossier, asset_id=asset_id, for_import=for_import)
+        if result.get("mode") == "bangumi":
+            self._prepare_knowledge([asset_id])
+        return result
 
     def apply_project(self, project_id, selection, dossier=None):
-        return self._apply(selection, dossier, project_id=project_id)
+        result = self._apply(selection, dossier, project_id=project_id)
+        if result.get("mode") == "bangumi":
+            subject_id = result["dossier"]["subject"]["id"]
+            with self.library.lock:
+                assets = [identity for identity, member in self.library.organization._read()["assets"].items()
+                          if member.get("project_id") == project_id and not member.get("trash_id")
+                          and member.get("anime_profile", {}).get("dossier", {}).get("subject", {}).get("id") == subject_id]
+            self._prepare_knowledge(assets)
+        return result
+
+    def _prepare_knowledge(self, asset_ids):
+        """Preserve useful source text without making archive import model-dependent."""
+        from .bangumi_knowledge import sync_bangumi_knowledge
+        for asset_id in asset_ids:
+            try:
+                stats = sync_bangumi_knowledge(self.library, asset_id)
+                receipt = {**stats, "status": stats.get("status", "completed"), "updated_at": now()}
+            except (ValueError, OSError):
+                # Local storage paths and provider diagnostics do not belong in
+                # public task errors. The normal video/cast import remains valid.
+                message = "Bangumi 知识资料整理失败，可在作品知识面板重试"
+                receipt = {"status": "error", "updated_at": now(), "error": message, "warnings": [message]}
+            try:
+                atomic_json(self.library.asset_dir(asset_id) / "knowledge" / "bangumi-import.json", receipt)
+            except OSError:
+                # A disappeared or unwritable asset must not undo its archive.
+                pass
 
     def _apply(self, selection, dossier, *, project_id=None, asset_id=None, for_import=False):
         from .characters import CharacterStore
