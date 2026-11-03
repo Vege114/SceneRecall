@@ -5,10 +5,12 @@ export interface CharacterConfirmationCandidate {
   region_id: string; asset_id: string; asset_title: string; frame_id: string; at_ms: number;
   box: number[]; crop_url: string; shot_id: string; distance?: number | null;
   quality: ReferenceQuality; source_available?: boolean; recovery_required?: boolean;
+  candidate_rank?: number | null; candidate_total?: number | null;
 }
 export interface CharacterConfirmationRole {
   character_id: string; profile: Omit<CharacterProfile, 'appearances' | 'appearance_count' | 'representative'>; status: 'pending' | 'confirmed' | 'skipped';
   trusted_reference_count: number; candidates: CharacterConfirmationCandidate[]; available_count: number;
+  matching_reference_count?: number;
 }
 export interface CharacterConfirmationResult {
   scope_id: string; asset_id: string; roles: CharacterConfirmationRole[];

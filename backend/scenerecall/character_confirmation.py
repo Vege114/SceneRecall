@@ -164,8 +164,14 @@ class CharacterConfirmation:
                 if identity in profiles:
                     key = self._key(identity, row.get("source_asset_id"), row.get("region_id"))
                     decisions[key] = row
-            trusted = self.gallery.list(asset_id, trusted_only=True, _catalog=catalog)["references"]
+            references = self.gallery.list(asset_id, _catalog=catalog)["references"]
+            trusted = [row for row in references if row["status"] == "confirmed" and row["quality"]["accepted"]]
             active_references = self.gallery.active_reference_ids(asset_id, include_candidates=True, _catalog=catalog)
+            reference_counts = {}
+            for reference in references:
+                if reference["id"] in active_references:
+                    identity = reference["character_id"]
+                    reference_counts[identity] = reference_counts.get(identity, 0) + 1
             pending_regions = {}
             for decision in decisions.values():
                 if decision["action"] == "confirming":
@@ -198,7 +204,9 @@ class CharacterConfirmation:
                     shot = frame_shots.get(region["frame_id"])
                     if not shot:
                         shot = next((identity for start, end, identity in shots if start <= region["at_ms"] < end), None)
-                    proposals = [row for row in region["match"].get("candidates", [])
+                    candidates = region["match"].get("candidates", [])
+                    proposals = [{**row, "candidate_rank": rank, "candidate_total": len(candidates)}
+                                 for rank, row in enumerate(candidates, 1)
                                  if row.get("reference_ids") and set(row["reference_ids"]).issubset(active_references)]
                     if region["match"].get("source") == "human":
                         candidate = region["match"].get("candidate_character_id")
@@ -217,7 +225,9 @@ class CharacterConfirmation:
                             "source_available": asset.get("source_available", False), "frame_id": region["frame_id"],
                             "recovery_required": identity in pending,
                             "at_ms": region["at_ms"], "box": region["box"], "crop_url": region["crop_url"],
-                            "shot_id": shot, "distance": proposed.get("distance"), "quality": region["quality"]})
+                            "shot_id": shot, "distance": proposed.get("distance"), "quality": region["quality"],
+                            "candidate_rank": proposed.get("candidate_rank"),
+                            "candidate_total": proposed.get("candidate_total")})
             roles = []
             for identity, profile in profiles.items():
                 choices = sorted(grouped[identity], key=lambda row: (
@@ -244,6 +254,7 @@ class CharacterConfirmation:
                     confined_path(self.pipeline._directory(candidate["asset_id"]), f"crops/{safe_id(candidate['region_id'])}.png")
                 status = "pending" if recovering else "confirmed" if count else "skipped" if role_decision.get("action") == "skip" else "pending"
                 roles.append({"character_id": identity, "profile": profile, "status": status,
+                              "matching_reference_count": reference_counts.get(identity, 0),
                               "trusted_reference_count": count, "candidates": selected, "available_count": len(choices)})
             asset = self.library.get_asset(asset_id)
         # Keep lock ordering independent from the sampling worker's guard.

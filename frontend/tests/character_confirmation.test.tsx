@@ -9,6 +9,12 @@ const asset: Asset = { id: 'ep-one', title: '第一集', kind: 'animation', seri
 const profile: CharacterProfile = { id: 'c1', name: '小夏', name_ja: 'ナツ', aliases: ['夏同学'], description: '短发，绿色围巾。', notes: '', appearance_count: 0, appearances: [], external_source: { source: 'bangumi', subject_id: 1, character_id: 2, url: 'https://bgm.tv/character/2', image_url: 'https://lain.bgm.tv/character/2.jpg' } };
 const candidate = (index: number): CharacterConfirmationCandidate => ({ region_id: `r${index}`, asset_id: index === 2 ? 'ep-two' : asset.id, asset_title: index === 2 ? '第二集' : asset.title, frame_id: `f${index}`, at_ms: index * 5000, box: [0, 0, 0.4, 0.8], crop_url: `/api/crops/r${index}`, shot_id: `shot${index}`, distance: 0.1, quality: { accepted: true }, source_available: true });
 const initial = (): CharacterConfirmationResult => ({ scope_id: 'work-one', asset_id: asset.id, summary: { total: 1, pending: 1, skipped: 0, confirmed: 0, candidates: 3 }, roles: [{ character_id: profile.id, profile, status: 'pending', trusted_reference_count: 0, candidates: [candidate(1), candidate(2), candidate(3)], available_count: 3 }], sampling: null, sampling_available: true });
+const twoRoles = (): CharacterConfirmationResult => {
+  const state = initial();
+  state.roles.push({ ...state.roles[0], character_id: 'c2', profile: { ...profile, id: 'c2', name: '小春' }, candidates: [candidate(4), candidate(5), candidate(6)] });
+  state.summary = { total: 2, pending: 2, confirmed: 0, skipped: 0, candidates: 6 };
+  return state;
+};
 const endpoint = `/api/assets/${asset.id}/identity/confirmation`;
 const batchSuccess = (queue: CharacterConfirmationResult, options?: RequestInit): CharacterConfirmationBatchResult => {
   const candidates = JSON.parse(options?.body as string).candidates as { source_asset_id: string; region_id: string }[];
@@ -35,6 +41,22 @@ function deferred<T>() {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Pre-analysis character confirmation', () => {
+  it('explains shared suggestions, saved rank and a role with no local matching reference', async () => {
+    const state = initial();
+    state.roles[0].matching_reference_count = 1;
+    state.roles[0].candidates = [{ ...candidate(1), candidate_rank: 6, candidate_total: 12, distance: 0.321513 }];
+    state.roles.push({ ...state.roles[0], character_id: 'c2', profile: { ...profile, id: 'c2', name: '小春' }, matching_reference_count: 0, candidates: [], available_count: 0 });
+    mockApi(() => state);
+    const { user } = setup();
+    await screen.findByText(/第 6 \/ 12 名/);
+    expect(screen.getByText(/同一裁剪可出现在多个角色列表/)).toBeTruthy();
+    expect(screen.getByText(/匹配距离 0.3215/)).toBeTruthy();
+    expect(screen.getByText(/另有排名更前的角色/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '小春 待确认' }));
+    expect(screen.getByText(/该角色缺少本地匹配参考/)).toBeTruthy();
+    expect(screen.getByText('暂时没有合适候选')).toBeTruthy();
+  });
+
   it('submits all three checked crops once and leaves replacement candidates unchecked', async () => {
     const pending = deferred<CharacterConfirmationBatchResult>();
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? pending.promise : initial());
@@ -42,7 +64,8 @@ describe('Pre-analysis character confirmation', () => {
     await screen.findByText('正片里，哪个是小夏？');
     for (const checkbox of screen.getAllByRole('checkbox')) await user.click(checkbox);
     await user.click(screen.getByRole('button', { name: '确认所选 3 张并用作参考' }));
-    expect(screen.getByRole('button', { name: '正在确认所选 3 张' })).toBeTruthy();
+    expect(within(screen.getByRole('list', { name: '逐项保存结果' })).getAllByText(/保存中/)).toHaveLength(3);
+    expect(onSaved).not.toHaveBeenCalled();
     expect(screen.getAllByRole('checkbox').every((element) => (element as HTMLInputElement).disabled)).toBe(true);
     expect((screen.getByRole('button', { name: '保存进度并返回' }) as HTMLButtonElement).disabled).toBe(true);
     const calls = fetch.mock.calls.filter((call) => call[1]?.method === 'POST');
@@ -90,7 +113,7 @@ describe('Pre-analysis character confirmation', () => {
     expect(onSaved).toHaveBeenCalledTimes(2);
   });
 
-  it('clears selection when switching roles, changing groups and rereading a failed request', async () => {
+  it('retains checks across role navigation and rereads, and clears only explicitly changed groups', async () => {
     const state = initial(); state.roles.push({ ...state.roles[0], character_id: 'c2', profile: { ...profile, id: 'c2', name: '小春' } });
     state.summary.total = 2; state.summary.pending = 2;
     const fetch = mockApi((url, options) => {
@@ -102,9 +125,8 @@ describe('Pre-analysis character confirmation', () => {
     await user.click(screen.getAllByRole('checkbox')[0]);
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
     expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
-    await user.click(screen.getByRole('button', { name: '小夏 待确认' }));
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(false);
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: /^小夏 待确认/ }));
+    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
     await user.click(screen.getByRole('button', { name: '看不清／换一组' }));
     await screen.findByText('已换过这组候选，新的候选会优先展示。');
     expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
@@ -114,7 +136,7 @@ describe('Pre-analysis character confirmation', () => {
     expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
     await user.click(screen.getByRole('button', { name: '重新读取确认进度' }));
     await waitFor(() => expect(fetch.mock.calls.filter((call) => call[0] === endpoint)).toHaveLength(2));
-    expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '确认所选 1 张并用作参考' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('does not reselect an image that failed to load during a pending confirmation', async () => {
@@ -372,5 +394,193 @@ describe('Pre-analysis character confirmation', () => {
     expect(onSaved).not.toHaveBeenCalled();
     expect(screen.getAllByRole('article')).toHaveLength(3);
     await waitFor(() => expect((screen.getByRole('button', { name: '确认所选 1 张并用作参考' }) as HTMLButtonElement).disabled).toBe(false));
+  });
+});
+
+describe('Queued character confirmation saves', () => {
+  it('collects cross-role checks, serializes them and accepts more checks while saving', async () => {
+    const state = twoRoles();
+    const pending = [deferred<CharacterConfirmationBatchResult>(), deferred<CharacterConfirmationBatchResult>(), deferred<CharacterConfirmationBatchResult>()];
+    let writes = 0;
+    const fetch = mockApi((_url, options) => options?.method === 'POST' ? pending[writes++].promise : state);
+    const { user, onSaved, onClose } = setup();
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '小春 待确认' }));
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '提交全部已核对 2 张' }));
+    const results = within(screen.getByRole('list', { name: '逐项保存结果' }));
+    expect(results.getByText(/小夏.*保存中/)).toBeTruthy();
+    expect(results.getByText(/小春.*排队中/)).toBeTruthy();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(writes).toBe(1);
+    await user.click(screen.getAllByRole('checkbox')[1]);
+    await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
+    expect(writes).toBe(1);
+    await user.click(screen.getByRole('button', { name: /^小夏 等待保存/ }));
+    await user.click(screen.getByRole('button', { name: /^小春 等待保存/ }));
+    expect((screen.getAllByRole('checkbox')[1] as HTMLInputElement).checked).toBe(true);
+    await user.click(screen.getByRole('button', { name: '关闭', exact: true }));
+    expect(onClose).not.toHaveBeenCalled();
+    const firstCall = fetch.mock.calls.find((call) => call[1]?.method === 'POST')!;
+    const replacement = twoRoles();
+    replacement.roles[1].candidates = [candidate(7), candidate(8), candidate(9)];
+    await act(async () => { pending[0].resolve(batchSuccess(replacement, firstCall[1])); });
+    expect(writes).toBe(2);
+    expect(screen.getByText('正片里，哪个是小春？')).toBeTruthy();
+    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox')[1] as HTMLInputElement).checked).toBe(true);
+    const secondCall = fetch.mock.calls.filter((call) => call[1]?.method === 'POST')[1];
+    await act(async () => { pending[1].resolve(batchSuccess(replacement, secondCall[1])); });
+    expect(writes).toBe(3);
+    const thirdCall = fetch.mock.calls.filter((call) => call[1]?.method === 'POST')[2];
+    await act(async () => { pending[2].resolve(batchSuccess(replacement, thirdCall[1])); });
+    const calls = fetch.mock.calls.filter((call) => call[1]?.method === 'POST');
+    expect(calls.map((call) => call[0])).toEqual([`${endpoint}/characters/c1/confirm-batch`, `${endpoint}/characters/c2/confirm-batch`, `${endpoint}/characters/c2/confirm-batch`]);
+    expect(calls.map((call) => JSON.parse(call[1]!.body as string).candidates.map((item: { region_id: string }) => item.region_id))).toEqual([['r1'], ['r4'], ['r5']]);
+    expect(results.getAllByText(/已保存/)).toHaveLength(3);
+    expect(onSaved).toHaveBeenCalledTimes(3);
+    expect((screen.getByRole('button', { name: '提交全部已核对 0 张' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '保存进度并返回' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('preserves another role draft when rereading and dismissing a failed save', async () => {
+    const state = twoRoles();
+    const fetch = mockApi((_url, options) => options?.method === 'POST' ? new Response(JSON.stringify({ detail: '裁剪需重新核对' }), { status: 409 }) : state);
+    const { user } = setup();
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
+    await screen.findByText(/未能取得本次确认结果/);
+    await user.click(screen.getByRole('button', { name: '小春 待确认' }));
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '重新读取确认进度' }));
+    await waitFor(() => expect(fetch.mock.calls.filter((call) => call[0] === endpoint)).toHaveLength(2));
+    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole('button', { name: '提交全部已核对 2 张' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '暂不重试并核对进度' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '暂不重试并核对进度' })).toBeNull());
+    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole('button', { name: '提交全部已核对 1 张' })).toBeTruthy();
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('rejects a retry that conflicts with another role draft for the same crop', async () => {
+    const state = twoRoles(); state.roles[1].candidates = [candidate(1)];
+    const fetch = mockApi((_url, options) => options?.method === 'POST' ? new Response(JSON.stringify({ detail: '暂未保存' }), { status: 409 }) : state);
+    const { user } = setup();
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
+    await screen.findByText(/未能取得本次确认结果/);
+    await user.click(screen.getByRole('button', { name: '取消未提交勾选' }));
+    await user.click(screen.getByRole('button', { name: '小春 待确认' }));
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: '重试这项' }));
+    expect(screen.getByText(/避免给同一裁剪提交冲突身份/)).toBeTruthy();
+    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('keeps an unknown result unverified until a retry returns an explicit saved result', async () => {
+    let attempts = 0;
+    const fetch = mockApi((_url, options) => {
+      if (options?.method !== 'POST') return initial();
+      if (++attempts === 1) throw new Error('response lost');
+      return batchSuccess(initial(), options);
+    });
+    const { user, onSaved } = setup();
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
+    await screen.findByText(/未能取得本次确认结果/);
+    const results = within(screen.getByRole('list', { name: '逐项保存结果' }));
+    expect(results.getByText(/结果未确认/)).toBeTruthy();
+    expect(results.queryByText(/已保存/)).toBeNull();
+    expect(onSaved).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
+    await user.click(results.getByRole('button', { name: '重试这项' }));
+    await screen.findByText(/已确认「小夏」的 1 \/ 1 张所选裁剪/);
+    expect(results.getByText(/已保存/)).toBeTruthy();
+    expect(results.queryByRole('button', { name: '重试这项' })).toBeNull();
+    expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(2);
+    expect(onSaved).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps unknown reservations and the continue gate when reconciliation fails', async () => {
+    const state = initial(); state.roles[0].status = 'confirmed'; state.roles[0].trusted_reference_count = 1;
+    state.summary.confirmed = 1; state.summary.pending = 0;
+    const read = deferred<Response>(); let reads = 0;
+    mockApi((_url, options) => {
+      if (options?.method === 'POST') throw new Error('connection closed');
+      return ++reads === 1 ? state : read.promise;
+    });
+    const onContinue = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<CharacterConfirmation asset={asset} onSaved={vi.fn<() => Promise<void>>().mockResolvedValue(undefined)} onClose={vi.fn()} onContinue={onContinue} />);
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
+    await screen.findByText(/未能取得本次确认结果/);
+    await user.click(screen.getByRole('button', { name: '取消未提交勾选' }));
+    await user.click(screen.getByRole('button', { name: '暂不重试并核对进度' }));
+    expect((screen.getByRole('button', { name: '继续任务' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getAllByRole('button', { name: '不是这个角色' })[0] as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { read.resolve(new Response(JSON.stringify({ detail: '进度暂不可用' }), { status: 503 })); });
+    await screen.findByText(/未能核对后端进度/);
+    expect(within(screen.getByRole('list', { name: '逐项保存结果' })).getByText(/结果未确认/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: '继续任务' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(onContinue).not.toHaveBeenCalled();
+  });
+
+  it('warns before unloading draft checks and does not claim they were saved on close', async () => {
+    mockApi(() => initial());
+    const { user, onClose } = setup();
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    const draftUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(draftUnload); expect(draftUnload.defaultPrevented).toBe(true);
+    await user.click(screen.getByRole('button', { name: '关闭', exact: true }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/还有已核对但未保存的裁剪/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '取消未提交勾选' }));
+    const cleanUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(cleanUnload); expect(cleanUnload.defaultPrevented).toBe(false);
+    await user.click(screen.getByRole('button', { name: '保存进度并返回' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('finishes captured old-asset jobs before new-asset writes and ignores their UI results', async () => {
+    const state = twoRoles(); const otherAsset = { ...asset, id: 'ep-other', title: '另一作品' };
+    const other = initial(); other.asset_id = otherAsset.id;
+    other.roles[0] = { ...other.roles[0], character_id: 'c3', profile: { ...profile, id: 'c3', name: '小秋' }, candidates: [candidate(10)] };
+    const pending = [deferred<CharacterConfirmationBatchResult>(), deferred<CharacterConfirmationBatchResult>(), deferred<CharacterConfirmationBatchResult>()];
+    let writes = 0;
+    const fetch = mockApi((url, options) => options?.method === 'POST' ? pending[writes++].promise : url.includes('ep-other') ? other : state);
+    const { user, onSaved, onClose, view } = setup();
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '小春 待确认' }));
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '提交全部已核对 2 张' }));
+    view.rerender(<CharacterConfirmation asset={otherAsset} onSaved={onSaved} onClose={onClose} />);
+    await screen.findByText('正片里，哪个是小秋？');
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
+    expect(writes).toBe(1);
+    let call = fetch.mock.calls.filter((value) => value[1]?.method === 'POST')[0];
+    await act(async () => { pending[0].resolve(batchSuccess(state, call[1])); });
+    expect(writes).toBe(2);
+    expect(screen.getByText('正片里，哪个是小秋？')).toBeTruthy();
+    expect(screen.queryByText(/已确认「小夏」/)).toBeNull();
+    call = fetch.mock.calls.filter((value) => value[1]?.method === 'POST')[1];
+    await act(async () => { pending[1].resolve(batchSuccess(state, call[1])); });
+    expect(writes).toBe(3);
+    call = fetch.mock.calls.filter((value) => value[1]?.method === 'POST')[2];
+    expect(call[0]).toBe('/api/assets/ep-other/identity/confirmation/characters/c3/confirm-batch');
+    await act(async () => { pending[2].resolve(batchSuccess(other, call[1])); });
+    await screen.findByText(/已确认「小秋」的 1 \/ 1 张所选裁剪/);
+    expect(screen.queryByText(/已确认「小春」/)).toBeNull();
+    expect(onSaved).toHaveBeenCalledTimes(3);
   });
 });

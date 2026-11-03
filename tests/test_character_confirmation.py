@@ -57,6 +57,24 @@ def test_queue_reuses_work_regions_diversifies_stored_shots_without_inference(vi
     assert all("crop_path" not in row for row in role["candidates"])
 
 
+def test_queue_exposes_shared_crop_rank_and_missing_reference_without_inference(visual, monkeypatch):
+    service, first = prepared(visual, times=(200,))
+    second = add_role(visual[1], "Second")
+    add_reference(visual[2], second)
+    missing = add_role(visual[1], "No local reference")
+    service.pipeline.run("asset_one", [{"id": "frame_0", "at_ms": 200}], {"enabled": True, "top_k": 20})
+    monkeypatch.setattr(service.pipeline.backend, "detect", lambda *args: pytest.fail("queue must not run detection"))
+    monkeypatch.setattr(service.pipeline.backend, "feature", lambda *args: pytest.fail("queue must not run CCIP"))
+    roles = {row["character_id"]: row for row in service.queue("asset_one")["roles"]}
+    choices = [roles[identity]["candidates"][0] for identity in (first, second)]
+    assert choices[0]["region_id"] == choices[1]["region_id"]
+    assert {row["candidate_rank"] for row in choices} == {1, 2}
+    assert all(row["candidate_total"] == 2 for row in choices)
+    assert roles[first]["matching_reference_count"] == roles[second]["matching_reference_count"] == 1
+    assert roles[missing]["matching_reference_count"] == 0
+    assert roles[missing]["candidates"] == []
+
+
 def test_confirm_is_explicit_idempotent_and_does_not_propagate(visual):
     service, identity = prepared(visual)
     original = service.queue("asset_one")["roles"][0]["candidates"]
