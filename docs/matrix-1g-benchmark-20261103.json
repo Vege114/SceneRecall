@@ -1,0 +1,259 @@
+{
+  "schema": "matrix-budget-benchmark-v1",
+  "date": "2026-11-03",
+  "timezone": "Asia/Shanghai",
+  "query": "爱城华恋与神乐光站在东京塔上",
+  "change": {
+    "file": "backend/scenerecall/query_cache.py",
+    "old_default_bytes": 268435456,
+    "new_default_bytes": 1073741824,
+    "source_sha256": "6a19b5e352300ee2549a4e83485220f6da77d759d32990bc6196a3dc39d71caf",
+    "persisted_in_source": true,
+    "restart_verified": true,
+    "server_pid": 88024
+  },
+  "conditions": {
+    "invocation": "Chrome UI clicks; frontend built-in timing JSON read from visible timing panel",
+    "order": [
+      "e01-first",
+      "e01-warm",
+      "full-first",
+      "full-warm"
+    ],
+    "sequential_queries": true,
+    "restart_between_queries": false,
+    "kind": "visual",
+    "limit": 10,
+    "enhancements": false,
+    "visual_verification": false,
+    "knowledge_mode": "baseline",
+    "concurrent_tests": false,
+    "memory_sampling_interval_seconds": 2,
+    "first_definition": "First construction of this scope's visual matrix after backend restart; persisted query-vector cache already hit in all four runs.",
+    "dom_boundary": "Click event timestamp to committed result DOM; excludes thumbnails/image loading.",
+    "single_sample_per_state": true
+  },
+  "runs": [
+    {
+      "name": "e01-first",
+      "scope": "episode 01",
+      "started_utc": "2026-11-03T12:45:33.133Z",
+      "timing_file": "docs/matrix-1g-e01-first-timing-20261103.json",
+      "request_id": "298d49fa99824be28665749ddf90d54d",
+      "click_to_result_dom_ms": 15829.200000047684,
+      "request_to_json_ms": 15809.399999976158,
+      "backend_total_ms": 15779.914,
+      "nonoverlapping_backend_stages_ms": {
+        "version_acquisition_and_validation": 7846.126,
+        "parallel_recall_wall": 4921.537,
+        "source_record_reconstruction": 2949.918,
+        "other": 62.333000000000084
+      },
+      "visual_recall_ms": 4921.442,
+      "concept_recall_ms": 4897.056,
+      "concept_result_count": 0,
+      "query_vector_cache": {
+        "query_cache_hit": true
+      },
+      "matrix_cache": {
+        "matrix_cache_hit": false,
+        "matrix_built": true,
+        "streaming_fallback": false,
+        "cache_status": "built",
+        "fallback_reason": null,
+        "memoized_fallback": false,
+        "build_attempted": true,
+        "attempted_retained_bytes": 38079723,
+        "retained_bytes_phase": "complete",
+        "cache_budget_bytes": 1073741824,
+        "build_budget_bytes": 1073741824
+      },
+      "attributes": {
+        "query_kind": "visual",
+        "character_filter": false,
+        "query_characters": 14,
+        "filter_count": 2,
+        "enhancements": false,
+        "visual_verification": false,
+        "snapshot_retries": 0,
+        "result_count": 10,
+        "status_code": 200
+      }
+    },
+    {
+      "name": "e01-warm",
+      "scope": "episode 01",
+      "started_utc": "2026-11-03T12:46:26.765Z",
+      "timing_file": "docs/matrix-1g-e01-warm-timing-20261103.json",
+      "request_id": "caaa1bc9a7574d9486156455087d3cb2",
+      "click_to_result_dom_ms": 18752.699999928474,
+      "request_to_json_ms": 18747.699999928474,
+      "backend_total_ms": 18742.658,
+      "nonoverlapping_backend_stages_ms": {
+        "version_acquisition_and_validation": 9050.887999999999,
+        "parallel_recall_wall": 3780.894,
+        "source_record_reconstruction": 5847.746,
+        "other": 63.13000000000011
+      },
+      "visual_recall_ms": 47.683,
+      "concept_recall_ms": 3776.196,
+      "concept_result_count": 0,
+      "query_vector_cache": {
+        "query_cache_hit": true
+      },
+      "matrix_cache": {
+        "matrix_cache_hit": true,
+        "matrix_built": false,
+        "streaming_fallback": false,
+        "cache_status": "hit",
+        "fallback_reason": null,
+        "memoized_fallback": false,
+        "build_attempted": false,
+        "attempted_retained_bytes": null,
+        "retained_bytes_phase": null,
+        "cache_budget_bytes": 1073741824,
+        "cached_retained_bytes": 38079723
+      },
+      "attributes": {
+        "query_kind": "visual",
+        "character_filter": false,
+        "query_characters": 14,
+        "filter_count": 2,
+        "enhancements": false,
+        "visual_verification": false,
+        "snapshot_retries": 0,
+        "result_count": 10,
+        "status_code": 200
+      }
+    },
+    {
+      "name": "full-first",
+      "scope": "TV episodes 01-12",
+      "started_utc": "2026-11-03T12:47:47.662Z",
+      "timing_file": "docs/matrix-1g-full-first-timing-20261103.json",
+      "request_id": "bf34908609d449949b2d7e987a7cb552",
+      "click_to_result_dom_ms": 83151.5,
+      "request_to_json_ms": 83142.10000002384,
+      "backend_total_ms": 83136.459,
+      "nonoverlapping_backend_stages_ms": {
+        "version_acquisition_and_validation": 19581.578,
+        "parallel_recall_wall": 29561.474,
+        "source_record_reconstruction": 33339.581,
+        "other": 653.8260000000082
+      },
+      "visual_recall_ms": 29561.386,
+      "concept_recall_ms": 9430.825,
+      "concept_result_count": 0,
+      "query_vector_cache": {
+        "query_cache_hit": true
+      },
+      "matrix_cache": {
+        "matrix_cache_hit": false,
+        "matrix_built": true,
+        "streaming_fallback": false,
+        "cache_status": "built",
+        "fallback_reason": null,
+        "memoized_fallback": false,
+        "build_attempted": true,
+        "attempted_retained_bytes": 404330896,
+        "retained_bytes_phase": "complete",
+        "cache_budget_bytes": 1073741824,
+        "build_budget_bytes": 1073741824
+      },
+      "attributes": {
+        "query_kind": "visual",
+        "character_filter": false,
+        "query_characters": 14,
+        "filter_count": 2,
+        "enhancements": false,
+        "visual_verification": false,
+        "snapshot_retries": 0,
+        "result_count": 10,
+        "status_code": 200
+      }
+    },
+    {
+      "name": "full-warm",
+      "scope": "TV episodes 01-12",
+      "started_utc": "2026-11-03T12:49:51.439Z",
+      "timing_file": "docs/matrix-1g-full-warm-timing-20261103.json",
+      "request_id": "b356e572a9904dc18a9a7dbe9adf7b63",
+      "click_to_result_dom_ms": 62051.60000002384,
+      "request_to_json_ms": 62047.699999928474,
+      "backend_total_ms": 62028.256,
+      "nonoverlapping_backend_stages_ms": {
+        "version_acquisition_and_validation": 21254.797,
+        "parallel_recall_wall": 8398.246,
+        "source_record_reconstruction": 31211.679,
+        "other": 1163.5340000000033
+      },
+      "visual_recall_ms": 435.644,
+      "concept_recall_ms": 8311.672,
+      "concept_result_count": 0,
+      "query_vector_cache": {
+        "query_cache_hit": true
+      },
+      "matrix_cache": {
+        "matrix_cache_hit": true,
+        "matrix_built": false,
+        "streaming_fallback": false,
+        "cache_status": "hit",
+        "fallback_reason": null,
+        "memoized_fallback": false,
+        "build_attempted": false,
+        "attempted_retained_bytes": null,
+        "retained_bytes_phase": null,
+        "cache_budget_bytes": 1073741824,
+        "cached_retained_bytes": 404330896
+      },
+      "attributes": {
+        "query_kind": "visual",
+        "character_filter": false,
+        "query_characters": 14,
+        "filter_count": 2,
+        "enhancements": false,
+        "visual_verification": false,
+        "snapshot_retries": 0,
+        "result_count": 10,
+        "status_code": 200
+      }
+    }
+  ],
+  "historical_baselines": {
+    "e01_timing_file": "docs/jockey-episode01-local-timing-20261103.json",
+    "e01_click_to_dom_ms": 19570.399999976158,
+    "full_timing_file": "docs/search-equivalence-full-timing-20261103.json",
+    "full_click_to_dom_ms": 84365.5,
+    "full_warm_observed_reduction_ms": 22313.899999976158,
+    "full_warm_observed_reduction_percent": 26.449081674352854,
+    "warning": "Historical samples are not a contemporaneous controlled A/B test; total changes also include runtime and source-reading variation."
+  },
+  "memory": {
+    "type": "summary",
+    "samples": 184,
+    "ended_at_utc": "2026-11-03T12:51:54.297840+00:00",
+    "elapsed_seconds": 367.25,
+    "reason": "requested_stop",
+    "sampled_peak_rss_bytes": 1095811072,
+    "sampled_peak_private_bytes": 1885114368,
+    "sampled_minimum_system_available_bytes": 7999647744,
+    "boundary": "2-second sampled peaks; not absolute process/system peaks",
+    "file": ".cache/matrix-1g-memory-20261103.jsonl",
+    "started_utc": "2026-11-03T12:45:47.054Z",
+    "coverage_note": "Sampling began 13.921 seconds after the first E01 click; covers the tail of that query and all three later queries. Sampled peaks are not absolute peaks."
+  },
+  "validation": {
+    "cache_related_tests": "14 passed in 2.72s",
+    "test_files": [
+      "tests/test_query_matrix_cache.py",
+      "tests/test_matrix_cache_diagnostics.py"
+    ],
+    "initial_test_setup_issue": "Sandbox default pytest temp directory inaccessible; rerun with a unique workspace-local basetemp passed.",
+    "diff_check_passed": true,
+    "all_runs_http_200": true,
+    "all_runs_no_snapshot_retries": true,
+    "all_runs_10_results": true,
+    "all_runs_1g_budget_no_streaming": true
+  },
+  "result_screenshot": ".cache/matrix-1g-full-warm-20261103.jpg"
+}

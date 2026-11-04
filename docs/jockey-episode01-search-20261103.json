@@ -1,0 +1,100 @@
+{
+  "schema": "jockey-scenerecall-episode01-v1",
+  "date": "2026-11-03",
+  "query": "爱城华恋与神乐光站在东京塔上",
+  "status": "complete",
+  "source": {
+    "path": "C:\\Users\\21288\\Downloads\\[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv",
+    "size_bytes": 1161768579,
+    "duration_sec": 1446.784,
+    "local_asset_id": "asset_37d4c57811b34f3c9ae4"
+  },
+  "knowledge_store_id": "ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+  "preparation": {
+    "existing_playground_asset": true,
+    "jockey_store_initial_item_count": 0,
+    "upload_method": "Chrome TwelveLabs Connect upload UI, same original E01 file",
+    "file_selection_started_utc": "2026-11-03T09:54:52.981Z",
+    "file_selection_tool_wall_sec": 1047.976,
+    "upload_submitted_utc": "2026-11-03T10:12:44.172Z",
+    "note": "File selection preparation and upload/index time are excluded from query latency. Existing Playground asset was not queryable through this Jockey store.",
+    "processing_first_observed_utc": "2026-11-03T10:24:26.358Z",
+    "upload_to_processing_observed_ms": 702186,
+    "item_created_utc": "2026-11-03T10:24:32.428161Z",
+    "last_observed_processing_utc": "2026-11-03T10:30:34.657Z",
+    "first_observed_ready_utc": "2026-11-03T10:31:31.201Z",
+    "upload_click_to_ready_observed_ms": 1127029,
+    "processing_to_ready_observed_ms": 424843
+  },
+  "local_comparison": {
+    "click_utc": "2026-11-03T10:13:38.904Z",
+    "scope": "episode 01 only",
+    "kind": "visual",
+    "enhancements": false,
+    "visual_verification": false,
+    "knowledge_mode": "baseline",
+    "status": "failed",
+    "failure": "资料正在更新，请重试搜索",
+    "valid_latency_sample": false
+  },
+  "local_retry": {
+    "click_utc": "2026-11-03T10:16:12.373Z",
+    "status": "succeeded",
+    "request_id": "0da36d333d24497391de27ee83c03cbe",
+    "click_to_result_dom_ms": 19570.399999976158,
+    "request_to_json_ms": 19553.100000023842,
+    "backend_ms": 19531.069,
+    "result_count": 10,
+    "target_rank": 4,
+    "target_range_display": "00:10:06–00:10:12",
+    "target_verified_at_sec": 608,
+    "query_vector_cache_hit": true,
+    "matrix_cache_hit": true,
+    "timing_file": "docs/jockey-episode01-local-timing-20261103.json",
+    "note": "Same episode and exact query. Successful retry after one snapshot-changed failure. Original Jockey upload was running during local test."
+  },
+  "manual_verification": {
+    "method": "Local original video frame inspection",
+    "timestamp_sec": 608,
+    "evidence": ".cache/jockey-e01-visual-check-20261103/native-608.jpg",
+    "description": "Two girls standing on red Tokyo Tower beams; same-episode subtitles and adjacent close-ups support scene/character interpretation.",
+    "provided_to_jockey_search": false
+  },
+  "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+  "jockey_search": {
+    "started_utc": "2026-11-03T10:31:36.482Z",
+    "ended_utc": "2026-11-03T10:31:40.057Z",
+    "elapsed_ms": 3575,
+    "timing_boundary": "Immediately before jockey_search invocation until its promise resolves; includes connector/transport; excludes import, indexing, rendering, later verification.",
+    "modalities": [
+      "visual"
+    ],
+    "group_by": "none",
+    "limit": 10,
+    "returned_count": 10,
+    "target_rank": 5,
+    "target_start_sec": 600.9667,
+    "target_end_sec": 608.9667,
+    "verified_frame_sec": 608,
+    "query_hint_injected": false,
+    "cache_state": "unknown",
+    "raw_search_file": "docs/jockey-episode01-raw-search-20261103.json"
+  },
+  "display": {
+    "elapsed_ms": 13286,
+    "response_id": "resp_01a1a0f7-60b9-7a12-9018-1aff5400fd83",
+    "native_gallery_rendered": true,
+    "original_ranks_displayed": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "save_available": false,
+    "render_metadata_file": "docs/jockey-episode01-render-20261103.json",
+    "knowledge_store_url": "https://connect.twelvelabs.io/knowledge-stores/ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+    "ready_screenshot": ".cache/jockey-e01-ready-20261103.jpg"
+  },
+  "conclusion": "Same original E01, same Chinese query, visual top 10. Jockey returned in 3.575s with verified target at rank 5; successful local retry returned JSON in 19.5531s and result DOM in 19.5704s, with target at rank 4. Single successful sample per engine, different execution paths, local warm query/matrix caches, Jockey cache unknown. Jockey inline gallery generation separately took 13.286s. Earlier local full-12-episode 84.37s is not a same-scope comparison."
+}

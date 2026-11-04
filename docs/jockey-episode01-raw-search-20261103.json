@@ -1,0 +1,182 @@
+{
+  "started_utc": "2026-11-03T10:31:36.482Z",
+  "ended_utc": "2026-11-03T10:31:40.057Z",
+  "elapsed_ms": 3575,
+  "args": {
+    "knowledge_store_id": "ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+    "query": "爱城华恋与神乐光站在东京塔上",
+    "modalities": [
+      "visual"
+    ],
+    "group_by": "none",
+    "limit": 10,
+    "caller_context": {
+      "original_message": "那我好像已经上传了第一集了，你用这上传的第一集试试，还是一样的检索词，我记的对应画面在第一集是有的"
+    }
+  },
+  "response": {
+    "hits": [
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 1,
+        "matches": [
+          {
+            "start_sec": 1056.5667,
+            "end_sec": 1059.5667,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": "すみません、バシレ物しました光ちゃんエレベーターこんなのあったっけオーディション一日情熱のレビューを始めます。"
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 2,
+        "matches": [
+          {
+            "start_sec": 869.1667,
+            "end_sec": 878.76666,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": "光率迷惑でしょそんなことないけど光ちゃん光ちゃん準備するから光ちゃんは帰りこれから一緒に頑張って一緒にスターになろうね、約束だよ"
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 3,
+        "matches": [
+          {
+            "start_sec": 1080.1666,
+            "end_sec": 1087.3667,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": "闇尾先が消防たちの活さんもでも何してるのって二人とないやめて星さんレビューはすでに始まっています。"
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 4,
+        "matches": [
+          {
+            "start_sec": 1423.4333,
+            "end_sec": 1440.7667,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": null
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 5,
+        "matches": [
+          {
+            "start_sec": 600.9667,
+            "end_sec": 608.9667,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": "すごいあれでも何で絶景そうだ、ここで買ったんだよね、あの髪止めでもかなわなくなっちゃうあのことも約束ちゃん大丈夫、カレーちゃん大丈夫よ、カレンちゃん頑丈だし"
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 6,
+        "matches": [
+          {
+            "start_sec": 585.43335,
+            "end_sec": 600.9667,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": null
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 7,
+        "matches": [
+          {
+            "start_sec": 608.9667,
+            "end_sec": 612.56665,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": "すごいあれでも何で絶景そうだ、ここで買ったんだよね、あの髪止めでもかなわなくなっちゃうあのことも約束ちゃん大丈夫、カレーちゃん大丈夫よ、カレンちゃん頑丈だし"
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 8,
+        "matches": [
+          {
+            "start_sec": 1404.5,
+            "end_sec": 1411.9667,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": null
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 9,
+        "matches": [
+          {
+            "start_sec": 631.9667,
+            "end_sec": 641.56665,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": "すごいあれでも何で絶景そうだ、ここで買ったんだよね、あの髪止めでもかなわなくなっちゃうあのことも約束ちゃん大丈夫、カレーちゃん大丈夫よ、カレンちゃん頑丈だし"
+          }
+        ]
+      },
+      {
+        "item_id": "ksi_01a1a0f0-67b2-70e2-a85d-0c877f61124f",
+        "asset_type": "video",
+        "rank": 10,
+        "matches": [
+          {
+            "start_sec": 615.9667,
+            "end_sec": 631.9667,
+            "modalities": [
+              "visual"
+            ],
+            "transcription": null
+          }
+        ]
+      }
+    ],
+    "applied": {
+      "modalities": [
+        "visual"
+      ],
+      "group_by": "none",
+      "limit": 10,
+      "metadata_filter": null,
+      "enrichment_filter": null,
+      "location": null
+    },
+    "next_page_token": "eyJzZWFyY2hfaWQiOiIwMWExYTBmNi1lZDcwLTcyNzAtOWJjMi00YzA5ZDEyMDZjZGEiLCJvZmZzZXQiOjEwfQ=="
+  }
+}

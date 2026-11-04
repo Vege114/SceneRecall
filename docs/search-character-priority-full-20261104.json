@@ -1,0 +1,38 @@
+{
+  "schema": "scenerecall.live-search-benchmark.v1",
+  "started_at_utc": "2026-11-04T07:28:48.882278+00:00",
+  "finished_at_utc": "2026-11-04T07:30:03.831723+00:00",
+  "request": {
+    "query": "爱城华恋与神乐光站在东京塔上",
+    "filters": {
+      "anime_id": "anime_4fe09eb7e4e6054f7fcbb3a3",
+      "kind": "visual"
+    },
+    "min_match_score": 75,
+    "enhancements": false,
+    "visual_verification": false,
+    "knowledge_mode": "baseline"
+  },
+  "runtime": {
+    "state_file": "D:\\SceneRecall\\.cache\\runtime\\native-8765-09703ee84de252f4.json",
+    "server_pid": 102932
+  },
+  "readiness": {
+    "health": {
+      "status": "ok",
+      "version": "0.4.0"
+    },
+    "index_startup": {
+      "status": "ready"
+    },
+    "wait_seconds": 29.53235130000394
+  },
+  "client_elapsed_seconds": 74.94905609998386,
+  "http_status": null,
+  "transport_error_type": "LineTooLong",
+  "search_submissions": 1,
+  "response_headers": {},
+  "timing": null,
+  "response": null,
+  "response_text": ""
+}

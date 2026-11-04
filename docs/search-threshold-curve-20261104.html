@@ -1,0 +1,2839 @@
+<!doctype html>
+<html lang="en" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com https://persistent.oaistatic.com/plugins/visualize/; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Search Threshold Curve</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+
+</head>
+<body>
+<iframe id="codex-visualization" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Search Threshold Curve" data-srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com https://persistent.oaistatic.com/plugins/visualize/; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Search Threshold Curve&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 16px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans:
+    -apple-system-body, ui-sans-serif, -apple-system, system-ui, &quot;Segoe UI&quot;,
+    Helvetica, &quot;Apple Color Emoji&quot;, Arial, sans-serif, &quot;Segoe UI Emoji&quot;,
+    &quot;Segoe UI Symbol&quot;;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 8px);
+  --radius-sm: calc(var(--radius) * 0.5);
+  --radius-md: calc(var(--radius) * 0.75);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 2);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  -webkit-font-smoothing: antialiased;
+  font-size: var(--font-size-base);
+  line-height: calc(var(--font-size-base) * 1.625);
+  font-weight: var(--font-weight-normal);
+}
+
+.cursor-interaction {
+  cursor: var(--cursor-interaction, pointer);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: var(--cursor-interaction, pointer);
+  text-decoration: none;
+  text-underline-offset: 2px;
+  font-weight: inherit;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+p,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+li,
+.table {
+  font-family: var(--font-sans);
+}
+
+h1 {
+  font-size: calc(var(--font-size-base) * 1.5);
+  line-height: 1.3333333333;
+}
+
+h2 {
+  font-size: calc(var(--font-size-base) * 1.25);
+  line-height: 1.4;
+}
+h3 {
+  font-size: calc(var(--font-size-base) * 1.125);
+  line-height: 1.5555555556;
+}
+h4 {
+  font-size: var(--font-size-base);
+  line-height: 1.5;
+}
+h5,
+h6 {
+  font-size: var(--font-size-base);
+  line-height: calc(var(--font-size-base) * 1.625);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+b,
+strong,
+th {
+  font-weight: 600;
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+pre,
+pre code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: calc(var(--font-size-base) * 0.875);
+  line-height: calc(var(--font-size-base) * 1.625);
+  font-family: var(--font-sans);
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.table :is(th, td):not(:last-child) {
+  padding-inline-end: calc(var(--font-size-base) * 1.5);
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead :is(th, td) {
+  border-bottom-color: var(--border-strong, var(--input));
+  padding-block: calc(var(--font-size-base) / 2);
+  line-height: var(--font-size-base);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+.table tbody :is(th, td) {
+  padding-block: calc(var(--font-size-base) * 0.625);
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 8px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+.widget {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  box-shadow: 0 0 0 0.5px var(--border-strong, var(--border));
+  color: var(--foreground);
+  background: var(--background);
+}
+
+#widget &gt; :not(.card, .widget, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  border: 1px solid var(--border);
+  corner-shape: var(--corner-shape);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--font-sans);
+  padding: 5px 12px;
+  border-color: color-mix(
+    in oklab,
+    light-dark(var(--primary-foreground), var(--foreground)) 5%,
+    transparent
+  );
+  border-radius: var(--radius-2xl);
+  color: light-dark(var(--primary-foreground), var(--foreground));
+  background: light-dark(var(--foreground), var(--popover));
+  box-shadow: 0 8px 18px rgb(15 23 42 / 20%);
+  letter-spacing: -0.15px;
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  color: color-mix(in srgb, var(--foreground) 40%, var(--muted-foreground));
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-family: var(--font-sans);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 1;
+}
+
+small,
+.text-small {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+/* Match inline alignment without overriding a containing flex or grid layout. */
+.btn,
+.nav-link,
+.form-control,
+.form-select,
+.form-range,
+.form-check {
+  vertical-align: middle;
+}
+
+.btn,
+.nav-link {
+  --btn-size: calc(12px + 2 * var(--control-spacing, 12px));
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  corner-shape: var(--corner-shape);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: inherit;
+  font-family: var(--font-sans);
+  height: fit-content;
+  min-height: var(--btn-size);
+  padding-inline: var(--control-spacing, 12px);
+  border-color: transparent;
+  border-radius: var(--radius-full);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+}
+
+.btn {
+  border-color: var(--border);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+}
+
+/* Codex Button size=&quot;compact&quot;; appearance stays with the button variant. */
+.btn-sm {
+  --btn-size: 24px;
+  padding-inline: 8px;
+  font-size: calc(var(--font-size-base) * 12 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 12 / 16), 1px);
+  line-height: 16px;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: var(--cursor-interaction, pointer);
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover {
+  background: light-dark(
+    color-mix(in srgb, var(--foreground) 5.5%, transparent),
+    color-mix(in srgb, var(--foreground) 8%, transparent)
+  );
+}
+
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+
+.btn-primary {
+  border-color: var(--border);
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: border-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: border-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--muted-foreground);
+  background: light-dark(
+    color-mix(in srgb, var(--foreground) 5.5%, transparent),
+    color-mix(in srgb, var(--foreground) 8%, transparent)
+  );
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+/* Shared preview chrome; product styles stay inside each variant. */
+.viz-dotted-background {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--foreground) 14%, transparent) 0.8px,
+    transparent 0.8px
+  );
+  background-position: center;
+  background-size: 16px 16px;
+}
+
+.viz-carousel {
+  position: relative;
+  min-width: 0;
+}
+
+.viz-carousel:has(&gt; .viz-carousel-controls) {
+  min-height: calc(60px + var(--viz-carousel-picker-height, 0px));
+  padding-bottom: 60px;
+}
+
+.viz-carousel &gt; [data-variant][hidden] {
+  display: none !important;
+}
+
+.viz-carousel &gt; [data-variant] {
+  isolation: isolate;
+}
+
+.viz-carousel-controls {
+  --viz-carousel-hover: light-dark(
+    color-mix(in srgb, var(--foreground) 5.4%, transparent),
+    color-mix(in srgb, var(--foreground) 7.8%, transparent)
+  );
+  position: absolute;
+  z-index: 2;
+  bottom: 8px;
+  left: 50%;
+  display: flex;
+  width: max-content;
+  /* Leave room for the host&#x27;s design-controls launcher at the trailing edge. */
+  max-width: calc(100% - 96px);
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-sans);
+  /* Match the settings dropdown chrome independently of the content font size. */
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+  transform: translateX(-50%);
+  user-select: none;
+}
+
+/* Keep authored mockup button styles out of the shared carousel chrome. */
+.viz-carousel-controls button,
+.viz-carousel-picker &gt; summary {
+  display: flex !important;
+  height: auto !important;
+  min-height: 30px;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px;
+  padding: 0 6px !important;
+  -webkit-app-region: no-drag;
+  border: 0 !important;
+  border-radius: 14px !important;
+  color: inherit !important;
+  background: transparent !important;
+  font: inherit !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.viz-carousel-controls &gt; button,
+.viz-carousel-picker &gt; summary {
+  position: relative;
+  isolation: isolate;
+}
+
+.viz-carousel-controls &gt; button {
+  --icon-size: 16px;
+  width: 30px !important;
+  padding: 0 !important;
+}
+
+.viz-carousel-picker &gt; summary {
+  padding-inline: 12px !important;
+}
+
+.viz-carousel-controls .viz-carousel-caret {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin: 0;
+  color: inherit;
+  transform: rotate(180deg);
+}
+
+.viz-carousel-controls &gt; button &gt; svg,
+.viz-carousel-controls .viz-carousel-caret,
+.viz-carousel-count {
+  opacity: 0.5;
+}
+
+.viz-carousel-controls &gt; button::before,
+.viz-carousel-picker &gt; summary::before {
+  position: absolute;
+  z-index: -1;
+  inset: 3px;
+  border-radius: 12px;
+  content: &quot;&quot;;
+  pointer-events: none;
+}
+
+.viz-carousel-controls &gt; button:hover::before,
+.viz-carousel-picker &gt; summary:hover::before {
+  background: var(--viz-carousel-hover);
+}
+
+.viz-carousel-controls &gt; button,
+.viz-carousel-controls [data-lucide],
+.viz-carousel-controls .lucide {
+  flex-shrink: 0;
+}
+
+.viz-carousel-picker {
+  min-width: 0;
+}
+
+.viz-carousel-picker &gt; summary {
+  min-width: 0;
+  list-style: none;
+}
+
+.viz-carousel-picker &gt; summary::-webkit-details-marker {
+  display: none;
+}
+
+.viz-carousel-count {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.viz-carousel-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viz-carousel-options {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  max-height: 240px;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--background);
+  box-shadow: 0 4px 12px light-dark(rgb(0 0 0 / 6%), rgb(0 0 0 / 25%));
+}
+
+.viz-carousel-options &gt; button {
+  border-radius: max(0px, calc(var(--radius-lg) - 5px)) !important;
+  width: 100% !important;
+  min-height: 28px;
+  justify-content: flex-start !important;
+  padding: 4px 8px !important;
+  font-size: var(--font-size-small) !important;
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.viz-carousel-options &gt; [aria-current=&quot;true&quot;],
+.viz-carousel-options &gt; button:hover {
+  background: var(--viz-carousel-hover) !important;
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  padding-inline: calc(4px + var(--control-spacing, 12px) / 2);
+  border-color: var(--input);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 1.4285714286;
+}
+.form-control:is(
+  [type=&quot;file&quot;],
+  [type=&quot;date&quot;],
+  [type=&quot;datetime-local&quot;],
+  [type=&quot;month&quot;],
+  [type=&quot;week&quot;],
+  [type=&quot;color&quot;]
+) {
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  line-height: 18px;
+}
+.form-control:is(
+  [type=&quot;date&quot;],
+  [type=&quot;datetime-local&quot;],
+  [type=&quot;month&quot;],
+  [type=&quot;week&quot;]
+) {
+  padding-inline: var(--control-spacing, 12px);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+  padding: 0;
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+  min-height: calc(10px + 2 * var(--control-spacing, 12px));
+  padding-inline: var(--control-spacing, 12px);
+  margin-inline-end: var(--control-spacing, 12px);
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  resize: vertical;
+  min-height: 96px;
+  padding: 8px 10px;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: none;
+}
+.form-control:disabled {
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  opacity: 1;
+}
+.form-control[aria-invalid=&quot;true&quot;] {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--red) 20%, transparent);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: fit-content;
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  margin: 0;
+  /* The secondary icon role is 14px at compact density and 16px at web density. */
+  --icon-size: calc(10px + var(--control-spacing, 12px) / 2);
+  /* Settings dropdowns retain a 12px inset and a 4px text-to-chevron gap. */
+  padding: 0 calc(16px + var(--icon-size)) 0 12px;
+  outline: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(
+      45deg,
+      transparent calc(50% - 0.6px),
+      var(--muted-foreground) calc(50% - 0.6px) calc(50% + 0.6px),
+      transparent calc(50% + 0.6px)
+    ),
+    linear-gradient(
+      135deg,
+      transparent calc(50% - 0.6px),
+      var(--muted-foreground) calc(50% - 0.6px) calc(50% + 0.6px),
+      transparent calc(50% + 0.6px)
+    );
+  background-position:
+    calc(100% - 12px - var(--icon-size) / 2) 50%,
+    calc(100% - 12px - var(--icon-size) * 0.18) 50%;
+  background-repeat: no-repeat;
+  background-size: calc(var(--icon-size) * 0.32) calc(var(--icon-size) * 0.32);
+  cursor: var(--cursor-interaction, default);
+  font-size: calc(var(--font-size-base) * 14 / 16);
+  font-size: round(nearest, calc(var(--font-size-base) * 14 / 16), 1px);
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+}
+
+.form-select :is(option, optgroup) {
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+}
+
+.form-select :is(option, optgroup):disabled {
+  color: var(--muted-foreground);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: light-dark(
+    color-mix(in srgb, var(--foreground) 5.5%, transparent),
+    color-mix(in srgb, var(--foreground) 8%, transparent)
+  );
+}
+
+.form-select:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.form-select:disabled {
+  opacity: 0.4;
+}
+
+.form-check {
+  display: flex;
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  corner-shape: round;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  width: calc(10px + var(--control-spacing, 12px) / 2);
+  height: calc(10px + var(--control-spacing, 12px) / 2);
+  border-color: var(--border-strong, var(--input));
+  border-radius: calc(var(--radius-sm) / 2);
+  background-color: transparent;
+  color: var(--foreground);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:is(:checked, :indeterminate) {
+  border-color: var(--border-strong, var(--input));
+  background-color: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+  background-color: var(--foreground);
+}
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:indeterminate::before {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 65%;
+  height: 6.65%;
+  margin: auto;
+  border-radius: var(--radius-full);
+  background: var(--foreground);
+  mask: none;
+  content: &quot;&quot;;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  border-radius: var(--radius-full);
+  width: 16px;
+  height: 16px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--input);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 0;
+  background: radial-gradient(
+    circle,
+    var(--primary-foreground) 0 3px,
+    var(--foreground) 3px
+  );
+  box-shadow: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:focus-visible {
+  border-color: var(--ring);
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+.form-check:not(.form-switch) .form-check-input[type=&quot;radio&quot;]:disabled,
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;radio&quot;]:disabled
+  + .form-check-label {
+  opacity: 0.5;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+  border-color: #fff;
+  background: #fff;
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--blue);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+  outline: none;
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  accent-color: var(--primary);
+  height: calc(12px + 2 * var(--control-spacing, 12px));
+  min-height: calc(12px + 2 * var(--control-spacing, 12px));
+  outline: none;
+  border-radius: var(--radius-full);
+  color: var(--foreground);
+  background: transparent;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  background: var(--form-range-track, var(--border));
+  height: 2px;
+  border-radius: var(--radius-full);
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  margin-top: -9px;
+  border-color: transparent;
+  background: currentColor;
+  box-shadow: var(--shadow-sm);
+}
+
+/* Outline the native track and thumb, preserving the larger input hit area. */
+.form-range:focus-visible::-webkit-slider-runnable-track {
+  outline: 2px auto Highlight;
+  outline-color: -webkit-focus-ring-color;
+}
+
+.form-range::-moz-range-track {
+  background: var(--form-range-track, var(--border));
+  height: 2px;
+  border-radius: var(--radius-full);
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  border-color: transparent;
+  background: currentColor;
+  box-shadow: var(--shadow-sm);
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+
+.form-range:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--blue);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline-offset: 2px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.viz-carousel-controls :is(button, summary):focus-visible {
+  outline: 2px solid var(--ring) !important;
+  outline-offset: 2px !important;
+}
+
+/* Web recipes are the default, including on renderers without inline style queries. */
+@supports (border-radius: if(style(--corner-shape: round): 1px; else: 2px)) {
+  /* Match the host&#x27;s proportional text-sm scale at every text preference. */
+  .tooltip,
+  .viz-badge,
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    font-size: if(
+      style(--corner-shape: round): round(
+          nearest,
+          calc(var(--font-size-base) * 14 / 16),
+          1px
+        );
+        else: round(nearest, calc(var(--font-size-base) * 13 / 14), 1px)
+    );
+  }
+
+  .btn-sm {
+    font-size: if(
+      style(--corner-shape: round): round(
+          nearest,
+          calc(var(--font-size-base) * 12 / 16),
+          1px
+        );
+        else: round(nearest, calc(var(--font-size-base) * 12 / 14), 1px)
+    );
+  }
+
+  .btn,
+  .nav-link,
+  .form-select {
+    border-radius: if(
+      style(--corner-shape: round): var(--radius-full); else: var(--radius-lg)
+    );
+  }
+
+  .form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+    border-radius: if(
+      style(--corner-shape: round): calc(var(--radius-sm) / 2);
+        else: calc(var(--radius-lg) * 0.4)
+    );
+  }
+
+  .tooltip {
+    font-weight: if(
+      style(--corner-shape: round): 600; else: var(--font-weight-normal)
+    );
+  }
+}
+
+@media (pointer: coarse) {
+  .viz-carousel:has(&gt; .viz-carousel-controls) {
+    min-height: calc(76px + var(--viz-carousel-picker-height, 0px));
+    padding-bottom: 76px;
+  }
+
+  .btn,
+  .nav-link,
+  .viz-carousel-controls button,
+  .viz-carousel-picker &gt; summary,
+  .form-control,
+  .form-select {
+    --btn-size: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, calc(var(--font-size-base) * 14 / 16));
+    font-size: max(
+      16px,
+      round(nearest, calc(var(--font-size-base) * 14 / 16), 1px)
+    );
+  }
+  .form-control:is(
+    [type=&quot;file&quot;],
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;week&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;color&quot;]
+  ) {
+    height: 44px;
+    min-height: 44px;
+    font-size: max(16px, calc(var(--font-size-base) * 14 / 16));
+    font-size: max(
+      16px,
+      round(nearest, calc(var(--font-size-base) * 14 / 16), 1px)
+    );
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;script type=&quot;application/json&quot; id=&quot;codex-visualization-widget-state&quot;&gt;__CODEX_VISUALIZATION_WIDGET_STATE__&lt;/script&gt;
+&lt;script&gt;(() =&gt; {
+  const root = document.documentElement;
+  const mediaQuery = globalThis.matchMedia(&quot;(prefers-color-scheme: dark)&quot;);
+  const apply = Reflect.apply;
+  const isArray = Array.isArray;
+  const hasOwn = Object.hasOwn;
+  const parentWindow = globalThis.parent;
+  const stringify = JSON.stringify;
+  const parse = JSON.parse;
+  const encode = TextEncoder.prototype.encode.bind(new TextEncoder());
+  const initialStateElement = document.getElementById(
+    &quot;codex-visualization-widget-state&quot;,
+  );
+  const initialGlobals = parse(initialStateElement?.textContent ?? &quot;{}&quot;);
+  initialStateElement?.remove();
+  /** @type {Record&lt;string, unknown&gt; | null} */
+  let state = initialGlobals.widgetState ?? null;
+  const statePersistence = initialGlobals.statePersistence ?? &quot;none&quot;;
+  let nextStateRequestId = 0;
+  /** @type {Map&lt;number, { resolve: () =&gt; void; reject: (error: Error) =&gt; void; timeout: ReturnType&lt;typeof globalThis.setTimeout&gt;; serializedState: string }&gt;} */
+  const pendingStateWrites = new Map();
+  const persistenceError = () =&gt;
+    Object.assign(
+      new Error(&quot;The host could not persist the widget state update&quot;),
+      {
+        code: -32000,
+        data: { code: &quot;widget_state_persistence_failed&quot;, retryable: false },
+      },
+    );
+  /**
+   * @param {object} prototype
+   * @param {string} property
+   */
+  const getPrototypeGetter = (prototype, property) =&gt; {
+    // oxlint-disable-next-line typescript/unbound-method -- invoked through captured Reflect.apply
+    const getter = Object.getOwnPropertyDescriptor(prototype, property)?.get;
+    if (getter == null) {
+      throw new Error(`Missing ${property} getter`);
+    }
+    return getter;
+  };
+  const getMessageData = getPrototypeGetter(MessageEvent.prototype, &quot;data&quot;);
+  const getMessagePorts = getPrototypeGetter(MessageEvent.prototype, &quot;ports&quot;);
+  const getMessageSource = getPrototypeGetter(MessageEvent.prototype, &quot;source&quot;);
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const addHostMessageListener = MessagePort.prototype.addEventListener;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const postHostMessage = MessagePort.prototype.postMessage;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const startHostPort = MessagePort.prototype.start;
+  // oxlint-disable-next-line typescript/unbound-method -- captured before the untrusted fragment runs
+  const stopMessagePropagation = Event.prototype.stopImmediatePropagation;
+  /** @type {MessagePort | null} */
+  let hostPort = null;
+  const postToHost = (type, payload) =&gt; {
+    if (hostPort != null) {
+      apply(postHostMessage, hostPort, [{ type, ...payload }]);
+    }
+  };
+  const openExternal = ({ href }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;open-external&quot;, { href });
+    }
+  };
+  const sendFollowUpMessage = ({ context, prompt, title }) =&gt; {
+    if (globalThis.navigator.userActivation?.isActive === true) {
+      postToHost(&quot;follow-up&quot;, { context, prompt, title });
+    }
+    return Promise.resolve();
+  };
+  /**
+   * @param {Record&lt;string, unknown&gt; | ((previous: Record&lt;string, unknown&gt; | null) =&gt; Record&lt;string, unknown&gt;)} next
+   * @returns {Promise&lt;void&gt;}
+   */
+  const setWidgetState = async (next) =&gt; {
+    const nextState = typeof next === &quot;function&quot; ? next(state) : next;
+    if (
+      nextState == null ||
+      typeof nextState !== &quot;object&quot; ||
+      isArray(nextState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const inputState = stringify(
+      nextState,
+      (_key, /** @type {unknown} */ value) =&gt; {
+        if (
+          typeof value === &quot;undefined&quot; ||
+          typeof value === &quot;function&quot; ||
+          typeof value === &quot;symbol&quot; ||
+          (typeof value === &quot;number&quot; &amp;&amp; !Number.isFinite(value))
+        ) {
+          throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+        }
+        return value;
+      },
+    );
+    const parsedState = parse(inputState);
+    if (
+      parsedState == null ||
+      typeof parsedState !== &quot;object&quot; ||
+      isArray(parsedState)
+    ) {
+      throw new TypeError(&quot;Widget state must be a JSON object&quot;);
+    }
+    const storedState = {
+      modelContent: null,
+      privateContent: null,
+      ...parsedState,
+    };
+    const serializedState = stringify(storedState);
+    if (encode(serializedState).length &gt; 16 * 1024) {
+      throw new TypeError(
+        &quot;Widget state must be a JSON object of at most 16 KiB&quot;,
+      );
+    }
+    if (
+      hasOwn(storedState, &quot;imageIds&quot;) &amp;&amp;
+      (!isArray(storedState.imageIds) ||
+        storedState.imageIds.some(
+          (/** @type {unknown} */ id) =&gt; typeof id !== &quot;string&quot;,
+        ))
+    ) {
+      throw new TypeError(&quot;Widget state imageIds must be an array of strings&quot;);
+    }
+    if (storedState.imageIds?.length &gt; 0) {
+      throw Object.assign(
+        new TypeError(&quot;Visualization state does not support image attachments&quot;),
+        { code: -32602, data: { code: &quot;images_unsupported&quot; } },
+      );
+    }
+    state = storedState;
+    globalThis.openai.widgetState = state;
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: { widgetState: state } },
+      }),
+    );
+    if (statePersistence === &quot;none&quot;) {
+      throw persistenceError();
+    }
+    const id = ++nextStateRequestId;
+    return new Promise((resolve, reject) =&gt; {
+      const timeout = globalThis.setTimeout(() =&gt; {
+        pendingStateWrites.delete(id);
+        reject(persistenceError());
+      }, 30_000);
+      pendingStateWrites.set(id, { resolve, reject, timeout, serializedState });
+      postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+    });
+  };
+  const syncTheme = () =&gt; {
+    const theme = mediaQuery.matches ? &quot;dark&quot; : &quot;light&quot;;
+    root.dataset.theme = theme;
+    globalThis.openai = {
+      ...globalThis.openai,
+      openExternal,
+      sendFollowUpMessage,
+      setWidgetState,
+      theme,
+      visualizationStyleVariables: {},
+      visualizationTheme: theme,
+      widgetState: state,
+      statePersistence,
+      stateModelContext: &quot;none&quot;,
+    };
+    globalThis.dispatchEvent(
+      new CustomEvent(&quot;openai:set_globals&quot;, {
+        detail: { globals: globalThis.openai },
+      }),
+    );
+  };
+  const sendHeight = () =&gt; {
+    postToHost(&quot;height&quot;, {
+      height: Math.ceil(
+        Math.max(
+          document.body.scrollHeight,
+          document.body.getBoundingClientRect().height,
+        ),
+      ),
+    });
+  };
+
+  globalThis.addEventListener(
+    &quot;message&quot;,
+    (event) =&gt; {
+      const data = apply(getMessageData, event, []);
+      const ports = apply(getMessagePorts, event, []);
+      const source = apply(getMessageSource, event, []);
+      if (
+        hostPort != null ||
+        source !== parentWindow ||
+        typeof data !== &quot;object&quot; ||
+        data?.type !== &quot;codex-visualization-initialize&quot; ||
+        !isArray(ports) ||
+        ports.length !== 1
+      ) {
+        return;
+      }
+      apply(stopMessagePropagation, event, []);
+      const nextHostPort = ports[0];
+      try {
+        apply(addHostMessageListener, nextHostPort, [
+          &quot;message&quot;,
+          (event) =&gt; {
+            const data = apply(getMessageData, event, []);
+            if (typeof data === &quot;object&quot; &amp;&amp; data?.type === &quot;measure&quot;) {
+              sendHeight();
+            } else if (
+              typeof data === &quot;object&quot; &amp;&amp;
+              data?.type === &quot;widget-state-result&quot;
+            ) {
+              /** @type {unknown} */
+              const id = data.id;
+              if (typeof id !== &quot;number&quot;) {
+                return;
+              }
+              const pending = pendingStateWrites.get(id);
+              if (pending != null) {
+                pendingStateWrites.delete(id);
+                globalThis.clearTimeout(pending.timeout);
+                if (data.ok === true) {
+                  pending.resolve();
+                } else {
+                  pending.reject(persistenceError());
+                }
+              }
+            }
+          },
+        ]);
+        apply(startHostPort, nextHostPort, []);
+      } catch {
+        return;
+      }
+      hostPort = nextHostPort;
+      for (const [id, { serializedState }] of pendingStateWrites) {
+        postToHost(&quot;widget-state-write&quot;, { id, state: serializedState });
+      }
+      sendHeight();
+    },
+    { capture: true },
+  );
+  document.currentScript?.remove();
+  mediaQuery.addEventListener(&quot;change&quot;, syncTheme);
+  globalThis.addEventListener(&quot;click&quot;, (event) =&gt; {
+    if (event.defaultPrevented) {
+      return;
+    }
+    let element = null;
+    if (event.target instanceof globalThis.Element) {
+      element = event.target;
+    } else if (event.target instanceof globalThis.Node) {
+      element = event.target.parentElement;
+    }
+    const link = element?.closest(&quot;a[href]&quot;);
+    const href = link?.getAttribute(&quot;href&quot;);
+    if (href == null) {
+      return;
+    }
+    if (href.startsWith(&quot;#&quot;)) {
+      let id;
+      try {
+        id = decodeURIComponent(href.slice(1));
+      } catch {
+        return;
+      }
+      const target = id.length === 0 ? root : document.getElementById(id);
+      if (
+        target == null ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      event.preventDefault();
+      postToHost(&quot;scroll-to&quot;, {
+        top: target.getBoundingClientRect().top + globalThis.scrollY,
+      });
+      return;
+    }
+    event.preventDefault();
+    openExternal({ href });
+  });
+  new ResizeObserver(sendHeight).observe(document.body);
+  syncTheme();
+})();
+&lt;/script&gt;
+&lt;div id=&quot;sr-threshold-curve&quot; class=&quot;sr-threshold-root&quot;&gt;
+  &lt;style&gt;
+    #sr-threshold-curve { display: grid; gap: calc(var(--font-size-base) * 1); color: var(--foreground); }
+    #sr-threshold-curve .heading-group { display: grid; gap: calc(var(--font-size-base) * .25); padding-right: 92px; }
+    #sr-threshold-curve .chart-wrap { position: relative; min-width: 0; }
+    #sr-threshold-curve .threshold-chart { display: block; width: 100%; overflow: visible; }
+    #sr-threshold-curve .threshold-chart text { fill: var(--foreground); font-size: 12px; font-weight: 400; }
+    #sr-threshold-curve .threshold-chart .domain { display: none; }
+    #sr-threshold-curve .threshold-chart .tick line { stroke: var(--border); }
+    #sr-threshold-curve .chart-tooltip { position: absolute; pointer-events: none; background: var(--popover); color: var(--popover-foreground); z-index: 2; }
+    #sr-threshold-curve .control-label { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: calc(var(--font-size-base) * .5); }
+    #sr-threshold-curve .control-group { display: grid; gap: calc(var(--font-size-base) * .5); }
+    #sr-threshold-curve .reference-labels { display: flex; flex-wrap: wrap; gap: calc(var(--font-size-base) * .75); }
+    #sr-threshold-curve .reference { display: inline-flex; align-items: center; gap: calc(var(--font-size-base) * .35); }
+    #sr-threshold-curve .swatch { display: inline-block; width: 18px; height: 2px; background: var(--viz-series-1); }
+    #sr-threshold-curve .swatch.target { background: var(--viz-series-2); }
+    #sr-threshold-curve .swatch.previous { background: var(--muted-foreground); }
+  &lt;/style&gt;
+  &lt;div class=&quot;heading-group&quot;&gt;
+    &lt;h3&gt;候选数量与阈值&lt;/h3&gt;
+    &lt;span class=&quot;text-small&quot;&gt;《少女歌剧》12 集 · 人物证据扣分后的口径&lt;/span&gt;
+    &lt;span class=&quot;text-small&quot;&gt;现存索引离线重算 · 回源、合并前的窗口数&lt;/span&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;chart-wrap&quot;&gt;
+    &lt;svg class=&quot;threshold-chart&quot; role=&quot;img&quot; aria-labelledby=&quot;sr-threshold-title sr-threshold-desc&quot;&gt;
+      &lt;title id=&quot;sr-threshold-title&quot;&gt;提高匹配阈值后，保留的候选窗口数量&lt;/title&gt;
+      &lt;desc id=&quot;sr-threshold-desc&quot;&gt;单调递减的阶梯函数，仅统计分数严格大于阈值的候选。数量轴采用对数式刻度，并保留零值。&lt;/desc&gt;
+    &lt;/svg&gt;
+    &lt;div class=&quot;tooltip chart-tooltip&quot; role=&quot;tooltip&quot; hidden&gt;&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;reference-labels text-small&quot;&gt;
+    &lt;span class=&quot;reference&quot;&gt;&lt;span class=&quot;swatch&quot;&gt;&lt;/span&gt;全部候选窗口&lt;/span&gt;
+    &lt;span class=&quot;reference&quot;&gt;&lt;span class=&quot;swatch previous&quot;&gt;&lt;/span&gt;上次阈值 75%&lt;/span&gt;
+    &lt;span class=&quot;reference&quot;&gt;&lt;span class=&quot;swatch target&quot;&gt;&lt;/span&gt;&lt;span id=&quot;sr-target-label&quot;&gt;第一集约 10:08 窗口&lt;/span&gt;&lt;/span&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;control-group&quot;&gt;
+    &lt;div class=&quot;control-label&quot;&gt;
+      &lt;label for=&quot;sr-threshold-input&quot;&gt;观察阈值 &lt;output id=&quot;sr-threshold-value&quot; class=&quot;tabular-nums&quot;&gt;75.0%&lt;/output&gt;&lt;/label&gt;
+      &lt;output id=&quot;sr-threshold-count&quot; class=&quot;tabular-nums&quot; aria-live=&quot;polite&quot;&gt;0 条候选窗口&lt;/output&gt;
+    &lt;/div&gt;
+    &lt;input id=&quot;sr-threshold-input&quot; class=&quot;form-range&quot; type=&quot;range&quot; min=&quot;0&quot; max=&quot;100&quot; step=&quot;0.1&quot; value=&quot;75&quot; aria-describedby=&quot;sr-threshold-selected&quot;&gt;
+    &lt;span id=&quot;sr-threshold-selected&quot; class=&quot;text-small&quot;&gt;&lt;/span&gt;
+  &lt;/div&gt;
+  &lt;span class=&quot;text-small&quot;&gt;数量轴：对数式刻度（含 0） · 严格大于阈值 · 分数不代表正确概率&lt;/span&gt;
+  &lt;table class=&quot;sr-only&quot;&gt;&lt;caption&gt;常用阈值对应的候选数&lt;/caption&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;阈值百分比&lt;/th&gt;&lt;th&gt;候选窗口数&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody id=&quot;sr-threshold-accessible&quot;&gt;&lt;/tbody&gt;&lt;/table&gt;
+  &lt;script id=&quot;sr-threshold-data&quot; type=&quot;application/json&quot;&gt;{&quot;targetScore&quot;:24.99578343734188,&quot;scores&quot;:[1.0322742422501072,1.0325511398472773,1.0328281860345183,1.033105380931468,1.0333827246578924,1.0336602173336868,1.0339378590788744,1.0342156500136082,1.0344935902581696,1.0347716799329703,1.0350499191585507,1.0353283080555806,1.0356068467448614,1.0358855353473222,1.036164373984024,1.0364433627761578,1.0367225018450443,1.037001791312136,1.0372812312990163,1.0375608219273988,1.037840563319129,1.0381204555961836,1.0384004988806714,1.0386806932948327,1.0389610389610389,1.0392415360017953,1.0395221845397378,1.0398029846976362,1.0400839365983923,1.0403650403650404,1.0406462961207488,1.0409277039888183,1.041209264092683,1.0414909765559117,1.0417728415022056,1.0420548590554006,1.0423370293394665,1.0426193524785072,1.0429018285967622,1.0431844578186042,1.0434672402685412,1.0437501760712173,1.0440332653514104,1.0443165082340342,1.0445999048441383,1.0448834553069082,1.0451671597476648,1.0454510182918657,1.0460191981931113,1.046303519801753,1.0465879960170335,1.0468726269650936,1.0471574127722114,1.0474423535648025,1.0477274494694202,1.048012700612755,1.0482981071216366,1.0485836691230317,1.0488693867440462,1.0491552601119243,1.0494412893540486,1.049727474597941,1.0500138159712629,1.0503003136018143,1.0505869676175352,1.0508737781465056,1.051160745316944,1.0517351500958059,1.052022587961369,1.0523101829826815,1.0525979352886654,1.0528858450083833,1.0531739122710395,1.0534621372059798,1.0537505199426906,1.054039060610802,1.0543277593400848,1.0546166162604518,1.0549056315019594,1.055484137469331,1.0557736284560202,1.0560632782855006,1.0563530870885427,1.0566430549960608,1.056933182139113,1.0572234686489013,1.0575139146567718,1.0578045202942152,1.058095285692867,1.0583862109845064,1.0586772963010587,1.058968541774594,1.0592599475373279,1.0598432404599807,1.0601351278850593,1.0604271761296553,1.0607193853267154,1.0610117556093301,1.0613042871107388,1.061596979964327,1.0618898343036274,1.0621828502623205,1.062476027974234,1.0627693675733434,1.0630628691937722,1.0633565329697927,1.0636503590358246,1.0639443475264372,1.0642384985763478,1.064532812320423,1.064827288893679,1.065121928431281,1.0654167310685438,1.0657116969409328,1.066302118933698,1.066597575325755,1.0668931954963,1.0671889795815497,1.067484927717873,1.067781040041789,1.0680773166899693,1.0683737577992367,1.0689671339490836,1.0692640692640694,1.0698584350613256,1.0701558658189183,1.0704534619996244,1.070751223741488,1.0710491511827072,1.0713472444616337,1.0716455037167731,1.0719439290867863,1.072840203274986,1.073139294494187,1.0734385525238845,1.073737977503668,1.0740375695732838,1.0743373288726346,1.0746372555417782,1.0749373497209298,1.0752376115504607,1.0755380411708995,1.0758386387229317,1.0761394043474,1.0764403381853047,1.0770427110662144,1.0773441503920094,1.0776457584968224,1.0779475355224446,1.0782494816108261,1.0785515969040766,1.0794589594365254,1.0797617529735344,1.080064716428353,1.0803678499440499,1.0806711536638545,1.080974627731157,1.0812782722895085,1.0815820874826214,1.0818860734543703,1.082190230348791,1.0824945583100816,1.0827990574826019,1.083103728010875,1.0837135837135838,1.0840187691778793,1.0843241265776478,1.0846296560582276,1.084935357765121,1.0852412318439948,1.0855472784406797,1.0858534977011705,1.0861598897716278,1.086466454798377,1.0867731929279079,1.0873871890821043,1.0876944474005792,1.0880018794094544,1.0883094852560502,1.0889252190525174,1.0892333472978635,1.089541649971879,1.0898501272227208,1.0901587791987113,1.0904676060483425,1.0907766079202748,1.0910857849633362,1.0913951373265238,1.0917046651590046,1.0920143686101134,1.0923242478293558,1.0926343029664063,1.0932549415934818,1.093565525383707,1.0938762856921425,1.0941872226693148,1.0944983364659224,1.0948096272328354,1.0951210951210952,1.095432740281915,1.0957445628666809,1.0960565630269503,1.0963687409144545,1.0966810966810967,1.096993630478954,1.0973063424602765,1.0976192327774879,1.0979323015831857,1.0982455490301426,1.098558975271304,1.0988725804597914,1.099500328292102,1.0998144712430429,1.1001287937555444,1.1007579780813983,1.101072840203275,1.1013878825037624,1.1020185082595617,1.102334092024814,1.102649856588556,1.1029658021062032,1.1032819287333475,1.1035982366257597,1.1039147259393889,1.104231396830364,1.1045482494549927,1.1048652839697617,1.1051825005313378,1.105499899296568,1.1058174804224792,1.1064531903853547,1.1070896316797956,1.1074081269708427,1.107726805568532,1.10804566763116,1.108364713317204,1.1086839427853252,1.1090033561943675,1.1093229537033573,1.1096427354715046,1.1099627016582034,1.1102828524230313,1.11060318792575,1.1109237083263057,1.1112444137848294,1.1115653044616371,1.1122076421122942,1.1125290894077022,1.1128507225645128,1.1131725417439702,1.1134945471075062,1.1138167388167388,1.1141391170334731,1.1144616819197015,1.114784433637605,1.1151073723495508,1.1154304982180963,1.1160773120761522,1.1164010003917197,1.1167248765159994,1.1170489406124926,1.117697633377076,1.1180222623731193,1.1183470799972832,1.1189972817879794,1.1193226662839924,1.1196482400670882,1.1199740033024874,1.1202999561556024,1.1206260987920378,1.1209524313775916,1.1212789540782548,1.1216056670602126,1.1219325704898424,1.122259664533717,1.122586949358603,1.1229144251314613,1.1232420920194481,1.1235699501899152,1.1238979998104086,1.124226241048671,1.1245546740726409,1.1248832990504527,1.1252121161504383,1.1255411255411256,1.12587032739124,1.1261997218697044,1.1265293091456392,1.1268590893883634,1.1271890627673937,1.1275192294524456,1.1278495896134337,1.1281801434204717,1.1285108910438726,1.1288418326541494,1.129172968422015,1.1295042985183832,1.1298358231143673,1.130167542381283,1.1304994564906459,1.1308315656141743,1.1311638699237878,1.1314963695916078,1.1318290647899587,1.1321619556913673,1.132495042468564,1.1328283252944817,1.1331618043422578,1.1334954797852324,1.1341634205511637,1.1344976862218241,1.1348321489830924,1.1351668090093334,1.1355016664751179,1.1358367215552225,1.1361719744246308,1.1365074252585325,1.1368430742323241,1.13717892152161,1.1375149673022014,1.1378512117501183,1.1381876550415877,1.138524297353046,1.138861138861139,1.1391981797427198,1.1395354201748518,1.1398728603348087,1.140210500400074,1.1405483405483405,1.1408863809575132,1.141224621805707,1.1415630632712483,1.1419017055326757,1.1422405487687386,1.1425795931584,1.1429188388808342,1.1432582861154288,1.1435979350417855,1.1439377858397175,1.1442778386892536,1.1449585512643217,1.1452992113509817,1.145640074211503,1.145981140026987,1.1463224089787523,1.1466638812483316,1.147005557017476,1.147347436468152,1.1476895197825432,1.1480318071430509,1.148374298732294,1.1487169947331095,1.149059895328552,1.149403000701896,1.1497463110366337,1.1500898265164772,1.150777473647429,1.1511216056670603,1.1521552377583506,1.1525001944163622,1.153190727786294,1.1535363048698382,1.1538820891338877,1.1542280807648122,1.154574279949205,1.1552673017258852,1.1556141246924796,1.155961155961156,1.1563083957196305,1.1566558441558443,1.157003501457965,1.1573513678143865,1.157699443413729,1.1580477284448405,1.158396223096795,1.1587449275588952,1.1590938420206713,1.1597923017025156,1.1604916036631443,1.160841570974261,1.1611917494270436,1.1615421392126282,1.1618927405223813,1.1622435535479014,1.1625945784810177,1.1629458155137913,1.163297264838516,1.1636489266477175,1.1647051889109377,1.165057702587969,1.165410429715607,1.16576337048778,1.1661165250986518,1.166469893742621,1.1668234766143224,1.1671772739086264,1.16753128582064,1.1682399542794082,1.1685946112175623,1.1689494835562253,1.1693045714916919,1.1696598752204952,1.1703711308454392,1.1707270831358423,1.1710832520081076,1.1714396376599663,1.1717962402893911,1.1721530600945949,1.1725100972740328,1.1728673520264015,1.1732248245506398,1.1735825150459298,1.1739404237116955,1.1742985507476051,1.1746568963535702,1.1750154607297465,1.1753742440765342,1.1757332465945785,1.1760924684847691,1.1764519099482424,1.1768115711863802,1.1778918755662942,1.1782524179218394,1.1789741651916232,1.179335370511841,1.1796967972266776,1.1800584455397454,1.1804203156549065,1.180782407776273,1.1811447221082079,1.181507258855325,1.18187001822249,1.1822330004148187,1.1829596340966961,1.1833232859977403,1.1836871615469402,1.1840512609506766,1.1844155844155846,1.1847801321485532,1.185144904356727,1.1858751230285427,1.1862405699077503,1.1869721397936013,1.1873382632173501,1.1877046125734803,1.188071188071188,1.1884379899199289,1.1888050183294163,1.1891722735096228,1.1895397556707816,1.1899074650233847,1.190275401778185,1.1906435661461954,1.1910119583386911,1.191380578567208,1.191749427043545,1.1921185039797613,1.1924878095881815,1.1928573440813912,1.193227107672241,1.1935971005738448,1.193967322999581,1.1943377751630933,1.1947084572782898,1.1950793695593447,1.1954505122206986,1.195821885477058,1.1965653246349548,1.1969373909672418,1.197309688756034,1.197682218217377,1.1980549795675848,1.1984279730232408,1.1988011988011988,1.1991746571185824,1.1995483481927858,1.1999222722414742,1.2002964294825849,1.2006708201343261,1.2010454444151792,1.201420302543898,1.2017953947395097,1.2021707212213146,1.202922077922078,1.2032981085810095,1.2036743744060816,1.20405087561797,1.204427612437625,1.2048045850862754,1.2051817937854257,1.2055592387568588,1.2059369202226344,1.2063148384050923,1.2070713858108026,1.2074500154801282,1.2078288827582835,1.2082079878690049,1.2085873310363107,1.2089669124845004,1.2093467324381555,1.2097267911221399,1.2101070887616,1.2104876255819652,1.2108684018089493,1.2112494176685493,1.2116306733870474,1.2120121691910106,1.2123939053072912,1.2131580993856443,1.213923257442652,1.214306198533328,1.2146893813034554,1.215072805981897,1.2154564727978052,1.215840381980622,1.2162245337600788,1.2166089283661978,1.2169935660292917,1.2173784469799651,1.2177635714491142,1.2181489396679273,1.2185345518678854,1.218920408280763,1.2193065091386284,1.2200794451190649,1.2204662807072444,1.22085336167163,1.2212406882457643,1.2216282606634876,1.2220160791589363,1.222792455321045,1.2231810134574672,1.2239588710176945,1.2243481709130564,1.2247377185334551,1.2251275141154199,1.2259078501116718,1.2262983910005256,1.2266891808000795,1.2278630460448643,1.2282548338706605,1.2286468718003987,1.229039160073643,1.229824488610431,1.2302175293546338,1.2306108214036604,1.2310043649986087,1.231398160380886,1.2317922077922079,1.2321865074745997,1.2325810596703968,1.232975864622245,1.2333709225731013,1.2337662337662336,1.2341617984452227,1.2345576168539605,1.2349536892366537,1.2353500158378208,1.2357465969022952,1.2361434326752245,1.236540523402072,1.2369378693286148,1.2373354707009478,1.237733327765482,1.2381314407689448,1.2385298099583815,1.2393273178849484,1.2397264571177617,1.2401258535279154,1.2417260159195642,1.2421267019524522,1.2425276466593445,1.2429288502908136,1.2437320353313892,1.244134017243261,1.2445362590852407,1.2449387611095244,1.2453415235686347,1.2457445467154205,1.2461478308030591,1.246551376085055,1.2469551828152412,1.24735925124778,1.2477635816371635,1.2481681742382131,1.2485730293060815,1.2489781470962522,1.2493835278645407,1.2501950793603929,1.2506012506012505,1.2510076858468149,1.2514143853545676,1.251821349382325,1.25222857818824,1.2526360720308003,1.2538601463682897,1.2542687029490551,1.2546775258639666,1.2550866153735407,1.2554959717386331,1.25590559522044,1.2563154860804993,1.2567256445806887,1.2571360709832298,1.2575467655506858,1.2583689602323145,1.2587804608733322,1.259192230732957,1.2596042700754744,1.2600165791655156,1.2604291582680582,1.2608420076484277,1.2612551275722967,1.2616685183056866,1.262082180114967,1.2624961132668577,1.2633247946670985,1.26373954345064,1.2641545646471757,1.2645698585251806,1.2654012654012654,1.265817378938063,1.266650427558621,1.2670673631832288,1.2674845733785478,1.2679020584158924,1.2683198185669355,1.2687378541037078,1.2691561652985985,1.2695747524243568,1.2699936157540908,1.2704127555612703,1.270832172119726,1.2712518657036493,1.2716718365875945,1.27209208504648,1.2725126113555867,1.2733544986274066,1.2737758601425049,1.2741975006125952,1.2746194203147847,1.2750416195265484,1.2754640985257288,1.2758868575905367,1.276309896999552,1.2767332170317247,1.2771568179663735,1.2775807000831896,1.278004863662234,1.278429308983942,1.2792790459789463,1.2801299133191384,1.2805557715737357,1.2809819132614473,1.2814083386653294,1.2818350480688143,1.2822620417557127,1.2826893200102132,1.2835447313606698,1.283972865026901,1.2844012844012846,1.2848299897699096,1.2852589814192485,1.2856882596361556,1.2861178247078682,1.2865476769220083,1.2869778165665828,1.287408243929983,1.287838959300987,1.2882699629687582,1.288701255222849,1.289132836353198,1.289564706650134,1.2899968664043733,1.290429315907023,1.2908620554495807,1.2912950853239349,1.2925959198625419,1.2930301139908127,1.293464599916213,1.2938993779329915,1.2943344483357933,1.2947698114196602,1.2952054674800302,1.2956414168127397,1.2960776597140233,1.2965141964805154,1.2969510274092486,1.2973881527976576,1.297825572943577,1.2982632881452443,1.2987012987012987,1.2991396049107828,1.299578207073143,1.3004563004563006,1.3008957922780158,1.3017756676870644,1.302216051877757,1.3026567341288153,1.3030977147429414,1.3035389940232474,1.3039805722732551,1.3044224497968995,1.3053071038828923,1.3057498810551729,1.3061929587209533,1.3066363371862353,1.307523997741389,1.3079682804453447,1.3088577522443556,1.3101942305482128,1.3106403300478886,1.311533441005332,1.3119804530847476,1.3124277699797646,1.312875392002268,1.3133233194645684,1.3137715526794027,1.314220091959935,1.3151180899728903,1.3155675493337833,1.3164673903387993,1.3169177726139751,1.3173684631590177,1.3178194622905337,1.3182707703255647,1.3187223875815859,1.3191743143765078,1.3196265510286767,1.3200790978568755,1.3205319551803256,1.3209851233186856,1.3214386025920526,1.321892393320965,1.3223464958263997,1.3232556374529563,1.3237106772182425,1.324166030048383,1.324621696266569,1.3250776761964371,1.3255339701620694,1.325990578487995,1.3264475014991899,1.3269047395210787,1.3282783469118873,1.3287368482397823,1.3291956662122406,1.3296548011573919,1.3305740232805565,1.331034111117099,1.331494517243393,1.331955241989844,1.3324162856873139,1.3328776486671225,1.3333393312610493,1.3338013338013337,1.3342636566206758,1.3347263000522362,1.3356525500869707,1.3361161573587814,1.3365800865800868,1.3370443380863666,1.3375089122135684,1.3379738092981055,1.33843902967686,1.3389045736871825,1.3393704416668928,1.3398366339542813,1.3407699928076104,1.341237160052491,1.3417046529629313,1.3421724718795849,1.342640617143582,1.343109089096528,1.3440470144380758,1.3445164685122772,1.344986250646628,1.3454563611851271,1.3463975688529728,1.3468686666727254,1.3473400942774412,1.3478118520135327,1.3482839402278983,1.348756359267922,1.3492291094814755,1.3497021912169178,1.3501756048230968,1.351123429045507,1.3515978403618856,1.3520725849492974,1.3525476631590476,1.3530230753429349,1.3534988218532522,1.353974903042789,1.3544513192648309,1.3549280708731608,1.3554051582220596,1.3558825816663083,1.3563603415611873,1.3568384382624776,1.3573168721264632,1.3582747527701657,1.3587542002649664,1.3592339863526306,1.3597141113919637,1.360194575742279,1.3606753797633968,1.361156523815647,1.361638008259869,1.3621198334574132,1.3626019997701415,1.3630845075604283,1.3635673571911615,1.364050549025744,1.3645340834280928,1.3650179607626418,1.3655021813943418,1.365986745688662,1.3664716540115902,1.366956906729634,1.3674425042098222,1.367928446819705,1.3684147349273548,1.3693883491108678,1.3698756759254982,1.3703633497154324,1.370851370851371,1.371339739704542,1.3718284566467034,1.3728069362876782,1.3732966997326612,1.3737868127589756,1.3742772757410389,1.3747680890538034,1.3752592530727579,1.3757507681739276,1.3762426347338754,1.3767348531297028,1.3777203469401036,1.3782136231115825,1.378707252632754,1.3792012358834285,1.3796955732439604,1.3801902650952491,1.380685311818741,1.3821725850451165,1.3826690550828482,1.3836630659060567,1.3841606074615784,1.3846585069606652,1.3851567647897263,1.3856553813357269,1.38615435698619,1.3866536921291965,1.3871533871533872,1.387653442447963,1.3886546354078821,1.3896572741338085,1.3901591366380102,1.3906613617596275,1.391163949891814,1.3916669014282899,1.3921702167633452,1.3926738962918412,1.3931779404092108,1.3936823495114588,1.3941871239951646,1.3946922642574817,1.395703643709445,1.3972234661889833,1.3977308094955154,1.398238521376916,1.3987466022349744,1.3992550524720644,1.3997638724911452,1.4002730626957618,1.4007826234900473,1.401292555278722,1.4018028584670974,1.4023135334610746,1.4033360004923985,1.4043599596317582,1.4048724997630107,1.4053854141477362,1.4064123673184687,1.406926406926407,1.4074408224316817,1.4079556142467629,1.4084707827847236,1.408986328459242,1.4095022516846025,1.4100185528756959,1.4105352324480211,1.4110522908176868,1.4115697284014115,1.4120875456165258,1.4126057428809724,1.4136432792327027,1.4152024446142095,1.4157229309858954,1.4162438003497606,1.4167650531286895,1.4183311161940493,1.4188539068745483,1.4193770830938972,1.4199006452787346,1.4204245938563282,1.4214736519020124,1.421998762227798,1.422524260661733,1.423050147634251,1.4235764235764237,1.4241030889199593,1.4246301440972053,1.4251575895411515,1.4256854256854257,1.4262136529643015,1.4267422718126945,1.4272712826661658,1.4278006859609236,1.4283304821338219,1.4288606716223642,1.4293912548647045,1.429922232299647,1.430453604366648,1.4309853715058178,1.431517534157921,1.4320500927643784,1.4325830477672683,1.433116399609326,1.4341842955851898,1.4347188406077709,1.4363248691606902,1.4368610113290965,1.4373975539024084,1.4379344973293424,1.4384718420592861,1.4390095885422989,1.4395477372291137,1.440086288571137,1.4406252430204527,1.44116460102982,1.4417043630526778,1.4422445295431432,1.4427851009560155,1.4433260777467753,1.4438674603715864,1.4449514449514451,1.445494047822249,1.4460370583586213,1.4465804770201613,1.4471243042671618,1.4476685405606053,1.4482131863621706,1.4487582421342302,1.449303708339853,1.4498495854428057,1.4509425741992648,1.4514896867838047,1.452037212127744,1.4525851506983583,1.4531335029636276,1.453682269392239,1.4553310583556331,1.4558814861386724,1.4564323304391409,1.457535270484911,1.4580873671782764,1.4586398822852027,1.4597461696437806,1.460854136375958,1.4614087507026006,1.4619637863086403,1.4630751232803683,1.463631425608612,1.4641881511413655,1.4658608718014658,1.4664192949907238,1.466978143807412,1.4686572488938001,1.469217805095668,1.4697787893664183,1.470340202196581,1.4709020440774359,1.4714643155010128,1.4720270169600955,1.4725901489482207,1.4731537119596823,1.473717706489529,1.4742821330335694,1.4748469920883716,1.4754122841512647,1.4776777924570632,1.4782452570471005,1.479381494754285,1.4805194805194806,1.4810891301849365,1.4816592183797728,1.4822297456105695,1.482800712384688,1.4833721192102698,1.485088985088985,1.4856621572175415,1.4862357719500576,1.486809829799401,1.4873843312792308,1.4879592769040004,1.4891105026501543,1.4902635111694345,1.4908406852636136,1.4914183066062183,1.491996375717306,1.4925748931177392,1.493153859329189,1.4937332748741363,1.4943131402758731,1.4948934560585048,1.496055440866945,1.4966371109450425,1.4972192335086152,1.4978018090858558,1.49838483820578,1.4989683213982279,1.4995522591938644,1.5001366521241815,1.5007215007215007,1.5013068055189742,1.5018925670505852,1.5036525974025974,1.5042401912272958,1.5048282444685885,1.5054167576654864,1.50659516608636,1.5071850623925802,1.5077754208188991,1.5089575262056643,1.5095492742551566,1.5101414866028442,1.5107341637953884,1.51132730638031,1.5119209149059898,1.5125149899216697,1.5131095319774568,1.5137045416243216,1.5148959658995078,1.515492381634114,1.516089267172371,1.516686623069602,1.5172844498820062,1.5184815184815186,1.519080761385418,1.5196804774380772,1.5208813312329708,1.5220840843616645,1.522686174584909,1.5238917851744456,1.525099306398831,1.525703784919005,1.5263087428035882,1.5269141806230264,1.5275200989486704,1.5281264983527785,1.5287333794085185,1.529340742689968,1.5305569182308747,1.5311657316430587,1.5317750295864105,1.53238481263959,1.533605836394681,1.5342170782585292,1.5348288075560805,1.535441024870622,1.5360537307863726,1.5366669258884829,1.5378947859970633,1.5391246098963014,1.5397402597402599,1.5403564023011804,1.5409730381707964,1.5422077922077921,1.5428259115633864,1.5434445266041097,1.5440636379264536,1.544683246127869,1.545303351806764,1.54592395556251,1.5471666597068527,1.5477887612990147,1.5484113633751606,1.5490344665394968,1.549658071397202,1.5502821785544298,1.5509067886183117,1.5515319021969567,1.5521575198994555,1.5527836423358812,1.5534102701172918,1.5540374038557325,1.5546650441642365,1.555293191656828,1.5559218469485245,1.5565510106553375,1.5571806833942758,1.5578108657833467,1.5584415584415585,1.5590727619889224,1.5597044770464545,1.5609694441811233,1.5616026975053345,1.5622364648338676,1.5635055440091996,1.5647766867279063,1.5654130334894873,1.5660498980271154,1.5666872809729953,1.5673251829603623,1.5679636046234826,1.5686025465976567,1.5692420095192212,1.570522500755059,1.571163530347204,1.5718050834424866,1.5724471606824548,1.5737328901678862,1.5743765437016972,1.5750207239568943,1.5756654315802905,1.5763106672197584,1.5769564315242317,1.5776027251437088,1.5788969029329982,1.579544788408145,1.5801932058089694,1.580842155790821,1.5821416561243935,1.5827922077922076,1.5834432946732413,1.5840949174282508,1.5847470767190817,1.5853997732086695,1.5860530075610422,1.5867067804413229,1.5873610925157318,1.5877113335114619,1.588015944451588,1.5893272705824315,1.5899837461175754,1.5906407641944833,1.5912983254860062,1.5919564306661083,1.5926150804098673,1.593274275393481,1.5945943037906585,1.5952551385622253,1.5965784526547693,1.5972409333405184,1.5979039640309876,1.5985675454113994,1.5992316781681137,1.5998963629886325,1.6005616005616008,1.6012273915768092,1.6018937367251975,1.602560636698855,1.6032280921910245,1.6038961038961042,1.6045646725096496,1.6052337987283776,1.6059034832501666,1.6065737267740607,1.6072445300002711,1.6079158936301794,1.6085878183663391,1.609260304912479,1.6099333539735046,1.6106069662555018,1.6112811424657387,1.6119558833126675,1.6126311895059275,1.6133070617563494,1.6139835007759535,1.6146605072779572,1.6153380819767726,1.6160162255880142,1.6166949388284964,1.6180540770704706,1.6187345035116272,1.6194155024613586,1.6200970746425292,1.6207792207792209,1.6214619415967353,1.6228291101815553,1.6235135594055883,1.6241985862239028,1.6248841913679397,1.6255703755703756,1.6262571395651244,1.6269444840873413,1.6276324098734247,1.6283209176610192,1.629010008189018,1.6296996821975653,1.63038994042806,1.6310807836231564,1.6317722125267695,1.632464227884075,1.6331568304415143,1.6352381687980668,1.636628677445004,1.6373248189496596,1.63802155291517,1.6387188800981907,1.639416801256665,1.6401153171498293,1.6422144408492534,1.6429153432994665,1.6436168443000212,1.6443189446179622,1.645021645021645,1.6457249462807395,1.6464288491662316,1.6471333544504279,1.647838462906956,1.6485441753107706,1.6492504924381535,1.6499574150667162,1.650664943975407,1.6513730799445085,1.6520818237556436,1.6527911761917773,1.6535011380372207,1.6542117100776321,1.6549228931000213,1.6556346878927526,1.6563470952455464,1.6570601159494833,1.6577737507970067,1.659202866099418,1.6599183481460327,1.6606344475196937,1.6613511650197021,1.6627864576028724,1.6635050342915512,1.6642242323176175,1.6649440524873054,1.6662647167592395,1.6663855624894586,1.6671072539413814,1.66855251380609,1.669276083846769,1.6700002817139477,1.6707251082251082,1.671450564199153,1.6721766504564073,1.672903367818622,1.673630717108978,1.6743586991520878,1.6758165648021983,1.676546450065614,1.6772769713946183,1.6774515916497532,1.678008129621033,1.678739925578129,1.6794723601006325,1.6802054340247268,1.6809391481880565,1.681673503429729,1.6838804240379046,1.6846173520134133,1.6853549252848727,1.687571525361968,1.6883116883116882,1.6905360778878566,1.6912788441786684,1.6920222634508348,1.692766336565809,1.6942564477775748,1.6957491847359691,1.6964965400399514,1.6979932286504849,1.6987425637028464,1.6994925604197129,1.7002432196778487,1.7009945423555677,1.701746529332736,1.7024991814907782,1.7032524997126768,1.7047611378877987,1.7055164596148205,1.706272450953302,1.7071378470619187,1.7077864460295695,1.7085444515537724,1.7093031302622779,1.7100624830522653,1.710822510822511,1.7115832144733878,1.7123445949068723,1.7131066530265462,1.7138693897375998,1.7146328059468372,1.715396902562678,1.7161616804951625,1.7169271406559545,1.717693283958344,1.7184601113172542,1.7192276236492403,1.7199958218724976,1.7207647069068617,1.7215342796738147,1.7223045410964877,1.723075492099664,1.7238471336097847,1.7246194665549506,1.725392491864926,1.7261662104711433,1.7269406233067066,1.7272462358992582,1.7277157313063956,1.728491535406668,1.7300452356632132,1.7308231337008317,1.7316017316017318,1.7331610307747183,1.733941733941734,1.7355052521869474,1.7362880691703426,1.7370715926672606,1.7378558236346044,1.7394264118168323,1.7402127709541815,1.7409998414068972,1.7417876241405654,1.7425761201225212,1.7433653303218521,1.7441552557094018,1.744945897257774,1.7457372559413376,1.7465293327362295,1.7473221286203584,1.7481156445734103,1.7489098815768511,1.749934639052466,1.7500795899908033,1.7505005226696906,1.7520940597863675,1.7536905008431207,1.7544898128307427,1.7552898537850659,1.7560906247037635,1.7576943604340864,1.7584973272501825,1.7593010280396022,1.7601054638091675,1.7609106355675435,1.7617165443252403,1.7625231910946195,1.763330576889899,1.7641387027271538,1.7649475696243233,1.7657571786012154,1.7665675306795088,1.7673786268827592,1.768190468236403,1.7690030557677616,1.7690239326551844,1.7698163905060458,1.7714453057297053,1.7722608882829878,1.7722638908936008,1.7738943084565206,1.7747121481561314,1.7755307423204103,1.776350091993839,1.7779910620557273,1.778812684542814,1.779288742598657,1.779635066736315,1.7804582096904025,1.7812821144611983,1.7837584102644344,1.7845853729024799,1.7854131026672773,1.7862416006267514,1.787900905411356,1.788731714382272,1.7895632958394465,1.7903956508607672,1.7920626859174347,1.7928973681186073,1.7937328282155869,1.7945690672963401,1.7954060864508625,1.796243886771185,1.797082469351377,1.7979218352875523,1.7987619856778738,1.799602921622557,1.801287154586172,1.8021304538158474,1.8029745430213813,1.8038194233133316,1.8046650958043364,1.8055115616091226,1.8063588218445095,1.8072068776294128,1.808055730084852,1.8089053803339517,1.8092047257979191,1.8097558295019507,1.8106070787162039,1.811459129106188,1.813165637941898,1.8134722979703766,1.8140200986572335,1.8148753650875293,1.815148956018575,1.815731438372948,1.8165883196558044,1.8174460100805712,1.8191638229445413,1.8200239476835223,1.8208848861639781,1.8226092089728454,1.8234725956184983,1.8243368006401184,1.8252018252018252,1.8260676704699477,1.8269343376130278,1.8271726467744709,1.827801827801828,1.8286701422093345,1.8295392820107648,1.8304092483835708,1.8312800425074451,1.8321516655643262,1.8338974032161266,1.834771520186201,1.8356464708396039,1.8373988779716703,1.838276336843672,1.8391546341856901,1.8400337712001191,1.8409137490916547,1.8417945690672963,1.8425557518477675,1.8426762323363568,1.843558740110464,1.8444420936035695,1.8453262940319506,1.8462113426142204,1.8470972405713288,1.847983989126572,1.8488715895055954,1.8497600429364007,1.8506493506493509,1.8515395138771764,1.8524305338549807,1.8532614386437307,1.8533224118202454,1.8551087466750116,1.8560032060514222,1.856898528389122,1.8577947149375722,1.8586917669486476,1.8595896856766423,1.8604884723782742,1.8613881283126934,1.862288654741485,1.8631900529286782,1.8649954696466327,1.8658994907177167,1.8668043886278611,1.867710164653396,1.8678160919540232,1.8685959819057034,1.8686168200731308,1.8695243561683579,1.8704327742228617,1.8713420755229213,1.8722522613573198,1.8740752917968109,1.8748902610065468,1.8749881389920358,1.875901875901876,1.8764447591387274,1.8768165038277178,1.8777320240734876,1.8786484379456563,1.879565746753247,1.8804839518078404,1.8814030544235822,1.8841657608177433,1.8849649245100268,1.885088466871033,1.8878620153755026,1.8887883460994355,1.889715586328252,1.890643737402087,1.8919756513429598,1.89250277745853,1.89341914931952,1.8934336691346036,1.8952982025360168,1.896231846970763,1.8971664117055937,1.8981018981018982,1.8990383075237542,1.8999756413379314,1.9018530876238386,1.9027932028426344,1.9037342479478978,1.904676224319965,1.9075077548813921,1.908406543556882,1.9084534701788047,1.9103477167993297,1.91224572744692,1.913196147788593,1.9141475133518893,1.916053085789273,1.9170072954933512,1.9179624560790478,1.9189185689684194,1.9198756355863587,1.9208336573606033,1.9216229404428398,1.9217926357217423,1.9227525721032217,1.923713467941354,1.9246753246753248,1.9266019266019265,1.927375942947091,1.9275666746873554,1.928532389454233,1.929499072356215,1.9304667248498744,1.9314353483947062,1.932404944453137,1.9343470599752008,1.9353195823784057,1.9362930831743712,1.9372675638402868,1.9376588525524696,1.938243025856319,1.9392194707056167,1.9411753148515634,1.9421547171294902,1.9431351082032555,1.944116489571035,1.9450988627340322,1.9460822291964863,1.948051948051948,1.9490383034686836,1.9500256582323454,1.9509414046791684,1.951014013862468,1.952003371881668,1.9529937338156516,1.953985101193223,1.954977475546292,1.9559708584098832,1.95696525132214,1.9579606558243383,1.9589570734608903,1.959954505779353,1.9600897901778138,1.9609529543304378,1.9619524206680172,1.9629529063491329,1.963954412934005,1.9649569419860387,1.9659604950718332,1.9669650737611906,1.9689773142458562,1.9699849791968524,1.9709936760628006,1.9720034064296361,1.973014171886545,1.974025974025974,1.9760526947385266,1.977067616512917,1.978083581372379,1.9789886578207747,1.9791005909257835,1.9793470837907665,1.9811377505664693,1.9821579038880788,1.983179108372308,1.9839069554772109,1.9842013656446649,1.9852246773340123,1.987274470495947,1.989328500956408,1.9913867818678994,1.9924175203678312,1.9934493264374156,1.99352953421227,1.9944822017360877,1.9955161479267236,1.9957323288227873,1.9965511666756481,1.9970396767393093,1.9986244285309707,1.9996626749873505,2.0017424073586323,2.0027838966444587,2.0038264702502078,2.005914877202006,2.006960713947158,2.0080076418104587,2.0090556625003386,2.010104777728799,2.0111549892114158,2.0122062986673543,2.0132587078193773,2.0143122183938513,2.015366832120759,2.016422550733709,2.017479375969942,2.0185373095703456,2.0195963532794594,2.0205403791610688,2.020656508845485,2.021717778020299,2.0227801625594584,2.0249082847715147,2.0259740259740258,2.0270408896001313,2.028108877423946,2.0291779912233263,2.0302482327798783,2.0313196038789707,2.0323921063097408,2.0333896457453515,2.033465741865108,2.034540512341781,2.0356164195402693,2.0366934652648943,2.0377716513237956,2.0388509795289456,2.0399314516961575,2.0410130696450954,2.0420958351992833,2.044264816436882,2.0453510357867426,2.046438410074774,2.0475269411439627,2.0486166308412184,2.049185424698421,2.049707481017385,2.0507994935272507,2.0518926702295572,2.052987012987013,2.0551792041380934,2.0562770562770565,2.057376081961865,2.0584762830752137,2.059577661503825,2.0606073691047433,2.0606802191384634,2.0617839578739416,2.0639949862469975,2.0651022796945546,2.066210761862936,2.0673204346673737,2.0684313000272163,2.0695433598659405,2.0706566161111613,2.0728867255523156,2.074003582624272,2.076240911192367,2.0773613865896654,2.0784830720035905,2.0796059693952724,2.079957521184097,2.080730080730081,2.0818554079776366,2.0829819531118234,2.0840487112113126,2.0841097181108013,2.0852387049570145,2.0854357855820314,2.0863689156372085,2.0875003521424347,2.087645012366403,2.0886330164680684,2.0894493168584036,2.0897669106138164,2.0903718543920005,2.0909020365837314,2.0920383963862226,2.093175992034067,2.094314825544423,2.094323193654591,2.0954548989388404,2.0965962142432732,2.0977387734880923,2.1000276319425257,2.1011739352350705,2.101782446648127,2.102321490633888,2.1033867193283005,2.1034703001916117,2.104620365965363,2.1057716900167667,2.1069242744119596,2.108078121221604,2.108408023900982,2.1092332325209036,2.1096241533149307,2.1103896103896105,2.1115472569120404,2.1127061741770854,2.113866364278226,2.1146354294812664,2.1150278293135436,2.116190571385734,2.1173545926021173,2.1174202138761085,2.117737864681949,2.1183978716762133,2.1185198950746558,2.1196864809199614,2.120726964911891,2.1208543522593106,2.1220235112186603,2.123193959928654,2.124365700524641,2.1267130659395854,2.1278886950528744,2.129065624640846,2.130243856862562,2.130269863153019,2.1314233938818656,2.132604237867396,2.134969855435746,2.1361546333799386,2.1373407270131315,2.1385281385281387,2.139716870122651,2.140906923999249,2.1420983023654143,2.1432910074335463,2.144485041420975,2.145680406549972,2.1492745110835565,2.1504752231009214,2.151654774844185,2.1516772774458635,2.1528806763706094,2.154085422132429,2.155291516993645,2.1564989632216522,2.157707763088929,2.1589179188730507,2.159819561088049,2.160129432856706,2.161342307327709,2.162556544579017,2.1637721469087405,2.16620745602175,2.166667195218767,2.1667466088960925,2.1674271674271677,2.1686482531552955,2.169870715530242,2.1710945568813593,2.1723197795432556,2.1735463858558157,2.1736387671200905,2.1747743781642086,2.1760037588189087,2.1772345301757072,2.178466694595727,2.1797002544454416,2.180935212096685,2.1814310997817663,2.1821715699266724,2.1845961699262437,2.1846484956587116,2.187131050767414,2.18794496618257,2.1886193391324404,2.1896192544656707,2.19086548056383,2.192200165274212,2.1933621933621934,2.194612684920553,2.1958646031663713,2.197117950542608,2.198372729497801,2.1996289424860858,2.2008865919672096,2.20214568040655,2.203406210275128,2.203857553212567,2.204668184049628,2.2059316042124064,2.2071964732515195,2.208462793660728,2.2097305679395234,2.2122704881325572,2.2148162539416854,2.2151613595913218,2.21609133526232,2.2173678855706505,2.219925403316407,2.2209026717648057,2.2212063758515,2.222488827569659,2.2237727610344593,2.2249151367602873,2.2250581788154045,2.2263450834879404,2.2276334776334776,2.228923363839403,2.2302147446991016,2.2328020007834395,2.2330789132027076,2.2334384643749274,2.235395266754152,2.2366941599945664,2.237994563575959,2.2392964801341764,2.240599912311205,2.241904862755183,2.243211334120425,2.244519329067434,2.245531271042529,2.2458288502629227,2.2471399003798305,2.248452482097342,2.2497665981009054,2.2510822510822512,2.252399443739409,2.253718178776727,2.2550384589048913,2.2563602868409434,2.257683665308299,2.2590085970367664,2.260335084762566,2.2629927391832156,2.2643239113827347,2.2656566505889635,2.2669909595704647,2.2710033329502357,2.2723439488492616,2.2725541755479095,2.2736861484646482,2.2750299346044027,2.2763753100831754,2.277722277722278,2.2790708403497035,2.280421000800148,2.2817727619150263,2.2831261265424967,2.284481097537477,2.288555677378507,2.291280148423006,2.294011114034952,2.2953790395650864,2.2959015831413057,2.296748597464588,2.2969208211143695,2.2994926220732674,2.300867094650717,2.3022432113341207,2.3036209750751944,2.3050003888327244,2.305225091696522,2.306381455572588,2.3077641782677754,2.30914855989841,2.3105346034517704,2.31189250835515,2.311922311922312,2.3133116883116887,2.314702735628773,2.316095456889681,2.3174898551177905,2.3188859333437652,2.320283694605575,2.320321671280512,2.321683141948522,2.3230842784252563,2.324487107095803,2.3258916310275826,2.327297853295435,2.3287057769816393,2.330115405175938,2.33152674097556,2.332939787485242,2.3343545478172527,2.335771025091413,2.3371892224351245,2.3386091429833837,2.3400307898788144,2.3414541662716846,2.3428792753199326,2.3443061201891897,2.345734704052803,2.3471650300918596,2.351466493189157,2.352903819896485,2.3543429048016207,2.3557837511325883,2.357226362125321,2.358670741023682,2.3601168910794907,2.361564815552546,2.363008594096972,2.36301451771065,2.3644660008296374,2.3659192681933923,2.3673743230938804,2.370289808713454,2.3717502460570854,2.3724195617128268,2.3734455603020557,2.3742664697478513,2.3746765264347003,2.376142376142376,2.3765316524163183,2.3776100366588326,2.3790795113415633,2.38055080355637,2.38349885408709,2.384975619176363,2.386233443755828,2.3864100862641013,2.3864286936006147,2.386454215344482,2.387934645999162,2.3894169145565796,2.3909010244413973,2.3923869790867927,2.3938747819344837,2.395364436434754,2.3968559460464816,2.3970301302648247,2.398349314237165,2.3998445444829484,2.402840605087796,2.4042478903375657,2.4043414424426293,2.405263691551209,2.406554591589123,2.407348748812163,2.40885522487525,2.40941410878225,2.4103635875708513,2.411873840445269,2.413385987053699,2.4149000309602564,2.416395017074799,2.4164159757380097,2.4183038692666994,2.4194535822442798,2.4209752511639304,2.4224988353370986,2.4240243383820212,2.425551763926055,2.427081115605706,2.428612397066656,2.428795155941586,2.430145611963794,2.431680763961244,2.4332178567323957,2.4332187903074938,2.4347568939599302,2.4362978793358545,2.437840816561526,2.4393857093476865,2.4409325614144888,2.4424813764915285,2.4429391206799846,2.4440321583178726,2.44558491064209,2.447139637222282,2.4486963418261127,2.4502550282308397,2.4508458733057665,2.4518157002233436,2.452545855235291,2.4542246925980398,2.454943016167506,2.4563256666273188,2.456509667741321,2.458078320147286,2.459648977220862,2.461221642807321,2.462796320761772,2.4643730149491994,2.46595172924449,2.4675324675324672,2.4707000316756416,2.4715358968721124,2.471889585394473,2.472286865350449,2.4723694731713985,2.4738757386572297,2.475466655530964,2.477059619916763,2.478654635769897,2.4797887245959576,2.4801778199035,2.4802517070558308,2.4818508377502577,2.483092322006187,2.48666062619551,2.488268034486522,2.489877522219049,2.491489093430841,2.492626270464402,2.497520618325988,2.497619386969054,2.4979562941925044,2.501202501202501,2.5028287707091352,2.50445715637648,2.506087662337662,2.5073993022565104,2.5077202927365794,2.5093550517279333,2.5109919434772663,2.512051198397726,2.5126309721609985,2.5141950524841192,2.5142721419664595,2.5159154570919275,2.5175609217466643,2.5176403532103944,2.51765815692107,2.51844980416409,2.5192085401509487,2.5208583165361165,2.5223079043296703,2.522339227226026,2.5225102551445935,2.522536151302928,2.524164360229934,2.5258206360568565,2.526755915979092,2.529139717050361,2.530802530802531,2.5324675324675323,2.5341347263664575,2.535804116831785,2.5374757082074155,2.5391495048487136,2.5408255111225406,2.5425037314072987,2.54418417009296,2.5475517202850098,2.5492388406295694,2.5498863568727397,2.5509281970514577,2.552619793999104,2.554313635932747,2.556009727324468,2.55639537311563,2.5573947827638976,2.5577080726582393,2.559047977300114,2.5594086764299533,2.5611115431474714,2.562816677330659,2.563027396206228,2.5645240835114254,2.566233766233766,2.567945730053802,2.569659979539819,2.5713765192723113,2.5725834193223696,2.5729683393217724,2.5730953538440167,2.574816487859966,2.5765399259375164,2.578265672706396,2.5799937328087466,2.5803801482203896,2.5811463007534585,2.5817241108991613,2.5834568116447314,2.5851918397250837,2.586929199832426,2.5886688966715865,2.5904109349600604,2.5921553194280467,2.5939020548184972,2.595651145887154,2.5974025974025974,2.599156414146286,2.600912600912601,2.604432103755514,2.606195429485883,2.6079611445465103,2.6097292537970507,2.6109128784753732,2.6114997621103457,2.6132726743724706,2.615047995482778,2.6168257303539426,2.6186058839120063,2.6203884610964256,2.622173466860115,2.6239609061694953,2.625750784004536,2.6275431053588054,2.629337875239515,2.6298672247580623,2.6311350986675666,2.6329347806775987,2.6347369263180354,2.6365415406511294,2.6383486287530156,2.640158195713751,2.641970246637371,2.642020859294808,2.64378478664193,2.6456018208595533,2.647421354436485,2.649243392533138,2.651067940324139,2.6528950029983798,2.6536444257904384,2.653869885286635,2.6547245857590687,2.6551884906405605,2.6583913324244812,2.6595954069483057,2.6602285068076363,2.662068222234198,2.663910483979688,2.665755297334245,2.6676026676026674,2.6694526001044725,2.6713051001739414,2.6731601731601735,2.6750178244271368,2.67687805935372,2.6787408833337856,2.6806063017762183,2.682474320104982,2.686218178193056,2.6880940288761517,2.689972501293256,2.69185360094451,2.693737333345451,2.6956237040270654,2.6962412037301906,2.697512718535844,2.6994043824338356,2.7012987012987013,2.703195680723771,2.7034397050763856,2.7050953263180952,2.7054255715568254,2.7069976437065044,2.7089026385296617,2.7108103164441193,2.71114641412867,2.7127206831223747,2.7146337442529265,2.718467972705261,2.7193831509562387,2.720389151484558,2.722313047631294,2.7223725757180626,2.7240698201241567,2.7242396669148263,2.7261690151208566,2.728101098051488,2.7300359215252836,2.731973491377324,2.733913813459268,2.734855219133813,2.73585689363941,2.7378027378027383,2.7397513518509964,2.741702741702742,2.7436569132934068,2.7454120853003015,2.7456138725753565,2.7475736255179513,2.748157791754376,2.749536178107607,2.751501536347855,2.7534697062594056,2.757414505265508,2.759391146487921,2.761370623637482,2.763352942821715,2.7639612822995043,2.7653381101656964,2.7673261318121134,2.7693170139213303,2.7713107626714537,2.773307384258393,2.775306884895926,2.7764831798220153,2.7771295794809547,2.7773092708157643,2.7791636005636065,2.779314548267617,2.781322723519255,2.7833338028565797,2.7853477925836825,2.785737157446095,2.7873646990229175,2.7893845285149634,2.7909343700830855,2.79140728741889,2.7934329821122272,2.795461618991031,2.7974932044699488,2.7995277449822904,2.8000630479099295,2.8015652469800947,2.803514376996805,2.803605716934195,2.805067051109736,2.805649161334293,2.80686229931422,2.807695586689022,2.8097449995260213,2.8117974063920013,2.8131853914586364,2.813610101716456,2.8200371057513918,2.8221045816353736,2.8223656235781656,2.8241750912330517,2.826248641226615,2.8283252383178903,2.830404889228419,2.832487600699521,2.834573379492378,2.8362579574161613,2.8366622323880986,2.8387541661877944,2.8402756121587553,2.8408491877126565,2.8429473038040247,2.845048521323466,2.8471528471528473,2.8492602881944107,2.850538713788146,2.8513708513708513,2.8527810248878502,2.853484543625389,2.855601371921847,2.8577213432447284,2.859844464599294,2.8619707430116357,2.8628955271746106,2.864100185528757,2.866232799218652,2.8705075684941455,2.8726497383213805,2.8737827419369006,2.874795107804817,2.8769436841185723,2.8790954744582273,2.8812504860409054,2.8834087261053556,2.885570201912031,2.887734920743173,2.8899028899028902,2.8920741167172426,2.8936850384132393,2.8942486085343235,2.89541596418762,2.896426372724341,2.898607416679706,2.9007917478151093,2.9029793735676095,2.9051703013967165,2.907364538784478,2.909562093235563,2.911762972277345,2.913967183459992,2.9161747343565527,2.9183856325630395,2.92059988569852,2.9219661577665024,2.922817501405201,2.925038487348518,2.927262851217224,2.9294906007234776,2.9317217436029317,2.932132052137559,2.933956287614824,2.938435610191336,2.940416008147162,2.940680404393162,2.9429286310020255,2.9451802978964414,2.947435412979058,2.949693984176743,2.951364883336964,2.9519560194406824,2.954221526746469,2.956490514094201,2.95876298950857,2.961038961038961,2.9633184367595455,2.964689916487397,2.965601424769376,2.967887933192482,2.9687923049519056,2.97017797017797,2.9724715439001153,2.9747686625584615,2.9769911667926436,2.9770693343779193,2.977663297723782,2.979373567608862,2.981681370527227,2.986307718658378,2.9886262805517463,2.9909484454939,2.993274221890085,2.9956036181717116,2.9979366427964558,3.000273304248363,3.0026136110379484,3.0049575717023025,3.0073051948051948,3.009656488937177,3.011754377408184,3.012011462715688,3.0124574627487153,3.0143701247851604,3.016732483817123,3.0190985485103132,3.0214683275907768,3.0221089593323542,3.0238418298119796,3.0262190639549136,3.030984763268228,3.033373246139204,3.03576549633332,3.038161522770836,3.040561334400197,3.042964940198142,3.043040825556817,3.045372349169818,3.046915090988039,3.047783570348891,3.050198612797662,3.051859029578445,3.0526174856071764,3.0589602831236777,3.0598971775442365,3.0623314632861174,3.063380764850364,3.06476962527918,3.067211672789362,3.069657615112161,3.0721074615727453,3.0731925460726077,3.0745612215260776,3.077018904357034,3.0794805194805197,3.081946076341593,3.0844155844155843,3.0868890532082194,3.0879390752557563,3.089366492255738,3.0943333194137055,3.096822726750321,3.099316142794404,3.100703768839876,3.1018135772366233,3.104315039798911,3.1068205402345836,3.109330088328473,3.111843693897049,3.1143613667885517,3.116883116883117,3.119408954092909,3.1219388883622465,3.122117207428729,3.124472929667735,3.127011088018399,3.1295533734558125,3.129605920185073,3.1319513379174424,3.1320997960542307,3.1330331294750438,3.1346503659207245,3.1372050931953135,3.139763988051101,3.142327060694408,3.1474657803357724,3.1500414479137886,3.152621334439517,3.1552054502874176,3.1577938058659965,3.1629832780202545,3.1681898348565016,3.170799546417339,3.172020672812564,3.1734135608826457,3.176031888903176,3.178654541164863,3.1839128613322165,3.185297171271926,3.189188607581317,3.191833042579311,3.1934882375229026,3.194481866681037,3.197135090822799,3.199792725977265,3.2024547831536183,3.20512127339771,3.2077922077922083,3.2091224139741668,3.210467597456755,3.2131474535481215,3.215831787260359,3.218520609824958,3.223911766625335,3.2293210145559144,3.2320324511760283,3.234748444832479,3.2374690070232544,3.2401941492850583,3.2434486632959914,3.2456582203631106,3.2483971724478056,3.2511407511407513,3.2538889681746825,3.2566418353220383,3.2593993643951307,3.262161567246313,3.26492845576815,3.2677000418935904,3.2704763375961337,3.271103896103896,3.273257354890008,3.27604310583034,3.27883360251333,3.280434727912942,3.2816288570764276,3.2844288816985068,3.2872336886000424,3.2890577413001245,3.29004329004329,3.292857698332463,3.295676925813912,3.298500984876307,3.300021985623311,3.304163647511287,3.304247372601992,3.3070022760744413,3.3126941904910927,3.3155475015940135,3.31556963948396,3.318405732198836,3.3270100685831023,3.3275157364412715,3.3298881049746107,3.332771124978917,3.335659141551689,3.337220904732779,3.3381035969702677,3.3443533009128146,3.3457360575431783,3.347261434217956,3.3501746295479977,3.353092900131228,3.355065031275625,3.356016259242066,3.361878296376113,3.3648170011806378,3.367760848075809,3.3766233766233764,3.379587927436918,3.3825576883573367,3.385532673131618,3.3882384610334437,3.3885128955551496,3.3914983694719383,3.394489108774823,3.3957545142674217,3.3979570500161183,3.4004864393556975,3.4065049994253536,3.4095222757755974,3.412544901906604,3.415572892059139,3.421645021645022,3.4246891898137446,3.427684364310025,3.4277387794751997,3.430793805125356,3.433854281311909,3.4369202226345084,3.439991643744995,3.4430685593476293,3.4435225369325675,3.446150984199328,3.448455328612357,3.449238933109901,3.4523324209422865,3.455431462612791,3.45853607309133,3.4616462674016635,3.4647620606216467,3.467883467883468,3.471010504373895,3.4741431853345213,3.477281526062014,3.480425541908363,3.483575248281131,3.485772978239026,3.486447241640918,3.4867306606437043,3.489891794515548,3.493058665472459,3.4962312891468206,3.4994096812278634,3.5000542460720436,3.5025938574619198,3.505783833652686,3.5089796256614854,3.515388720868173,3.5186020560792044,3.521821271135087,3.525046382189239,3.525889946531114,3.528235033077861,3.5282774054543076,3.531514357202431,3.5347572537655183,3.5380061115355232,3.541260946964719,3.5445217765659756,3.5477886169130413,3.5482848268654013,3.5510614846408206,3.553899945529801,3.5543403964456597,3.556733727695606,3.557625369085628,3.560916419380805,3.564213564213565,3.5675168205288688,3.5708262053345545,3.574141735701624,3.577463428764544,3.5807913017215345,3.5874656564311738,3.590812172901725,3.594164938702754,3.600889288447754,3.6042609076316947,3.607638846626663,3.6110231232182453,3.6144137552588256,3.6178107606679033,3.6212141574324077,3.6219221701358073,3.6246239636070143,3.6252175920545957,3.628040197314467,3.631462876745896,3.6348920201611423,3.6349879798097193,3.636691656106473,3.6383276458890825,3.6417697723279563,3.645218417945691,3.6486736012802368,3.6521353409398953,3.6543381762896434,3.655603655603656,3.6590785640215295,3.6625600850148903,3.666048237476809,3.669543040372402,3.6730445127391693,3.676552673687344,3.6800675424002383,3.6835891381345927,3.687117480220928,3.690652588063901,3.6941944811426577,3.6977431790111908,3.7012987012987018,3.7048610677099614,3.708430298025674,3.708693430215377,3.7120064121028444,3.7155894298751444,3.7191793713532846,3.722776256625387,3.7263801058573565,3.7299909392932653,3.7324621548224037,3.7336087772557223,3.7372336401462616,3.7408655484457234,3.7445045227146396,3.7481505835936217,3.7509832962878025,3.751803751803752,3.755464048146975,3.759131493506494,3.7628061088471645,3.7664879152158997,3.770176933742066,3.7738731856378918,3.777576692198871,3.781287474804174,3.78500555491706,3.7887309540852847,3.792463693941526,3.7962037962037964,3.7994508866008427,3.799951282675863,3.8037061752476773,3.8074684958957956,3.8112382666838114,3.8150155097627843,3.818800247371676,3.822592501837785,3.826392295577186,3.8285994941175465,3.8340145909867025,3.8416673147212066,3.8493506493506495,3.853203853203853,3.855476530630698,3.857064778908466,3.8609334496997487,3.864809888906274,3.8686941199504017,3.8725861663487424,3.880393799748638,3.8816090021570813,3.88823297914207,3.8921644583929726,3.896103896103896,3.900051316464691,3.904006743763336,3.907970202386446,3.9119417168197663,3.9159213116486766,3.919909011558706,3.9239048413360345,3.92790882586801,3.9319209901436665,3.9359413592542434,3.939969958393705,3.9440068128592722,3.948051948051948,3.9521053894770533,3.956167162744758,3.960237293570627,3.9643158077761576,3.972498090145149,3.972822817509466,3.9766019104862083,3.9807142185632367,3.9848350407356623,3.9889644034721754,3.9931023333512963,3.9972488570619413,4.001404001404002,4.005567793288917,4.00974025974026,4.01169217142418,4.013921427894316,4.018111325000677,4.0223099784228316,4.026517415638755,4.030391169830126,4.033571567409128,4.034958751939884,4.039192706558919,4.043435556040598,4.047687328444426,4.0519480519480515,4.056217754847892,4.0593094506137986,4.060496465559757,4.0647842126194815,4.069081024683562,4.0733869305297885,4.082026139290191,4.084722584006252,4.0863595003722395,4.090702071573485,4.095053882287925,4.09941496203477,4.1037853404591145,4.104625692892808,4.108165047332604,4.112554112554113,4.116952566150427,4.121360438276927,4.125777759218274,4.130204559389109,4.134640869334747,4.139086719731881,4.143542141389289,4.148007165248544,4.156966144007181,4.161460161460162,4.165963906223647,4.167465321240268,4.170477409914029,4.173508284744903,4.184076792772445,4.188629651088846,4.190064692659613,4.1931924284865465,4.197765157416194,4.202347870470141,4.2069406003832235,4.214483164569223,4.216156242443208,4.230055658627087,4.234709185204235,4.239372961839923,4.244047022437321,4.253426131879171,4.253588439870353,4.258131249281692,4.262846787763731,4.2675727819852,4.272309266759877,4.2770562770562774,4.280412841724853,4.281813847998498,4.286582014867093,4.288539988362504,4.291360813099944,4.292346253604132,4.296150278293135,4.300950446201843,4.304204810307966,4.305761352741219,4.31058303398729,4.3132517200619205,4.315415526177858,4.320258865713412,4.325113089158034,4.329978233240326,4.334854334854335,4.339741431060484,4.344639559086511,4.349548756328417,4.3544690603514145,4.359400508890883,4.364343139853345,4.369296991317423,4.374262101534828,4.3792385089313415,4.389225369841106,4.394235901085216,4.3992578849721715,4.409336368099256,4.413147619970648,4.414392946503039,4.419461135879047,4.419661601260697,4.4245409762651144,4.432198135007586,4.434735771141301,4.439850806632814,4.441060066703669,4.4416641995293205,4.442417927354774,4.444977655139318,4.450116357630809,4.455266955266955,4.460429489398203,4.465604001566879,4.470790533508304,4.475989127151918,4.48119982462241,4.48642266824085,4.491657700525845,4.496904964194684,4.5021645021645025,4.507436357553454,4.508393521378087,4.512720573681887,4.514273398637668,4.518017194073533,4.523326262456697,4.528647822765469,4.544687897698523,4.5500598692088055,4.555444555444556,4.560842001600296,4.566252253084993,4.571675355523337,4.577111354757014,4.581015917270025,4.582560296846012,4.588022228069904,4.593497194929176,4.598985244146535,4.604486422668241,4.610000777665449,4.615528356535551,4.620752843704999,4.621069206903541,4.626623376623377,4.632190913779362,4.637157411186844,4.6377718666875305,4.643366283897044,4.648974214191606,4.65459570659087,4.665879574970484,4.671542050182826,4.676618121996274,4.6772182859667675,4.682908332543369,4.683072586202847,4.688612240378379,4.694330060183719,4.700061842918986,4.70580763979297,4.711567502265177,4.717341482047364,4.718160767369871,4.723129631105092,4.728932001659275,4.734748646187761,4.740579617426908,4.74387678720473,4.746424968373181,4.752284752284752,4.7581590226831265,4.7640478333547644,4.769951238352726,4.771456862925229,4.773166094421305,4.775869291998324,4.781802048882795,4.787749563868967,4.793711892092963,4.794443643167152,4.799689088965897,4.805681210175592,4.811688311688312,4.8177104497505,4.823747680890538,4.824504228519285,4.829800061920513,4.8358676499380016,4.841950502327861,4.8480486767640425,4.853894112718309,4.854162231211412,4.860291223927588,4.866435713464791,4.872595758671709,4.878771418695373,4.884962752983057,4.885138324042724,4.89116982128418,4.8973926836522255,4.903631400446687,4.909886032335012,4.916156640294572,4.928746029898399,4.9350649350649345,4.941400063351283,4.947751477314459,4.954119239833526,4.9605034141116615,4.966904063678257,4.97332125239102,4.979755044438098,4.98620550434022,4.9926726969528525,4.999156687468376,5.0056575414182705,5.012175324675324,5.0187101034558665,5.025261944321997,5.031089193825044,5.0384170803018975,5.045020510289187,5.051641272113713,5.058279434100722,5.064935064935065,5.07160823366357,5.078299009697427,5.080079176367164,5.085007462814597,5.091733663162235,5.097844801705854,5.098477681259139,5.105239587998208,5.112019454648936,5.118817352859907,5.125633354661318,5.132467532467532,5.139319959079638,5.153079851875033,5.159987465617493,5.166913623289463,5.173858399664852,5.180821869920121,5.1878041096369945,5.194805194805195,5.201825201825202,5.208864207511028,5.215922289093021,5.219588806220354,5.2229995242206915,5.237211767824013,5.24434693372023,5.251501568009072,5.25867575047903,5.265869561355197,5.269702927663516,5.273083081302259,5.280316391427502,5.28756957328386,5.302135880648278,5.309449171518137,5.3167826648489624,5.324136444468396,5.33151059466849,5.333778210580064,5.346320346320347,5.35375611870744,5.361212603552437,5.364704939646805,5.3686898875183395,5.376188057752303,5.38370720188902,5.391247408054131,5.398808764867671,5.406391361447542,5.413995287413009,5.421620632888239,5.429267488505853,5.431953073653931,5.436935945410522,5.444626095262588,5.452338030241713,5.460071843050567,5.475605475605477,5.490259740259741,5.491227745150713,5.499072356215214,5.506939412518811,5.514829010531016,5.522741247274964,5.530676220331393,5.538634027842661,5.546614768516786,5.554618541631529,5.56264544703851,5.567674600576711,5.570695585167365,5.578769057029927,5.5868659642244545,5.5949864089398975,5.603130493960189,5.611298322668586,5.619489999052043,5.644209163270747,5.65249728245323,5.660809778456838,5.669146758984756,5.677508332375589,5.685894607608049,5.694305694305695,5.701812914580448,5.711202743843694,5.719688929198588,5.728200371057514,5.736737182340759,5.745299476642761,5.751548750610077,5.7538873682371445,5.762500972081811,5.771140403824062,5.7798057798057805,5.788497217068647,5.79559096365819,5.797214833359412,5.805958747135219,5.814729077568956,5.82352594455469,5.830325972139186,5.8323494687131054,5.84119977139704,5.850076974697036,5.858981201446955,5.867912575229648,5.876871220382672,5.885857262004051,5.894870825958116,5.901068100901448,5.903912038881365,5.912981028188402,5.922077922077922,5.931202849538752,5.94035594035594,5.949537325116923,5.958747135217724,5.967985502869224,5.977252561103493,5.98654844378017,5.9958732855929116,6.010987904675612,6.0146103896103895,6.017898858932211,6.024022925431376,6.033464967634246,6.0429366551815535,6.061969526536456,6.07153099266664,6.081122668800394,6.090744698339636,6.100397225595324,6.110080395794681,6.119794355088473,6.149122443052155,6.158961038961039,6.1688311688311686,6.178732984511476,6.188666638827411,6.198632285588808,6.207088541562168,6.218660176656946,6.228722733577103,6.238817908185818,6.241263058274809,6.24894585933547,6.25143234879867,6.259106746911625,6.269300731841449,6.279527976102202,6.279544605899785,6.289788642729819,6.300082895827577,6.305772635459476,6.310410900574835,6.331168831168831,6.341599092834678,6.351267779839208,6.352063777806352,6.362563056777933,6.373097101573924,6.383666085158622,6.394270181645598,6.39428862537177,6.404909566307237,6.415584415584417,6.423681979758432,6.426294907096243,6.437041219649916,6.442719817946404,6.458642029111829,6.463316267713455,6.469496889664958,6.471030123755352,6.471800777583837,6.480388298570117,6.491316440726221,6.499746771183207,6.502281502281503,6.513283670644077,6.524323134492626,6.5440501013243075,6.546514709780016,6.55766720502666,6.58008658008658,6.591353851627824,6.602659775901628,6.614004552148883,6.625388380982185,6.636811464397672,6.644052464947987,6.648274005786959,6.671318283103378,6.682900432900433,6.694522868435912,6.706185800262456,6.7296340023612755,6.739385677895281,6.741419701139491,6.753246753246753,6.7651153767146734,6.777025791110299,6.788978217549646,6.800972878711395,6.813009998850707,6.8372125210491115,6.849378379627489,6.861587610250712,6.873840445269017,6.874690747154874,6.876489907474671,6.886137118695259,6.898477866219802,6.923292534803327,6.935766935766936,6.9482863706690425,6.960851083816726,6.973461321287409,6.983588611267527,6.986117330944918,6.998819362455727,7.011567667305372,7.024362498815054,7.037204112158409,7.050092764378478,7.063028714404862,7.0760122230710465,7.089043553131951,7.102122969281641,7.115250738171256,7.12842712842713,7.154926857529088,7.168250743669739,7.173909048712529,7.18162434580345,7.195047942711495,7.208521815263389,7.2220462464364905,7.290436835891382,7.298696797917039,7.300121922577646,7.304270681879791,7.318157128043059,7.332096474953618,7.346089025478339,7.3601350848004765,7.374234960441856,7.377571340923903,7.388091555723158,7.399810478061342,7.4025974025974035,7.407971489057099,7.431178859750289,7.445552513250774,7.452038558982966,7.459981878586531,7.461714594064372,7.4629623864364785,7.464367083280887,7.489009045429279,7.503607503607504,7.518262987012988,7.532975830431799,7.5477463712757835,7.558332270814739,7.560200983095843,7.562574949608348,7.564228900116197,7.592407592407593,7.597300592829655,7.607412350495355,7.622476533367623,7.637600494743352,7.652784591154372,7.668029181973405,7.683334629442413,7.698701298701299,7.714129557816932,7.722423480275424,7.723288154043133,7.729619777812548,7.735686117535432,7.745172332697485,7.760787599497276,7.771560881577238,7.77646595828414,7.792207792207792,7.808013487526672,7.823883433639533,7.839818023117412,7.85581765173602,7.871882718508487,7.9042107789541065,7.920474587141254,7.921721814235732,7.9368054625786595,7.9532038209724165,7.967537953457414,7.980424607859673,7.9862046667025925,8.002808002808004,8.014407354265204,8.01948051948052,8.036222650001354,8.05303483127751,8.064101642647818,8.069917503879768,8.077224005305576,8.086871112081196,8.100491870207263,8.103896103896103,8.120992931119513,8.138162049367123,8.172719000744479,8.19010776457585,8.207570680918229,8.225108225108226,8.242720876553854,8.249353201453422,8.25749222930608,8.260409118778218,8.275648663548578,8.278173439463762,8.296014330497089,8.313932288014362,8.331927812447294,8.350001408569739,8.36815358554489,8.386384856973093,8.404695740940282,8.423086760067067,8.441558441558442,8.460111317254174,8.465469435382818,8.478745923679845,8.516262498563384,8.5351455639704,8.554112554112555,8.573164029734185,8.59230055658627,8.611522705482438,8.650226178316068,8.66970866970867,8.689279118173022,8.708938120702829,8.732344962682726,8.748524203069657,8.768452504215603,8.788471802170433,8.8085827216262,8.849081952530229,8.869471542282602,8.889955310278635,8.91053391053391,8.931208003133758,8.951978254303835,8.9728453364817,8.993809928389368,9.014872715106907,9.036034388147065,9.057295645530939,9.078657191864739,9.121684003200592,9.129339214028976,9.143350711046674,9.165120593692023,9.186994389858352,9.208972845336483,9.22876726448155,9.231056713071101,9.24818701639568,9.28185606569798,9.297948428383211,9.320461620703751,9.343084100365653,9.388660120367438,9.41161527958594,9.434682964094728,9.45786400331855,9.481159234853816,9.504569504569504,9.528095666709529,9.551738583996649,9.575499127737935,9.599378177931793,9.619537735927482,9.623376623376624,9.647495361781075,9.671735299876003,9.696097353528085,9.729262785606123,9.745191517343418,9.786033966740963,9.794785367304451,9.819772064670024,9.844886571229283,9.855179223268772,9.870129870129869,9.895502954628919,9.921006828223323,9.925776716117442,9.94664250478204,9.97241100868044,9.998313374936751,10.024350649350648,10.050523888643994,10.060004974505658,10.076834160603795,10.103282544227426,10.12987012987013,10.142521800145385,10.156598019394854,10.156739811912226,10.162686822228604,10.18346732632447,10.210479175996417,10.237634705719813,10.264935064935065,10.292381415376067,10.319974931234986,10.347716799329705,10.359379231025164,10.375608219273989,10.403650403650404,10.431844578186041,10.460191981931112,10.48869386744046,10.51735150095806,10.546166162604518,10.57513914656772,10.604271761296555,10.633565329697925,10.65563173655553,10.66302118933698,10.682862429201412,10.722425207104873,10.731475544087086,10.752376115504607,10.75484358675987,10.782494816108262,10.786683005976629,10.812782722895085,10.843241265776477,10.873871890821045,10.889474982749974,10.903911697222162,10.904676060483427,10.935655253837073,10.966810966810968,10.99520186816996,10.998144712430427,11.029658021062032,11.046852284418398,11.061352440662786,11.093229537033572,11.118379901578582,11.12529089407702,11.189972817879795,11.204195927011426,11.222596645337171,11.255411255411255,11.276645500345442,11.288418326541494,11.355016664751178,11.38861138861139,11.422405487687389,11.456400742115028,11.490598953285522,11.493659670034194,11.525001944163622,11.559611559611561,11.664698937426211,11.700153949394071,11.735825150459297,11.771714524008102,11.80782407776273,11.844155844155845,11.88071188071188,11.917494270435448,11.954505122206985,11.965715584776438,11.991746571185823,12.029220779220779,12.091815438922879,12.104876255819654,12.107843137254902,12.14306198533328,12.181489396679272,12.220160791589363,12.25907850111672,12.2652057426517,12.29824488610431,12.337662337662337,12.348022197915114,12.373150320777528,12.377333277654822,12.457445467154207,12.538601463682898,12.538784615909947,12.579577285459639,12.62082180114967,12.662337662337661,12.704127555612704,12.746194203147848,12.788540363291196,12.831168831168833,12.874082439299832,12.910430030886198,12.917284058223657,12.946612173979632,12.960776597140233,13.004563004563005,13.029823916253353,13.048646268985252,13.093029419560033,13.137715526794027,13.182707703255648,13.273622928795344,13.309151113786877,13.319552419898443,13.365800865800866,13.412371600524912,13.458961429441134,13.459268004722551,13.506493506493506,13.554051582220598,13.584313977346419,13.60194575742279,13.650179607626416,13.689189693818353,13.698756759254978,13.747680890538033,13.796955732439605,13.846585069606654,13.896572741338085,13.997638724911454,14.027828485659814,14.048724997630108,14.058881883971633,14.094979971268632,14.100185528756956,14.152024446142093,14.204245938563282,14.25685425685426,14.309853715058177,14.320580320580323,14.3632486916069,14.417043630526779,14.471243042671613,14.51618479125134,14.525851506983583,14.538608354148826,14.580873671782763,14.597979007989764,14.601129075163302,14.692178050956677,14.748469920883712,14.805194805194807,14.862357719500578,14.919963757173061,14.978018090858559,15.034438201275428,15.036525974025976,15.095492742551567,15.21482470099071,15.275200989486704,15.33605836394681,15.397402597402598,15.459239555625096,15.521575198994553,15.584415584415584,15.647766867279065,15.705845809021474,15.71163530347204,15.776027251437089,15.840949174282509,15.906407641944833,15.916280584619143,15.972409333405185,16.034974042702682,16.03896103896104,16.10606966255502,16.173742224162392,16.18550992155053,16.241985862239027,16.310807836231564,16.3802155291517,16.520818237556437,16.73630717108978,16.95749184735969,16.99723773963334,17.032524997126767,17.10822510822511,17.168915227167656,17.18460111317254,17.261662104711434,17.30805370737637,17.33941733941734,17.417876241405658,17.497048406139314,17.537120291262703,17.562826783606006,17.601831785753834,17.60342950462711,17.716224151311412,17.738943084565204,17.82106782106782,17.987619856778736,18.07206877629413,18.330241187384047,18.377345654626712,18.417945690672965,18.50649350649351,18.595896856766423,18.618917624757497,18.777320240734877,18.869365928189456,18.962318469707633,19.056191333419058,19.246753246753247,19.343470599752006,19.44116489571035,19.469275856512855,19.539851011932228,19.63954412934005,19.740259740259738,19.842013656446646,19.94482201736088,20.048701298701296,20.15366832120759,20.25974025974026,20.36693465264894,20.475269411439626,20.584762830752133,20.69543359865941,20.80246610737706,20.80730080730081,20.920383963862225,21.03470300191612,21.15027829313544,21.26713065939585,21.385281385281388,21.503482345319078,21.504752231009213,21.62556544579017,21.746277667968965,21.74774378164209,21.810601073273883,21.871310507674146,21.996289424860855,22.12270488132557,22.22591781853247,22.25058178815404,22.37994563575959,22.51082251082251,22.643239113827352,22.77722277722278,22.786644042984054,22.912801484230055,23.050003888327243,23.188859333437648,23.329397874852422,23.61564815552546,23.626987382627785,23.76142376142376,23.90901024441397,23.970193086382242,24.01936667105955,24.058441558441558,24.20975251163931,24.362978793358543,24.51815700223344,24.675324675324674,24.834520318391288,24.99578343734188,25.159154570919277,25.324675324675322,25.492388406295696,25.662337662337666,25.834568116447315,26.00912600912601,26.186058839120065,26.365415406511296,26.54724585759069,26.73160173160173,26.918536009445102,27.108103164441196,27.127726642289748,27.495361781076067,27.693170139213308,27.893845285149634,28.097449995260217,28.51370851370852,28.7264973832138,28.942486085343226,29.161747343565526,29.384356101913355,29.580780216052982,29.610389610389614,29.839927514346122,30.74695787405871,30.794805194805196,30.98848321489831,31.29553373455813,31.552054502874178,31.553177945780032,31.792127994892972,32.28728441523237,32.45738207715394,33.05214260177461,33.184057321988355,33.322860839031605,33.586014258283164,33.76623376623377,33.79734891905771,34.065049994253535,34.14296054709225,34.36920222634508,34.67883467883468,34.99409681227863,35.31514357202431,35.64213564213564,35.97523971355747,36.660482374768094,37.37233640146261,37.73873185637891,37.807468677033896,38.112382666838116,38.493506493506494,38.8823297914207,39.2790882586801,39.439101697126695,39.68402731289329,39.76044963439921,40.09740259740259,40.51948051948052,40.95053882287925,41.07348347854677,41.39086719731882,41.84076792772445,42.30055658627088,42.770562770562776,43.25113089158034,43.74262101534829,44.24540976265114,44.75989127151918,45.286478227654705,45.82560296846011,46.377718666875296,46.94330060183719,47.52284752284752,48.116883116883116,48.72595758671709,49.35064935064935,49.99156687468376,50.649350649350644,51.32467532467533,52.01825201825202,52.73083081302259,53.46320346320346,54.21620632888239,54.990723562152134,55.78769057029927,56.60809778456837,57.4529947664276,58.32349468713105,59.22077922077923,60.1461038961039,61.100803957946816,62.08630079597821,63.104109005748356],&quot;candidateCount&quot;:3669,&quot;source&quot;:&quot;按现存索引离线重算的候选窗口数；权威回源与合并前&quot;,&quot;normalization&quot;:&quot;fixed_complete_raw_rrf_max&quot;,&quot;createdAt&quot;:&quot;2026-11-04T15:58:30.573877+08:00&quot;}&lt;/script&gt;
+  &lt;script src=&quot;https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js&quot;&gt;&lt;/script&gt;
+  &lt;script&gt;
+    (() =&gt; {
+      const root = document.getElementById(&#x27;sr-threshold-curve&#x27;);
+      const data = JSON.parse(root.querySelector(&#x27;#sr-threshold-data&#x27;).textContent);
+      const scores = data.scores.slice().sort(d3.ascending);
+      const countAt = threshold =&gt; scores.length - d3.bisectRight(scores, threshold);
+      const input = root.querySelector(&#x27;#sr-threshold-input&#x27;);
+      const value = root.querySelector(&#x27;#sr-threshold-value&#x27;);
+      const count = root.querySelector(&#x27;#sr-threshold-count&#x27;);
+      const selected = root.querySelector(&#x27;#sr-threshold-selected&#x27;);
+      const wrap = root.querySelector(&#x27;.chart-wrap&#x27;);
+      const svg = d3.select(root.querySelector(&#x27;.threshold-chart&#x27;));
+      const tooltip = root.querySelector(&#x27;.chart-tooltip&#x27;);
+      const formatCount = new Intl.NumberFormat(&#x27;zh-CN&#x27;);
+      const targetScore = data.targetScore;
+      const maxScore = d3.max(scores);
+      let threshold = 75;
+      let scaleX, scaleY, bounds, selectionGroup, hoverGroup;
+      let pinned = false;
+      const parseState = state =&gt; {
+        const candidate = state?.modelContent?.threshold;
+        return typeof candidate === &#x27;number&#x27; &amp;&amp; Number.isFinite(candidate) &amp;&amp; candidate &gt;= 0 &amp;&amp; candidate &lt;= 100 ? candidate : null;
+      };
+      const initial = parseState(window.openai?.widgetState);
+      if (initial !== null) threshold = initial;
+      input.value = threshold;
+      root.querySelector(&#x27;#sr-target-label&#x27;).textContent = &#x27;第一集约 10:08 窗口：&#x27; + targetScore.toFixed(4) + &#x27;%&#x27;;
+      const checkpointThresholds = [0, 5, 10, 20, 25, 30, 40, 50, 60, 65, 75, 100];
+      root.querySelector(&#x27;#sr-threshold-accessible&#x27;).innerHTML = checkpointThresholds.map(t =&gt; &#x27;&lt;tr&gt;&lt;td&gt;&#x27; + t + &#x27;&lt;/td&gt;&lt;td&gt;&#x27; + countAt(t) + &#x27;&lt;/td&gt;&lt;/tr&gt;&#x27;).join(&#x27;&#x27;);
+      const distinct = Array.from(new Set(scores));
+      const observations = [{x: 0, y: countAt(0)}, ...distinct.map(t =&gt; ({x: t, y: countAt(t)})), {x: 100, y: 0}];
+      function updateSelection(animate = false) {
+        value.textContent = threshold.toFixed(1) + &#x27;%&#x27;;
+        count.textContent = formatCount.format(countAt(threshold)) + &#x27; 条候选窗口&#x27;;
+        selected.textContent = &#x27;第一集约 10:08 窗口：&#x27; + (targetScore &gt; threshold ? &#x27;已越过阈值，人物身份仍未证实&#x27; : &#x27;尚未越过阈值&#x27;);
+        input.setAttribute(&#x27;aria-valuetext&#x27;, threshold.toFixed(1) + &#x27;%，&#x27; + countAt(threshold) + &#x27; 条候选窗口&#x27;);
+        if (!selectionGroup) return;
+        const motion = animate &amp;&amp; !window.matchMedia(&#x27;(prefers-reduced-motion: reduce)&#x27;).matches;
+        const line = selectionGroup.select(&#x27;line&#x27;);
+        const dot = selectionGroup.select(&#x27;circle&#x27;);
+        (motion ? line.interrupt().transition().duration(100) : line.interrupt()).attr(&#x27;x1&#x27;, scaleX(threshold)).attr(&#x27;x2&#x27;, scaleX(threshold));
+        (motion ? dot.interrupt().transition().duration(100) : dot.interrupt()).attr(&#x27;cx&#x27;, scaleX(threshold)).attr(&#x27;cy&#x27;, scaleY(countAt(threshold)));
+      }
+      function save() {
+        window.openai?.setWidgetState?.({modelContent: {threshold, candidateCount: countAt(threshold), countingBasis: &#x27;indexed_windows_before_canonical_and_merge&#x27;, targetWindowAboveThreshold: targetScore &gt; threshold}, privateContent: null}).catch(() =&gt; {});
+      }
+      function showHover(event) {
+        const [px] = d3.pointer(event, svg.node());
+        const tx = Math.max(bounds.left + 4, Math.min(bounds.right - 4, px));
+        const t = scaleX.invert(tx);
+        const n = countAt(t);
+        hoverGroup.attr(&#x27;display&#x27;, null);
+        hoverGroup.select(&#x27;line&#x27;).attr(&#x27;x1&#x27;, tx).attr(&#x27;x2&#x27;, tx);
+        hoverGroup.select(&#x27;circle&#x27;).attr(&#x27;cx&#x27;, tx).attr(&#x27;cy&#x27;, scaleY(n));
+        tooltip.textContent = &#x27;阈值 &#x27; + t.toFixed(3) + &#x27;% · &#x27; + formatCount.format(n) + &#x27; 条候选&#x27;;
+        tooltip.hidden = false;
+        const tw = tooltip.getBoundingClientRect().width;
+        tooltip.style.left = Math.max(0, Math.min(wrap.clientWidth - tw, tx + 12)) + &#x27;px&#x27;;
+        tooltip.style.top = (bounds.top + 12) + &#x27;px&#x27;;
+      }
+      function draw() {
+        const width = Math.max(280, wrap.getBoundingClientRect().width);
+        const height = 354;
+        bounds = {left: 72, right: width - 16, top: 24, bottom: height - 58};
+        svg.attr(&#x27;viewBox&#x27;, &#x27;0 0 &#x27; + width + &#x27; &#x27; + height).attr(&#x27;height&#x27;, height);
+        svg.selectAll(&#x27;g,rect&#x27;).remove();
+        const domainX = d3.extent([...observations.map(p =&gt; p.x), 75, targetScore]);
+        const domainY = d3.extent([...observations.map(p =&gt; p.y), 0]);
+        scaleX = d3.scaleLinear().domain(domainX).range([bounds.left + 4, bounds.right - 4]);
+        scaleY = d3.scaleSymlog().constant(1).domain([Math.min(0, domainY[0]), domainY[1] * 1.12]).range([bounds.bottom - 4, bounds.top + 4]);
+        svg.append(&#x27;rect&#x27;).attr(&#x27;data-chart-frame&#x27;, &#x27;&#x27;).attr(&#x27;x&#x27;, bounds.left).attr(&#x27;y&#x27;, bounds.top).attr(&#x27;width&#x27;, bounds.right - bounds.left).attr(&#x27;height&#x27;, bounds.bottom - bounds.top).attr(&#x27;fill&#x27;, &#x27;none&#x27;).attr(&#x27;stroke&#x27;, &#x27;var(--border)&#x27;);
+        const ticksY = [0, 1, 10, 100, 1000, scores.length].filter((n,i,a) =&gt; n &lt;= domainY[1] &amp;&amp; a.indexOf(n) === i);
+        svg.append(&#x27;g&#x27;).selectAll(&#x27;line&#x27;).data(ticksY).join(&#x27;line&#x27;).attr(&#x27;x1&#x27;, bounds.left).attr(&#x27;x2&#x27;, bounds.right).attr(&#x27;y1&#x27;, n =&gt; scaleY(n)).attr(&#x27;y2&#x27;, n =&gt; scaleY(n)).attr(&#x27;stroke&#x27;, &#x27;var(--border)&#x27;).attr(&#x27;stroke-opacity&#x27;, .5);
+        const axisX = svg.append(&#x27;g&#x27;).attr(&#x27;transform&#x27;, &#x27;translate(0,&#x27; + bounds.bottom + &#x27;)&#x27;).call(d3.axisBottom(scaleX).ticks(width &lt;= 380 ? 3 : 5).tickFormat(d =&gt; d + &#x27;%&#x27;));
+        const axisY = svg.append(&#x27;g&#x27;).attr(&#x27;transform&#x27;, &#x27;translate(&#x27; + bounds.left + &#x27;,0)&#x27;).call(d3.axisLeft(scaleY).tickValues(ticksY).tickFormat(formatCount.format));
+        axisX.selectAll(&#x27;.tick text&#x27;).attr(&#x27;dy&#x27;, &#x27;1em&#x27;);
+        axisX.selectAll(&#x27;.tick&#x27;).filter((d, i, nodes) =&gt; i === 0 || i === nodes.length - 1).select(&#x27;text&#x27;).attr(&#x27;text-anchor&#x27;, (d, i) =&gt; i === 0 ? &#x27;start&#x27; : &#x27;end&#x27;);
+        svg.append(&#x27;g&#x27;).append(&#x27;text&#x27;).attr(&#x27;class&#x27;,&#x27;axis-title&#x27;).attr(&#x27;data-axis&#x27;,&#x27;x&#x27;).attr(&#x27;x&#x27;, (bounds.left + bounds.right)/2).attr(&#x27;y&#x27;, height - 4).attr(&#x27;text-anchor&#x27;,&#x27;middle&#x27;).text(&#x27;相对匹配度阈值（%）&#x27;);
+        svg.append(&#x27;g&#x27;).append(&#x27;text&#x27;).attr(&#x27;class&#x27;,&#x27;axis-title&#x27;).attr(&#x27;data-axis&#x27;,&#x27;y&#x27;).attr(&#x27;transform&#x27;,&#x27;translate(14,&#x27; + (bounds.top + bounds.bottom)/2 + &#x27;) rotate(-90)&#x27;).attr(&#x27;text-anchor&#x27;,&#x27;middle&#x27;).text(&#x27;候选窗口数（条）&#x27;);
+        const chart = svg.append(&#x27;g&#x27;);
+        chart.append(&#x27;path&#x27;).datum(observations).attr(&#x27;d&#x27;, d3.line().x(d =&gt; scaleX(d.x)).y(d =&gt; scaleY(d.y)).curve(d3.curveStepAfter)).attr(&#x27;fill&#x27;,&#x27;none&#x27;).attr(&#x27;stroke&#x27;,&#x27;var(--viz-series-1)&#x27;).attr(&#x27;stroke-width&#x27;,2);
+        chart.append(&#x27;line&#x27;).attr(&#x27;x1&#x27;,scaleX(75)).attr(&#x27;x2&#x27;,scaleX(75)).attr(&#x27;y1&#x27;,bounds.top).attr(&#x27;y2&#x27;,bounds.bottom).attr(&#x27;stroke&#x27;,&#x27;var(--muted-foreground)&#x27;).attr(&#x27;stroke-width&#x27;,1).attr(&#x27;stroke-dasharray&#x27;,&#x27;3 4&#x27;);
+        chart.append(&#x27;line&#x27;).attr(&#x27;x1&#x27;,scaleX(targetScore)).attr(&#x27;x2&#x27;,scaleX(targetScore)).attr(&#x27;y1&#x27;,bounds.top).attr(&#x27;y2&#x27;,bounds.bottom).attr(&#x27;stroke&#x27;,&#x27;var(--viz-series-2)&#x27;).attr(&#x27;stroke-width&#x27;,1).attr(&#x27;stroke-dasharray&#x27;,&#x27;2 4&#x27;);
+        const note = chart.append(&#x27;text&#x27;).attr(&#x27;class&#x27;,&#x27;optional-label&#x27;).attr(&#x27;x&#x27;,bounds.right - 6).attr(&#x27;y&#x27;,bounds.top + 18).attr(&#x27;text-anchor&#x27;,&#x27;end&#x27;).text(&#x27;最高分 &#x27; + maxScore.toFixed(2) + &#x27;%&#x27;);
+        selectionGroup = chart.append(&#x27;g&#x27;);
+        selectionGroup.append(&#x27;line&#x27;).attr(&#x27;y1&#x27;,bounds.top).attr(&#x27;y2&#x27;,bounds.bottom).attr(&#x27;stroke&#x27;,&#x27;var(--viz-series-1)&#x27;).attr(&#x27;stroke-width&#x27;,1).attr(&#x27;stroke-opacity&#x27;,.45);
+        selectionGroup.append(&#x27;circle&#x27;).attr(&#x27;r&#x27;,4).attr(&#x27;fill&#x27;,&#x27;var(--viz-series-1)&#x27;);
+        hoverGroup = chart.append(&#x27;g&#x27;).attr(&#x27;display&#x27;,&#x27;none&#x27;);
+        hoverGroup.append(&#x27;line&#x27;).attr(&#x27;data-chart-hover-guide&#x27;,&#x27;&#x27;).attr(&#x27;y1&#x27;,bounds.top).attr(&#x27;y2&#x27;,bounds.bottom).attr(&#x27;stroke&#x27;,&#x27;var(--muted-foreground)&#x27;).attr(&#x27;stroke-width&#x27;,1);
+        hoverGroup.append(&#x27;circle&#x27;).attr(&#x27;data-chart-hover-marker&#x27;,&#x27;&#x27;).attr(&#x27;r&#x27;,4).attr(&#x27;fill&#x27;,&#x27;var(--viz-series-1)&#x27;);
+        chart.append(&#x27;rect&#x27;).attr(&#x27;data-chart-hit&#x27;,&#x27;&#x27;).attr(&#x27;x&#x27;,bounds.left).attr(&#x27;y&#x27;,bounds.top).attr(&#x27;width&#x27;,bounds.right-bounds.left).attr(&#x27;height&#x27;,bounds.bottom-bounds.top).attr(&#x27;fill&#x27;,&#x27;transparent&#x27;).on(&#x27;pointermove&#x27;, event =&gt; { if(!pinned) showHover(event); }).on(&#x27;pointerleave&#x27;, () =&gt; { if(!pinned){ tooltip.hidden=true; hoverGroup.attr(&#x27;display&#x27;,&#x27;none&#x27;); } }).on(&#x27;click&#x27;, event =&gt; { pinned=!pinned; showHover(event); });
+        updateSelection();
+        const texts = svg.selectAll(&#x27;.tick text,.axis-title,.optional-label&#x27;).nodes();
+        const rectangles = texts.map(node =&gt; ({node, box: node.getBoundingClientRect()}));
+        const overlaps = (a,b) =&gt; a.left &lt; b.right+4 &amp;&amp; a.right+4 &gt; b.left &amp;&amp; a.top &lt; b.bottom+4 &amp;&amp; a.bottom+4 &gt; b.top;
+        const optional = note.node().getBoundingClientRect();
+        if(rectangles.some(r =&gt; r.node !== note.node() &amp;&amp; overlaps(optional,r.box))) note.remove();
+        const yTexts = axisY.selectAll(&#x27;.tick text&#x27;).nodes();
+        for(let i=1;i&lt;yTexts.length;i++){ if(overlaps(yTexts[i-1].getBoundingClientRect(),yTexts[i].getBoundingClientRect())) d3.select(yTexts[i-1].parentNode).remove(); }
+      }
+      input.addEventListener(&#x27;input&#x27;, () =&gt; { threshold=Number(input.value); updateSelection(true); });
+      input.addEventListener(&#x27;change&#x27;, save);
+      window.addEventListener(&#x27;openai:set_globals&#x27;, event =&gt; { const next=parseState(event.detail?.globals?.widgetState); if(next!==null){ threshold=next; input.value=threshold; updateSelection(); } });
+      new ResizeObserver(draw).observe(wrap);
+      draw();
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (event) =&gt; {
+    for (const target of event.composedPath()) {
+      if (target?.nodeType === Node.ELEMENT_NODE) {
+        const trigger = target.closest(&quot;[data-tooltip]&quot;);
+        if (trigger) return trigger;
+      }
+    }
+    return null;
+  };
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handlers = {
+    pointerover: handlePointerOpen,
+    pointerdown: handlePointer,
+    pointercancel: handlePointer,
+    click: handleTouchClick,
+    pointerout: handleLeave,
+    focusin: handleFocusIn,
+    focusout: handleLeave,
+    keydown: handleKeyDown,
+    contextmenu: handleContextMenu,
+  };
+  const roots = new Map();
+  const handledEvents = new WeakSet();
+  const handleEvent = (event) =&gt; {
+    if (handledEvents.has(event)) return;
+    handledEvents.add(event);
+    handlers[event.type](event);
+  };
+  const discoverRoots = (node) =&gt; {
+    if (node.shadowRoot) listen(node.shadowRoot);
+    for (const element of node.querySelectorAll(&quot;*&quot;)) {
+      if (element.shadowRoot) listen(element.shadowRoot);
+    }
+  };
+  const listen = (root) =&gt; {
+    if (roots.has(root)) return;
+    for (const type of Object.keys(handlers)) root.addEventListener(type, handleEvent);
+    const observer = new window.MutationObserver((records) =&gt; {
+      for (const { addedNodes } of records) {
+        for (const node of addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) discoverRoots(node);
+        }
+      }
+      for (const [root, cleanup] of roots) {
+        if (root.host &amp;&amp; !root.host.isConnected) {
+          cleanup();
+          roots.delete(root);
+        }
+      }
+      if (activeTrigger &amp;&amp; !activeTrigger.isConnected) closeTooltip(false);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    roots.set(root, () =&gt; {
+      observer.disconnect();
+      for (const type of Object.keys(handlers)) root.removeEventListener(type, handleEvent);
+    });
+    discoverRoots(root);
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    for (const cleanup of roots.values()) cleanup();
+    roots.clear();
+    tooltip = null;
+  };
+
+  // Events between children of one shadow root never reach the document.
+  listen(document);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-carousel&quot;&gt;
+  (() =&gt; {
+    for (const root of document.querySelectorAll(&quot;.viz-carousel&quot;)) {
+      const panels = Array.from(
+        root.querySelectorAll(&quot;:scope &gt; [data-variant]&quot;),
+      );
+      if (panels.length === 0) {
+        continue;
+      }
+      root.setAttribute(&quot;role&quot;, &quot;group&quot;);
+      panels.forEach((panel, index) =&gt; {
+        panel.hidden = index !== 0;
+        panel.setAttribute(&quot;role&quot;, &quot;group&quot;);
+        if (!panel.hasAttribute(&quot;aria-label&quot;)) {
+          panel.setAttribute(&quot;aria-label&quot;, panel.dataset.variant);
+        }
+      });
+      root.dataset.activeVariant = panels[0].dataset.variant;
+      if (panels.length === 1) {
+        continue;
+      }
+
+      const controls = document.createElement(&quot;div&quot;);
+      controls.className = &quot;viz-carousel-controls&quot;;
+      // Portable copy of the settings dropdown&#x27;s legacy glyph; no 14px icon-package preset matches it.
+      // https://github.com/openai/openai/blob/master/codex/codex-apps/webview/src/icons/chevron.svg
+      controls.innerHTML = `
+      &lt;button type=&quot;button&quot; class=&quot;viz-carousel-previous cursor-interaction&quot;&gt;&lt;i data-lucide=&quot;chevron-left&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;
+      &lt;details class=&quot;viz-carousel-picker&quot;&gt;
+        &lt;summary class=&quot;cursor-interaction&quot;&gt;
+          &lt;span class=&quot;viz-carousel-count tabular-nums&quot;&gt;&lt;/span&gt;
+          &lt;span class=&quot;viz-carousel-name&quot;&gt;&lt;/span&gt;
+          &lt;svg class=&quot;viz-carousel-caret&quot; width=&quot;14&quot; height=&quot;14&quot; viewBox=&quot;0 0 20 21&quot; fill=&quot;none&quot; aria-hidden=&quot;true&quot; focusable=&quot;false&quot;&gt;
+            &lt;path d=&quot;M15.2793 7.71101C15.539 7.45131 15.961 7.45131 16.2207 7.71101C16.4804 7.97071 16.4804 8.39272 16.2207 8.65242L10.4707 14.4024C10.211 14.6621 9.78902 14.6621 9.52932 14.4024L3.77932 8.65242L3.69436 8.54792C3.52385 8.28979 3.55205 7.93828 3.77932 7.71101C4.00659 7.48374 4.3581 7.45554 4.61623 7.62605L4.72073 7.71101L10 12.9903L15.2793 7.71101Z&quot; fill=&quot;currentColor&quot; stroke=&quot;currentColor&quot; stroke-width=&quot;0.6&quot; /&gt;
+          &lt;/svg&gt;
+        &lt;/summary&gt;
+        &lt;div class=&quot;viz-carousel-options&quot;&gt;&lt;/div&gt;
+      &lt;/details&gt;
+      &lt;button type=&quot;button&quot; class=&quot;viz-carousel-next cursor-interaction&quot;&gt;&lt;i data-lucide=&quot;chevron-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/button&gt;`;
+      const previous = controls.querySelector(&quot;.viz-carousel-previous&quot;);
+      const next = controls.querySelector(&quot;.viz-carousel-next&quot;);
+      const picker = controls.querySelector(&quot;.viz-carousel-picker&quot;);
+      const summary = picker.querySelector(&quot;summary&quot;);
+      const count = controls.querySelector(&quot;.viz-carousel-count&quot;);
+      const name = controls.querySelector(&quot;.viz-carousel-name&quot;);
+      const options = controls.querySelector(&quot;.viz-carousel-options&quot;);
+      const status = document.createElement(&quot;span&quot;);
+      status.className = &quot;sr-only&quot;;
+      status.setAttribute(&quot;role&quot;, &quot;status&quot;);
+      status.setAttribute(&quot;aria-live&quot;, &quot;polite&quot;);
+      status.setAttribute(&quot;aria-atomic&quot;, &quot;true&quot;);
+      previous.setAttribute(
+        &quot;aria-label&quot;,
+        root.dataset.previousLabel ?? &quot;Previous variant&quot;,
+      );
+      next.setAttribute(&quot;aria-label&quot;, root.dataset.nextLabel ?? &quot;Next variant&quot;);
+
+      let active = 0;
+      let mousePointerId = null;
+      let summaryPointerHandled = false;
+      summary.addEventListener(&quot;pointerdown&quot;, (event) =&gt; {
+        summaryPointerHandled =
+          event.pointerType === &quot;mouse&quot; &amp;&amp; event.button === 0 &amp;&amp; !event.ctrlKey;
+        if (!summaryPointerHandled) {
+          return;
+        }
+        event.preventDefault();
+        summary.focus({ preventScroll: true });
+        picker.open = !picker.open;
+        mousePointerId = picker.open ? event.pointerId : null;
+      });
+      summary.addEventListener(&quot;click&quot;, (event) =&gt; {
+        if (summaryPointerHandled &amp;&amp; event.detail &gt; 0) {
+          event.preventDefault();
+        }
+      });
+      const choices = panels.map((panel, index) =&gt; {
+        const choice = document.createElement(&quot;button&quot;);
+        choice.type = &quot;button&quot;;
+        choice.className = &quot;cursor-interaction&quot;;
+        choice.textContent = panel.dataset.variant;
+        choice.addEventListener(&quot;click&quot;, () =&gt; {
+          select(index);
+          summary.focus();
+        });
+        choice.addEventListener(&quot;pointerup&quot;, (event) =&gt; {
+          if (
+            picker.open &amp;&amp;
+            event.pointerType === &quot;mouse&quot; &amp;&amp;
+            event.button === 0 &amp;&amp;
+            event.pointerId === mousePointerId
+          ) {
+            choice.click();
+          }
+        });
+        options.appendChild(choice);
+        return choice;
+      });
+      const select = (index) =&gt; {
+        const changed = active !== index;
+        active = index;
+        panels.forEach((panel, position) =&gt; {
+          panel.hidden = position !== active;
+          choices[position].setAttribute(
+            &quot;aria-current&quot;,
+            String(position === active),
+          );
+        });
+        root.dataset.activeVariant = panels[active].dataset.variant;
+        count.textContent = `${active + 1} / ${panels.length}`;
+        name.textContent = panels[active].dataset.variant;
+        picker.open = false;
+        mousePointerId = null;
+        if (changed) {
+          status.textContent = `${count.textContent}: ${name.textContent}`;
+        }
+      };
+      previous.addEventListener(&quot;click&quot;, () =&gt;
+        select((active + panels.length - 1) % panels.length),
+      );
+      next.addEventListener(&quot;click&quot;, () =&gt;
+        select((active + 1) % panels.length),
+      );
+      picker.addEventListener(&quot;keydown&quot;, (event) =&gt; {
+        if (event.key === &quot;Escape&quot; &amp;&amp; picker.open) {
+          event.preventDefault();
+          picker.open = false;
+          mousePointerId = null;
+          summary.focus();
+          return;
+        }
+        if (event.altKey || event.ctrlKey || event.metaKey) {
+          return;
+        }
+        const index = choices.indexOf(document.activeElement);
+        let nextIndex;
+        if (event.key === &quot;ArrowDown&quot;) {
+          nextIndex = index &lt; 0 ? active : (index + 1) % choices.length;
+        } else if (event.key === &quot;ArrowUp&quot;) {
+          nextIndex = index &lt; 0 ? active : (index + choices.length - 1) % choices.length;
+        } else if (picker.open &amp;&amp; event.key === &quot;Home&quot;) {
+          nextIndex = 0;
+        } else if (picker.open &amp;&amp; event.key === &quot;End&quot;) {
+          nextIndex = choices.length - 1;
+        } else {
+          return;
+        }
+        event.preventDefault();
+        picker.open = true;
+        choices[nextIndex].focus();
+      });
+      picker.addEventListener(&quot;focusout&quot;, (event) =&gt; {
+        if (!picker.contains(event.relatedTarget)) {
+          picker.open = false;
+          mousePointerId = null;
+        }
+      });
+      const dismiss = (event) =&gt; {
+        if (!summary.contains(event.target)) {
+          mousePointerId = null;
+        }
+        if (!picker.contains(event.target)) {
+          picker.open = false;
+        }
+      };
+      const endPointerSelection = () =&gt; {
+        mousePointerId = null;
+      };
+      const sizePicker = () =&gt; {
+        root.style.setProperty(
+          &quot;--viz-carousel-picker-height&quot;,
+          `${picker.open ? options.offsetHeight : 0}px`,
+        );
+      };
+      picker.addEventListener(&quot;toggle&quot;, sizePicker);
+      window.addEventListener(&quot;resize&quot;, sizePicker);
+      document.addEventListener(&quot;pointerdown&quot;, dismiss);
+      document.addEventListener(&quot;pointerup&quot;, endPointerSelection);
+      document.addEventListener(&quot;pointercancel&quot;, endPointerSelection);
+      window.addEventListener(&quot;blur&quot;, endPointerSelection);
+      window.addEventListener(
+        &quot;pagehide&quot;,
+        () =&gt; {
+          document.removeEventListener(&quot;pointerdown&quot;, dismiss);
+          document.removeEventListener(&quot;pointerup&quot;, endPointerSelection);
+          document.removeEventListener(&quot;pointercancel&quot;, endPointerSelection);
+          window.removeEventListener(&quot;blur&quot;, endPointerSelection);
+          window.removeEventListener(&quot;resize&quot;, sizePicker);
+        },
+        { once: true },
+      );
+      root.append(controls, status);
+      select(0);
+    }
+  })();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+
+<script>(() => {
+  const frame = document.getElementById("codex-visualization");
+  if (!(frame instanceof HTMLIFrameElement)) {
+    return;
+  }
+  const isShare = document.documentElement.classList.contains(
+    "visualization-share-root",
+  );
+  let viewportHeight = globalThis.innerHeight;
+  let sizeFingerprint = null;
+  let sizeWriteTimeout;
+  let lastSize = null;
+  let pendingSize = null;
+  const storageKey = `codex:visualization-widget-state-v2:${JSON.stringify([
+    globalThis.location.pathname,
+    globalThis.location.search,
+  ])}`;
+  const sizeStorageKey = `${storageKey}:share-size-v1`;
+  const parseState = (serializedState) => {
+    if (
+      typeof serializedState !== "string" ||
+      new TextEncoder().encode(serializedState).length > 16 * 1024
+    ) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    /** @type {unknown} */
+    const state = JSON.parse(serializedState);
+    if (
+      state == null ||
+      typeof state !== "object" ||
+      Array.isArray(state) ||
+      ("imageIds" in state &&
+        (!Array.isArray(state.imageIds) || state.imageIds.length > 0))
+    ) {
+      throw new TypeError("Widget state must be a JSON object");
+    }
+    const storedState = { modelContent: null, privateContent: null, ...state };
+    const canonicalState = JSON.stringify(
+      storedState,
+      (_key, /** @type {unknown} */ value) => {
+        if (typeof value === "number" && !Number.isFinite(value)) {
+          throw new TypeError("Widget state must contain finite numbers");
+        }
+        return value;
+      },
+    );
+    if (new TextEncoder().encode(canonicalState).length > 16 * 1024) {
+      throw new TypeError(
+        "Widget state must be a JSON object of at most 16 KiB",
+      );
+    }
+    return storedState;
+  };
+  let storage = null;
+  let state = null;
+  try {
+    const localStorage = globalThis.localStorage;
+    const probeKey = `${storageKey}:probe`;
+    localStorage.setItem(probeKey, "1");
+    localStorage.removeItem(probeKey);
+    storage = localStorage;
+    const savedState = storage.getItem(storageKey);
+    if (savedState != null) {
+      try {
+        state = parseState(savedState);
+      } catch {
+        // Invalid saved state does not disable future writes.
+      }
+    }
+  } catch {
+    storage = null;
+  }
+  const persistSize = () => {
+    globalThis.clearTimeout(sizeWriteTimeout);
+    if (pendingSize == null) {
+      return;
+    }
+    try {
+      storage?.setItem(sizeStorageKey, pendingSize);
+    } catch {
+      // A denied or full cache must not affect the visualization.
+    }
+    pendingSize = null;
+  };
+  if (isShare) {
+    globalThis.addEventListener("pagehide", persistSize);
+  }
+  const initialGlobals = {
+    widgetState: state,
+    statePersistence: storage == null ? "none" : "local",
+  };
+
+  const channel = new MessageChannel();
+  channel.port1.addEventListener("message", (event) => {
+    const data = event.data;
+    if (typeof data !== "object" || data == null) {
+      return;
+    }
+    if (data.type === "widget-state-write") {
+      if (!Number.isSafeInteger(data.id) || data.id <= 0) {
+        return;
+      }
+      let ok = false;
+      try {
+        if (storage != null) {
+          const state = parseState(data.state);
+          storage.setItem(storageKey, JSON.stringify(state));
+          ok = true;
+        }
+      } catch {
+        // Storage denial, quota limits, and invalid state return a failed receipt.
+      }
+      channel.port1.postMessage({
+        type: "widget-state-result",
+        id: data.id,
+        ok,
+      });
+      return;
+    }
+    if (data.type === "height") {
+      const height = data.height;
+      if (
+        typeof height !== "number" ||
+        !Number.isFinite(height) ||
+        height < 0
+      ) {
+        return;
+      }
+      if (height <= 10_000) {
+        const width = isShare && storage != null ? frame.clientWidth : null;
+        frame.style.height = Math.ceil(height) + "px";
+        if (isShare && storage != null) {
+          const size = JSON.stringify({
+            fingerprint: sizeFingerprint,
+            width,
+            viewportHeight: globalThis.innerHeight,
+            dark: globalThis.matchMedia("(prefers-color-scheme: dark)").matches,
+            scale: globalThis.devicePixelRatio,
+            height: Math.ceil(height),
+          });
+          if (size !== lastSize) {
+            lastSize = size;
+            pendingSize = size;
+            globalThis.clearTimeout(sizeWriteTimeout);
+            sizeWriteTimeout = globalThis.setTimeout(persistSize, 100);
+          }
+        }
+      }
+      if (isShare) {
+        // Keep unusually tall content accessible without accepting an unbounded height.
+        if (height > 10_000 && Number.parseFloat(frame.style.height) === 0) {
+          frame.style.removeProperty("height");
+        }
+        frame.scrolling = height > 10_000 ? "auto" : "no";
+        document.documentElement.classList.add("visualization-share-ready");
+      }
+      return;
+    }
+    if (data.type === "scroll-to") {
+      const top = data.top;
+      if (
+        typeof top === "number" &&
+        Number.isFinite(top) &&
+        top >= 0 &&
+        globalThis.navigator.userActivation?.isActive === true
+      ) {
+        globalThis.scrollTo({
+          top: Math.ceil(
+            globalThis.scrollY + frame.getBoundingClientRect().top + top,
+          ),
+        });
+      }
+      return;
+    }
+    if (data.type === "open-external") {
+      const rawHref = data.href;
+      if (typeof rawHref !== "string") {
+        return;
+      }
+      let href;
+      try {
+        const url = new URL(rawHref, document.baseURI);
+        if (url.protocol !== "https:") {
+          return;
+        }
+        href = url.href;
+      } catch {
+        return;
+      }
+      if (globalThis.navigator.userActivation?.isActive === true) {
+        const anchor = document.createElement("a");
+        anchor.href = href;
+        anchor.rel = "noopener noreferrer";
+        anchor.target = "_blank";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }
+      return;
+    }
+    if (data.type === "follow-up") {
+      const prompt = data.prompt;
+      if (
+        typeof prompt !== "string" ||
+        globalThis.navigator.userActivation?.isActive !== true
+      ) {
+        return;
+      }
+      const title = data.title;
+      globalThis.prompt(typeof title === "string" ? title : prompt, prompt);
+    }
+  });
+  channel.port1.start();
+  const srcdoc = frame.dataset.srcdoc;
+  if (srcdoc == null) {
+    return;
+  }
+  globalThis.addEventListener("resize", () => {
+    const height = Number.parseFloat(frame.style.height);
+    if (!isShare && (!Number.isFinite(height) || height <= viewportHeight)) {
+      frame.style.removeProperty("height");
+    }
+    viewportHeight = globalThis.innerHeight;
+    channel.port1.postMessage({ type: "measure" });
+  });
+  frame.addEventListener(
+    "load",
+    () => {
+      frame.contentWindow?.postMessage(
+        { type: "codex-visualization-initialize" },
+        "*",
+        [channel.port2],
+      );
+    },
+    { once: true },
+  );
+  // Match the trusted bootstrap element, not the same text in an authored title.
+  const frameHtml = srcdoc.replace(
+    '<script type="application/json" id="codex-visualization-widget-state">__CODEX_VISUALIZATION_WIDGET_STATE__<\/script>',
+    () =>
+      '<script type="application/json" id="codex-visualization-widget-state">' +
+      JSON.stringify(initialGlobals).replaceAll("<", "\\u003c") +
+      "<\/script>",
+  );
+  if (isShare && storage != null) {
+    // Fingerprint the rendered document, including restored widget state, without
+    // storing its content. This is a layout cache, not a security identity.
+    let hash = 5381;
+    for (let index = 0; index < frameHtml.length; index += 1) {
+      hash = (hash * 33 + frameHtml.charCodeAt(index)) % 4_294_967_296;
+    }
+    sizeFingerprint = hash.toString(36);
+    try {
+      const size = JSON.parse(storage.getItem(sizeStorageKey) ?? "null");
+      if (
+        size?.fingerprint === sizeFingerprint &&
+        size.width === frame.clientWidth &&
+        size.viewportHeight === globalThis.innerHeight &&
+        size.dark ===
+          globalThis.matchMedia("(prefers-color-scheme: dark)").matches &&
+        size.scale === globalThis.devicePixelRatio &&
+        typeof size.height === "number" &&
+        Number.isFinite(size.height) &&
+        size.height >= 0 &&
+        size.height <= 10_000
+      ) {
+        frame.style.height = size.height + "px";
+      }
+    } catch {
+      // Ignore missing or invalid cache entries and measure the live frame.
+    }
+  }
+  frame.srcdoc = frameHtml;
+  delete frame.dataset.srcdoc;
+})();
+</script>
+</body>
+</html>

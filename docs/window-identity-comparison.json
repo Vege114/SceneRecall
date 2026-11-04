@@ -1,0 +1,1559 @@
+{
+  "schema": "scenerecall.character-window-frame-evidence.v1",
+  "created_at": "2026-11-04T06:55:37.311122+00:00",
+  "method": "Read-only active JSON plus four SQLite records and their visual_links; no search/model/rebuild executed.",
+  "limits": [
+    "Original returned hit_frame_id was not saved; possible hit frames are inferred from UI floor-to-second display, not reconstructed ranking.",
+    "SQLite resolved entity snapshot is read as stored, not recomputed; active window and identity digests are independently checked.",
+    "Missing region means no stored detection/binding evidence, not proof that no person is visible.",
+    "E01 second 608 is a known target interval, not a saved result hit."
+  ],
+  "windows": [
+    {
+      "episode": 1,
+      "asset_id": "asset_37d4c57811b34f3c9ae4",
+      "record_id": "rw_89a63b12092fc1bfae1bebff",
+      "start_ms": 606000,
+      "end_ms": 612000,
+      "observations": {
+        "active_window_path": "library/assets/asset_37d4c57811b34f3c9ae4/analyses/run_cf0ad0a8a89b46d0be0b/retrieval-units/rw_89a63b12092fc1bfae1bebff.json",
+        "active_window_digest": "95dc429eab10a4290db7bbfa",
+        "active_window_digest_valid": true,
+        "identity_path": "library/assets/asset_37d4c57811b34f3c9ae4/analyses/run_cf0ad0a8a89b46d0be0b/retrieval-identities/rw_89a63b12092fc1bfae1bebff.json",
+        "identity_digest": "30a3c45c0bb2a161be0dd371",
+        "identity_digest_valid": true,
+        "identity_status": "completed",
+        "identity_policy": "identity-binding-v2",
+        "vlm_observation_active": false,
+        "base_entities_count": 0,
+        "indexed_record_present": true
+      },
+      "display_second": 608,
+      "display_second_source": "known target",
+      "total_evidence_frames": 24,
+      "local_identity_frame_count": 5,
+      "region_count": 3,
+      "verified_identity_count": 0,
+      "candidate_name_union": [
+        "爱城华恋"
+      ],
+      "multiple_candidate_names_same_frame": [],
+      "ui_second_region_count": 1,
+      "ui_second_visual_link_frame_count": 4,
+      "frames": [
+        {
+          "id": "kf_855b5dbb6fe6ccaa0b6e3e60",
+          "at_ms": 606105,
+          "shot_id": "shot_000000600975_000000608983",
+          "reason": "stable_pose",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_37d4c57811b34f3c9ae4/frames/kf_855b5dbb6fe6ccaa0b6e3e60.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/detections/a4106dc28cb76e17cbe68a94.json",
+            "frame_id": "kf_855b5dbb6fe6ccaa0b6e3e60",
+            "at_ms": 606105,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_a955a804a73c17cda28e29b7",
+          "at_ms": 608149,
+          "shot_id": "shot_000000600975_000000608983",
+          "reason": "stable_pose",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_37d4c57811b34f3c9ae4/frames/kf_a955a804a73c17cda28e29b7.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_6a684c73cf3fafd36c2b0b9a",
+          "at_ms": 608483,
+          "shot_id": "shot_000000600975_000000608983",
+          "reason": "retrieval_periodic",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_37d4c57811b34f3c9ae4/frames/kf_6a684c73cf3fafd36c2b0b9a.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/detections/80dedd6ff56d810e768d5971.json",
+            "frame_id": "kf_6a684c73cf3fafd36c2b0b9a",
+            "at_ms": 608483,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_de85187d2cd1d17928c34546",
+          "at_ms": 608942,
+          "shot_id": "shot_000000600975_000000608983",
+          "reason": "retrieval_shot_last",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_37d4c57811b34f3c9ae4/frames/kf_de85187d2cd1d17928c34546.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_eb6f0d91daa9868557f9b5e6",
+          "at_ms": 608983,
+          "shot_id": "shot_000000608983_000000612487",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_37d4c57811b34f3c9ae4/frames/kf_eb6f0d91daa9868557f9b5e6.jpg",
+          "regions": [
+            "region_8001acd72ce0abfdaefa90dd"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/detections/d04c4847aa9b71ea62544d5e.json",
+            "frame_id": "kf_eb6f0d91daa9868557f9b5e6",
+            "at_ms": 608983,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  731,
+                  0,
+                  1748,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8290282487869263
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_c4182c1931b6ba88b8df878f",
+          "at_ms": 610985,
+          "shot_id": "shot_000000608983_000000612487",
+          "reason": "retrieval_periodic",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_37d4c57811b34f3c9ae4/frames/kf_c4182c1931b6ba88b8df878f.jpg",
+          "regions": [
+            "region_f6e92d943c594ed289b9c32a"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/detections/1d01ff8a9a31a2c5a20b3c73.json",
+            "frame_id": "kf_c4182c1931b6ba88b8df878f",
+            "at_ms": 610985,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  692,
+                  1,
+                  1862,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8332409858703613
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_20144ba369201fc0c120aae5",
+          "at_ms": 611986,
+          "shot_id": "shot_000000608983_000000612487",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_37d4c57811b34f3c9ae4/frames/kf_20144ba369201fc0c120aae5.jpg",
+          "regions": [
+            "region_8a36dca617b86e98561b8717"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/detections/fd2e151423d3c119e1fae75d.json",
+            "frame_id": "kf_20144ba369201fc0c120aae5",
+            "at_ms": 611986,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  318,
+                  13,
+                  1920,
+                  1079
+                ],
+                "label": "person",
+                "detection_score": 0.9052323698997498
+              }
+            ]
+          }
+        }
+      ],
+      "regions": [
+        {
+          "id": "region_8001acd72ce0abfdaefa90dd",
+          "frame_id": "kf_eb6f0d91daa9868557f9b5e6",
+          "at_ms": 608983,
+          "box": [
+            0.3807291666666667,
+            0.0,
+            0.5296875,
+            1.0
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/regions/region_8001acd72ce0abfdaefa90dd.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.1908750683069229,
+            "margin": 0.0687396377325058,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_eb6f0d91daa9868557f9b5e6"
+            ]
+          }
+        },
+        {
+          "id": "region_f6e92d943c594ed289b9c32a",
+          "frame_id": "kf_c4182c1931b6ba88b8df878f",
+          "at_ms": 610985,
+          "box": [
+            0.36041666666666666,
+            0.000925925925925926,
+            0.609375,
+            0.9990740740740741
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/regions/region_f6e92d943c594ed289b9c32a.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.20060360431671143,
+            "margin": 0.08770716190338135,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_c4182c1931b6ba88b8df878f"
+            ]
+          }
+        },
+        {
+          "id": "region_8a36dca617b86e98561b8717",
+          "frame_id": "kf_20144ba369201fc0c120aae5",
+          "at_ms": 611986,
+          "box": [
+            0.165625,
+            0.012037037037037037,
+            0.834375,
+            0.987037037037037
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_37d4c57811b34f3c9ae4/identity/visual/regions/region_8a36dca617b86e98561b8717.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.1962362676858902,
+            "margin": 0.04603973776102066,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_20144ba369201fc0c120aae5"
+            ]
+          }
+        }
+      ],
+      "visual_inspection": {
+        "frame_id": "kf_6a684c73cf3fafd36c2b0b9a",
+        "at_ms": 608483,
+        "visible_people": 2,
+        "observation": "Two small animated figures are visibly standing on red tower beams. Stored detection cache for this exact sampled frame contains zero boxes. Names are not independently verified by visual inspection.",
+        "extra_reference": "workspace/.cache/jockey-e01-visual-check-20261103/native-608.jpg",
+        "boundary_warning": "608983 ms (608.983 seconds) is a new shot with one Karen candidate; floor-to-second interval [608000,609000) spans both shots, so its region count must not be attributed to the earlier tower-beam frame."
+      }
+    },
+    {
+      "episode": 11,
+      "asset_id": "asset_00da5421cf6d46378a4e",
+      "record_id": "rw_1ec3c2cb0da40826d8a66264",
+      "start_ms": 176760,
+      "end_ms": 180000,
+      "observations": {
+        "active_window_path": "library/assets/asset_00da5421cf6d46378a4e/analyses/run_8ea0fefa18f34cf4b989/retrieval-units/rw_1ec3c2cb0da40826d8a66264.json",
+        "active_window_digest": "2a07072fdcdcba01cbccdec4",
+        "active_window_digest_valid": true,
+        "identity_path": "library/assets/asset_00da5421cf6d46378a4e/analyses/run_8ea0fefa18f34cf4b989/retrieval-identities/rw_1ec3c2cb0da40826d8a66264.json",
+        "identity_digest": "0895713ce3b2d67cfe4db6c5",
+        "identity_digest_valid": true,
+        "identity_status": "completed",
+        "identity_policy": "identity-binding-v2",
+        "vlm_observation_active": false,
+        "base_entities_count": 0,
+        "indexed_record_present": true
+      },
+      "display_second": 178,
+      "display_second_source": "saved threshold75 result UI",
+      "total_evidence_frames": 36,
+      "local_identity_frame_count": 6,
+      "region_count": 2,
+      "verified_identity_count": 0,
+      "candidate_name_union": [
+        "爱城华恋",
+        "神乐光"
+      ],
+      "multiple_candidate_names_same_frame": [],
+      "ui_second_region_count": 0,
+      "ui_second_visual_link_frame_count": 11,
+      "frames": [
+        {
+          "id": "kf_45bc2f74420f828f6e67faf1",
+          "at_ms": 176760,
+          "shot_id": "shot_000000175842_000000176802",
+          "reason": "retrieval_shot_last",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_45bc2f74420f828f6e67faf1.jpg",
+          "regions": [
+            "region_cc6e87f8a2bc5c6e6dd393b2"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/detections/4212c98e002a6ccddd6c4662.json",
+            "frame_id": "kf_45bc2f74420f828f6e67faf1",
+            "at_ms": 176760,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  209,
+                  4,
+                  1545,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8448333740234375
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_b03b6bef82e69596c2e5e269",
+          "at_ms": 176802,
+          "shot_id": "shot_000000176802_000000177719",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_b03b6bef82e69596c2e5e269.jpg",
+          "regions": [
+            "region_ab45cf9fa04342de6bd60392"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/detections/eb0c084f2240d28f33780760.json",
+            "frame_id": "kf_b03b6bef82e69596c2e5e269",
+            "at_ms": 176802,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  373,
+                  55,
+                  1765,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8572539687156677
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_6b0c26eaf1b3a84fbd732875",
+          "at_ms": 177719,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_6b0c26eaf1b3a84fbd732875.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/detections/df202a03e427ee3e400ca67e.json",
+            "frame_id": "kf_6b0c26eaf1b3a84fbd732875",
+            "at_ms": 177719,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_6ba606e8638aec16d94b7bde",
+          "at_ms": 178053,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "stable_pose",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_6ba606e8638aec16d94b7bde.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_b5cd74af4c23f61b1afd4ad3",
+          "at_ms": 178220,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_b5cd74af4c23f61b1afd4ad3.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_c0784c4feef87231f1783127",
+          "at_ms": 178303,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_c0784c4feef87231f1783127.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_561040188c22d41f8b313cf6",
+          "at_ms": 178387,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_561040188c22d41f8b313cf6.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_10dbe0b59d44c2aad71a9286",
+          "at_ms": 178470,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_10dbe0b59d44c2aad71a9286.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_d6728db811d8fb826eee073c",
+          "at_ms": 178553,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_d6728db811d8fb826eee073c.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_43fbbee241bbb69bd90f4d30",
+          "at_ms": 178637,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_43fbbee241bbb69bd90f4d30.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_8949feb3cf9b816798be2ffc",
+          "at_ms": 178678,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "stable_pose",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_8949feb3cf9b816798be2ffc.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_2aa14ce96cb41a3744608847",
+          "at_ms": 178720,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_2aa14ce96cb41a3744608847.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_18f0346d6a7195fcf487376b",
+          "at_ms": 178804,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_18f0346d6a7195fcf487376b.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_6db76093653eda8742d5d98b",
+          "at_ms": 178970,
+          "shot_id": "shot_000000177719_000000179679",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_6db76093653eda8742d5d98b.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_9f11f0c7e5469e943a126f05",
+          "at_ms": 179679,
+          "shot_id": "shot_000000179679_000000179805",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_9f11f0c7e5469e943a126f05.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/detections/7831f771e09311e8b94ed7fd.json",
+            "frame_id": "kf_9f11f0c7e5469e943a126f05",
+            "at_ms": 179679,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_ee40aa63864e115d549a330b",
+          "at_ms": 179805,
+          "shot_id": "shot_000000179805_000000179888",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_ee40aa63864e115d549a330b.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/detections/522419ba9a1726824674451a.json",
+            "frame_id": "kf_ee40aa63864e115d549a330b",
+            "at_ms": 179805,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_873f4f4a636ab164909679e9",
+          "at_ms": 179888,
+          "shot_id": "shot_000000179888_000000180055",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_00da5421cf6d46378a4e/frames/kf_873f4f4a636ab164909679e9.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/detections/df216d529410c2fa7ceef299.json",
+            "frame_id": "kf_873f4f4a636ab164909679e9",
+            "at_ms": 179888,
+            "box_count": 0,
+            "detections": []
+          }
+        }
+      ],
+      "regions": [
+        {
+          "id": "region_cc6e87f8a2bc5c6e6dd393b2",
+          "frame_id": "kf_45bc2f74420f828f6e67faf1",
+          "at_ms": 176760,
+          "box": [
+            0.10885416666666667,
+            0.003703703703703704,
+            0.6958333333333333,
+            0.9962962962962963
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/regions/region_cc6e87f8a2bc5c6e6dd393b2.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.09921463578939438,
+            "margin": 0.2160591259598732,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_45bc2f74420f828f6e67faf1"
+            ]
+          }
+        },
+        {
+          "id": "region_ab45cf9fa04342de6bd60392",
+          "frame_id": "kf_b03b6bef82e69596c2e5e269",
+          "at_ms": 176802,
+          "box": [
+            0.19427083333333334,
+            0.05092592592592592,
+            0.725,
+            0.9490740740740741
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_00da5421cf6d46378a4e/identity/visual/regions/region_ab45cf9fa04342de6bd60392.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "source": "ccip_uncalibrated",
+            "distance": 0.0075566405430436134,
+            "margin": 0.26914002653211355,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "candidate_character_name": "神乐光",
+            "evidence_frame_ids": [
+              "kf_b03b6bef82e69596c2e5e269"
+            ]
+          }
+        }
+      ],
+      "visual_inspection": {
+        "frame_id": "kf_6ba606e8638aec16d94b7bde",
+        "at_ms": 178053,
+        "visible_complete_people": 0,
+        "observation": "Night scene under red tower structure, with central white vertical structure and credits. No complete person visible in this inspected frame; clothing fragments are visible at lower corners. Candidate names come from earlier frames in the window."
+      }
+    },
+    {
+      "episode": 8,
+      "asset_id": "asset_e51338f025b44140ac64",
+      "record_id": "rw_01767dd923b444abb7006eb5",
+      "start_ms": 378000,
+      "end_ms": 384000,
+      "observations": {
+        "active_window_path": "library/assets/asset_e51338f025b44140ac64/analyses/run_f51072383388444fa684/retrieval-units/rw_01767dd923b444abb7006eb5.json",
+        "active_window_digest": "da0329b26f9704a657b5b380",
+        "active_window_digest_valid": true,
+        "identity_path": "library/assets/asset_e51338f025b44140ac64/analyses/run_f51072383388444fa684/retrieval-identities/rw_01767dd923b444abb7006eb5.json",
+        "identity_digest": "746d5306e1351307b9394645",
+        "identity_digest_valid": true,
+        "identity_status": "completed",
+        "identity_policy": "identity-binding-v2",
+        "vlm_observation_active": false,
+        "base_entities_count": 0,
+        "indexed_record_present": true
+      },
+      "display_second": 383,
+      "display_second_source": "saved threshold75 result UI",
+      "total_evidence_frames": 29,
+      "local_identity_frame_count": 5,
+      "region_count": 4,
+      "verified_identity_count": 0,
+      "candidate_name_union": [
+        "爱城华恋",
+        "神乐光"
+      ],
+      "multiple_candidate_names_same_frame": [
+        {
+          "frame_id": "kf_aa7861f6b815b47ec670cb36",
+          "at_ms": 380338,
+          "names": [
+            "爱城华恋",
+            "神乐光"
+          ]
+        }
+      ],
+      "ui_second_region_count": 0,
+      "ui_second_visual_link_frame_count": 2,
+      "frames": [
+        {
+          "id": "kf_9231e263aa4db239114d36a9",
+          "at_ms": 378336,
+          "shot_id": "shot_000000377377_000000381756",
+          "reason": "stable_pose",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_e51338f025b44140ac64/frames/kf_9231e263aa4db239114d36a9.jpg",
+          "regions": [
+            "region_6fbae5f40856eb1889e48a36"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_e51338f025b44140ac64/identity/visual/detections/de622067b3d8e67654b2dbbf.json",
+            "frame_id": "kf_9231e263aa4db239114d36a9",
+            "at_ms": 378336,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  588,
+                  0,
+                  1920,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8932577967643738
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_aa7861f6b815b47ec670cb36",
+          "at_ms": 380338,
+          "shot_id": "shot_000000377377_000000381756",
+          "reason": "stable_pose",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_e51338f025b44140ac64/frames/kf_aa7861f6b815b47ec670cb36.jpg",
+          "regions": [
+            "region_44f3241a2be7161971bd9c1b",
+            "region_804b9a3bdc863fb1f8544c03"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_e51338f025b44140ac64/identity/visual/detections/8d56cc6102ea038e045c3eb3.json",
+            "frame_id": "kf_aa7861f6b815b47ec670cb36",
+            "at_ms": 380338,
+            "box_count": 2,
+            "detections": [
+              {
+                "box": [
+                  597,
+                  0,
+                  1920,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.879829466342926
+              },
+              {
+                "box": [
+                  0,
+                  0,
+                  917,
+                  1079
+                ],
+                "label": "person",
+                "detection_score": 0.30735862255096436
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_2e7cf1420e4a03d39e71114d",
+          "at_ms": 381381,
+          "shot_id": "shot_000000377377_000000381756",
+          "reason": "retrieval_periodic",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_e51338f025b44140ac64/frames/kf_2e7cf1420e4a03d39e71114d.jpg",
+          "regions": [
+            "region_65c97724d9ff2cb3235c9b40"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_e51338f025b44140ac64/identity/visual/detections/bb330c6740f261a2a26826b5.json",
+            "frame_id": "kf_2e7cf1420e4a03d39e71114d",
+            "at_ms": 381381,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  535,
+                  0,
+                  1920,
+                  1079
+                ],
+                "label": "person",
+                "detection_score": 0.8364729881286621
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_7a3c5b2a3609331b83812327",
+          "at_ms": 381756,
+          "shot_id": "shot_000000381756_000000385010",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_e51338f025b44140ac64/frames/kf_7a3c5b2a3609331b83812327.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_e51338f025b44140ac64/identity/visual/detections/b1c26e39e859b83b99470b32.json",
+            "frame_id": "kf_7a3c5b2a3609331b83812327",
+            "at_ms": 381756,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_5d6a4babe4acd974757316c1",
+          "at_ms": 383258,
+          "shot_id": "shot_000000381756_000000385010",
+          "reason": "retrieval_periodic",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_e51338f025b44140ac64/frames/kf_5d6a4babe4acd974757316c1.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_64c032320f7c7cd22dbba4d2",
+          "at_ms": 383758,
+          "shot_id": "shot_000000381756_000000385010",
+          "reason": "retrieval_periodic",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_e51338f025b44140ac64/frames/kf_64c032320f7c7cd22dbba4d2.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_e51338f025b44140ac64/identity/visual/detections/7bd664c2b1bec4535eda0a5f.json",
+            "frame_id": "kf_64c032320f7c7cd22dbba4d2",
+            "at_ms": 383758,
+            "box_count": 0,
+            "detections": []
+          }
+        }
+      ],
+      "regions": [
+        {
+          "id": "region_6fbae5f40856eb1889e48a36",
+          "frame_id": "kf_9231e263aa4db239114d36a9",
+          "at_ms": 378336,
+          "box": [
+            0.30625,
+            0.0,
+            0.69375,
+            1.0
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_e51338f025b44140ac64/identity/visual/regions/region_6fbae5f40856eb1889e48a36.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.10641225427389145,
+            "margin": 0.1326121687889099,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_9231e263aa4db239114d36a9"
+            ]
+          }
+        },
+        {
+          "id": "region_44f3241a2be7161971bd9c1b",
+          "frame_id": "kf_aa7861f6b815b47ec670cb36",
+          "at_ms": 380338,
+          "box": [
+            0.0,
+            0.0,
+            0.47760416666666666,
+            0.9990740740740741
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_e51338f025b44140ac64/identity/visual/regions/region_44f3241a2be7161971bd9c1b.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "source": "ccip_uncalibrated",
+            "distance": 0.2599527835845947,
+            "margin": 0.019926726818084717,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "candidate_character_name": "神乐光",
+            "evidence_frame_ids": [
+              "kf_aa7861f6b815b47ec670cb36"
+            ]
+          }
+        },
+        {
+          "id": "region_804b9a3bdc863fb1f8544c03",
+          "frame_id": "kf_aa7861f6b815b47ec670cb36",
+          "at_ms": 380338,
+          "box": [
+            0.3109375,
+            0.0,
+            0.6890625,
+            1.0
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_e51338f025b44140ac64/identity/visual/regions/region_804b9a3bdc863fb1f8544c03.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.14452800154685974,
+            "margin": 0.06932568550109863,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_aa7861f6b815b47ec670cb36"
+            ]
+          }
+        },
+        {
+          "id": "region_65c97724d9ff2cb3235c9b40",
+          "frame_id": "kf_2e7cf1420e4a03d39e71114d",
+          "at_ms": 381381,
+          "box": [
+            0.2786458333333333,
+            0.0,
+            0.7213541666666666,
+            0.9990740740740741
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_e51338f025b44140ac64/identity/visual/regions/region_65c97724d9ff2cb3235c9b40.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.1283988058567047,
+            "margin": 0.13964682817459106,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_2e7cf1420e4a03d39e71114d"
+            ]
+          }
+        }
+      ],
+      "visual_inspection": {
+        "frame_id": "kf_5d6a4babe4acd974757316c1",
+        "at_ms": 383258,
+        "visible_people": 2,
+        "observation": "Two very small figures are visible on a playground climbing/slide platform at the bottom of the image; Tokyo Tower stands in the distance. This does not show people standing on the tower. Adjacent sampled frame 383758 has zero stored detection boxes; this visual observation concerns 383258 only."
+      }
+    },
+    {
+      "episode": 7,
+      "asset_id": "asset_495dc44b4b564684a834",
+      "record_id": "rw_342af98329c8b8a409d005c9",
+      "start_ms": 378000,
+      "end_ms": 381923,
+      "observations": {
+        "active_window_path": "library/assets/asset_495dc44b4b564684a834/analyses/run_3a41ffdbe0be4f14a28b/retrieval-units/rw_342af98329c8b8a409d005c9.json",
+        "active_window_digest": "d2c3102f4a8999c2cef6a0f2",
+        "active_window_digest_valid": true,
+        "identity_path": "library/assets/asset_495dc44b4b564684a834/analyses/run_3a41ffdbe0be4f14a28b/retrieval-identities/rw_342af98329c8b8a409d005c9.json",
+        "identity_digest": "54e19cd47eb5e398ca39a65c",
+        "identity_digest_valid": true,
+        "identity_status": "completed",
+        "identity_policy": "identity-binding-v2",
+        "vlm_observation_active": false,
+        "base_entities_count": 0,
+        "indexed_record_present": true
+      },
+      "display_second": 381,
+      "display_second_source": "saved threshold75 result UI",
+      "total_evidence_frames": 30,
+      "local_identity_frame_count": 6,
+      "region_count": 3,
+      "verified_identity_count": 0,
+      "candidate_name_union": [
+        "爱城华恋",
+        "神乐光"
+      ],
+      "multiple_candidate_names_same_frame": [],
+      "ui_second_region_count": 0,
+      "ui_second_visual_link_frame_count": 9,
+      "frames": [
+        {
+          "id": "kf_0da7b06d0ab51b34a3bdceac",
+          "at_ms": 378128,
+          "shot_id": "shot_000000376334_000000378336",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_0da7b06d0ab51b34a3bdceac.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_495dc44b4b564684a834/identity/visual/detections/5f1402b3183df12018b5f3c0.json",
+            "frame_id": "kf_0da7b06d0ab51b34a3bdceac",
+            "at_ms": 378128,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_e315fd7f6320c0ef1f47a104",
+          "at_ms": 378336,
+          "shot_id": "shot_000000378336_000000378795",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_e315fd7f6320c0ef1f47a104.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_495dc44b4b564684a834/identity/visual/detections/dc50f4374445543e15d82b5b.json",
+            "frame_id": "kf_e315fd7f6320c0ef1f47a104",
+            "at_ms": 378336,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_a0cb8a8657abea91c313a8bb",
+          "at_ms": 378795,
+          "shot_id": "shot_000000378795_000000379754",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_a0cb8a8657abea91c313a8bb.jpg",
+          "regions": [
+            "region_05aca0b073ed02195a6ee84e"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_495dc44b4b564684a834/identity/visual/detections/b501488d123e7cd6820191ef.json",
+            "frame_id": "kf_a0cb8a8657abea91c313a8bb",
+            "at_ms": 378795,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  222,
+                  20,
+                  1621,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8421574234962463
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_713e0e56538340ef1effa061",
+          "at_ms": 379754,
+          "shot_id": "shot_000000379754_000000380672",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_713e0e56538340ef1effa061.jpg",
+          "regions": [
+            "region_675dce5c04fdb171faa10710"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_495dc44b4b564684a834/identity/visual/detections/befacda9ca4f16918d7ee284.json",
+            "frame_id": "kf_713e0e56538340ef1effa061",
+            "at_ms": 379754,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  330,
+                  70,
+                  1763,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8262692093849182
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_7e0ddf1892bc0607dbc837b6",
+          "at_ms": 380630,
+          "shot_id": "shot_000000379754_000000380672",
+          "reason": "retrieval_shot_last",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_7e0ddf1892bc0607dbc837b6.jpg",
+          "regions": [
+            "region_836ddfcd91b3746626b4431f"
+          ],
+          "stored_detection": {
+            "path": "library/assets/asset_495dc44b4b564684a834/identity/visual/detections/4fa8b40f59f2e89a01cab7dd.json",
+            "frame_id": "kf_7e0ddf1892bc0607dbc837b6",
+            "at_ms": 380630,
+            "box_count": 1,
+            "detections": [
+              {
+                "box": [
+                  359,
+                  58,
+                  1775,
+                  1080
+                ],
+                "label": "person",
+                "detection_score": 0.8295350074768066
+              }
+            ]
+          }
+        },
+        {
+          "id": "kf_21bbc3651457d62aa8db72cc",
+          "at_ms": 380672,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_shot_first",
+          "is_local_identity_frame": true,
+          "in_ui_second_interval": false,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_21bbc3651457d62aa8db72cc.jpg",
+          "regions": [],
+          "stored_detection": {
+            "path": "library/assets/asset_495dc44b4b564684a834/identity/visual/detections/ae0d76b4fd15c343ab9c0c54.json",
+            "frame_id": "kf_21bbc3651457d62aa8db72cc",
+            "at_ms": 380672,
+            "box_count": 0,
+            "detections": []
+          }
+        },
+        {
+          "id": "kf_26e75f29b2b9d385ca5ab49c",
+          "at_ms": 381006,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "stable_pose",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_26e75f29b2b9d385ca5ab49c.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_3e50007f2a0b87705a0e1d89",
+          "at_ms": 381172,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_3e50007f2a0b87705a0e1d89.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_0ed1069d991c90ba5ed92568",
+          "at_ms": 381256,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_0ed1069d991c90ba5ed92568.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_a1b98a7ec1560ce66a912d84",
+          "at_ms": 381339,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_a1b98a7ec1560ce66a912d84.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_2af5b0e9f31198b4b4825b61",
+          "at_ms": 381423,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_2af5b0e9f31198b4b4825b61.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_a46fd70da65f7da049ea0191",
+          "at_ms": 381506,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_a46fd70da65f7da049ea0191.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_d93842bdf3dd438093061bea",
+          "at_ms": 381590,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_d93842bdf3dd438093061bea.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_e5e1d47e9994c25be8b13a1e",
+          "at_ms": 381673,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_e5e1d47e9994c25be8b13a1e.jpg",
+          "regions": []
+        },
+        {
+          "id": "kf_9837a5004b1f243587216da6",
+          "at_ms": 381756,
+          "shot_id": "shot_000000380672_000000382632",
+          "reason": "retrieval_region_peak",
+          "is_local_identity_frame": false,
+          "in_ui_second_interval": true,
+          "visual_link_present": true,
+          "path": "library/assets/asset_495dc44b4b564684a834/frames/kf_9837a5004b1f243587216da6.jpg",
+          "regions": []
+        }
+      ],
+      "regions": [
+        {
+          "id": "region_05aca0b073ed02195a6ee84e",
+          "frame_id": "kf_a0cb8a8657abea91c313a8bb",
+          "at_ms": 378795,
+          "box": [
+            0.115625,
+            0.018518518518518517,
+            0.7286458333333333,
+            0.9814814814814815
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_495dc44b4b564684a834/identity/visual/regions/region_05aca0b073ed02195a6ee84e.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "source": "ccip_unverified_reference",
+            "distance": 0.071298748254776,
+            "margin": 0.220411479473114,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_f6d5c552a011f43ed4b3dedc",
+            "candidate_character_name": "爱城华恋",
+            "evidence_frame_ids": [
+              "kf_a0cb8a8657abea91c313a8bb"
+            ]
+          }
+        },
+        {
+          "id": "region_675dce5c04fdb171faa10710",
+          "frame_id": "kf_713e0e56538340ef1effa061",
+          "at_ms": 379754,
+          "box": [
+            0.171875,
+            0.06481481481481481,
+            0.7463541666666667,
+            0.9351851851851852
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_495dc44b4b564684a834/identity/visual/regions/region_675dce5c04fdb171faa10710.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "source": "ccip_uncalibrated",
+            "distance": 0.00689859965495998,
+            "margin": 0.2768434556419379,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "candidate_character_name": "神乐光",
+            "evidence_frame_ids": [
+              "kf_713e0e56538340ef1effa061"
+            ]
+          }
+        },
+        {
+          "id": "region_836ddfcd91b3746626b4431f",
+          "frame_id": "kf_7e0ddf1892bc0607dbc837b6",
+          "at_ms": 380630,
+          "box": [
+            0.18697916666666667,
+            0.053703703703703705,
+            0.7375,
+            0.9462962962962963
+          ],
+          "identity_policy": "identity-binding-v2",
+          "source_path": "library/assets/asset_495dc44b4b564684a834/identity/visual/regions/region_836ddfcd91b3746626b4431f.json",
+          "quality": {
+            "accepted": true,
+            "person_count": 1,
+            "single_character": true,
+            "reasons": []
+          },
+          "raw_match": {
+            "status": "candidate",
+            "character_id": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "source": "ccip_uncalibrated",
+            "distance": 0.02705318294465542,
+            "margin": 0.2496382538229227,
+            "calibration_id": null
+          },
+          "indexed_entity": {
+            "binding_status": "candidate",
+            "character_id": null,
+            "character_name": null,
+            "candidate_character_id": "character_bgm_b7073dd02d1dcc8c7e91d830",
+            "candidate_character_name": "神乐光",
+            "evidence_frame_ids": [
+              "kf_7e0ddf1892bc0607dbc837b6"
+            ]
+          }
+        }
+      ],
+      "visual_inspection": {
+        "frame_id": "kf_26e75f29b2b9d385ca5ab49c",
+        "at_ms": 381006,
+        "visible_complete_people": 0,
+        "observation": "Night scene under red tower structure, with central white vertical structure and credits. No complete person visible in this inspected frame; clothing fragments are visible at lower corners. Candidate names come from earlier frames in the window."
+      }
+    }
+  ],
+  "conclusions": [
+    "The three saved result UI intervals have zero stored identity regions; their displayed names are window-level context from earlier frames.",
+    "The known E01 true target frame at 608483 was sampled but its stored detector returned zero boxes although two small figures are visible.",
+    "E08 contains visible small figures on playground equipment in front of the distant tower, so person presence alone does not prove the requested on-tower relation.",
+    "All examined resolved identity entries are candidates; there are no verified character identities in these windows.",
+    "Same-frame identity must not be fabricated from window-level names, and a hard same-frame identity gate would reject the known E01 target."
+  ],
+  "sanitized": true,
+  "sanitization": {
+    "scope": "Absolute local filesystem paths replaced with logical library/workspace paths; no media or model cache is bundled.",
+    "local_path_field_count": 88,
+    "local_path_fields": [
+      "/windows/0/frames/0/path",
+      "/windows/0/frames/0/stored_detection/path",
+      "/windows/0/frames/1/path",
+      "/windows/0/frames/2/path",
+      "/windows/0/frames/2/stored_detection/path",
+      "/windows/0/frames/3/path",
+      "/windows/0/frames/4/path",
+      "/windows/0/frames/4/stored_detection/path",
+      "/windows/0/frames/5/path",
+      "/windows/0/frames/5/stored_detection/path",
+      "/windows/0/frames/6/path",
+      "/windows/0/frames/6/stored_detection/path",
+      "/windows/0/observations/active_window_path",
+      "/windows/0/observations/identity_path",
+      "/windows/0/regions/0/source_path",
+      "/windows/0/regions/1/source_path",
+      "/windows/0/regions/2/source_path",
+      "/windows/0/visual_inspection/extra_reference",
+      "/windows/1/frames/0/path",
+      "/windows/1/frames/0/stored_detection/path",
+      "/windows/1/frames/1/path",
+      "/windows/1/frames/1/stored_detection/path",
+      "/windows/1/frames/10/path",
+      "/windows/1/frames/11/path",
+      "/windows/1/frames/12/path",
+      "/windows/1/frames/13/path",
+      "/windows/1/frames/14/path",
+      "/windows/1/frames/14/stored_detection/path",
+      "/windows/1/frames/15/path",
+      "/windows/1/frames/15/stored_detection/path",
+      "/windows/1/frames/16/path",
+      "/windows/1/frames/16/stored_detection/path",
+      "/windows/1/frames/2/path",
+      "/windows/1/frames/2/stored_detection/path",
+      "/windows/1/frames/3/path",
+      "/windows/1/frames/4/path",
+      "/windows/1/frames/5/path",
+      "/windows/1/frames/6/path",
+      "/windows/1/frames/7/path",
+      "/windows/1/frames/8/path",
+      "/windows/1/frames/9/path",
+      "/windows/1/observations/active_window_path",
+      "/windows/1/observations/identity_path",
+      "/windows/1/regions/0/source_path",
+      "/windows/1/regions/1/source_path",
+      "/windows/2/frames/0/path",
+      "/windows/2/frames/0/stored_detection/path",
+      "/windows/2/frames/1/path",
+      "/windows/2/frames/1/stored_detection/path",
+      "/windows/2/frames/2/path",
+      "/windows/2/frames/2/stored_detection/path",
+      "/windows/2/frames/3/path",
+      "/windows/2/frames/3/stored_detection/path",
+      "/windows/2/frames/4/path",
+      "/windows/2/frames/5/path",
+      "/windows/2/frames/5/stored_detection/path",
+      "/windows/2/observations/active_window_path",
+      "/windows/2/observations/identity_path",
+      "/windows/2/regions/0/source_path",
+      "/windows/2/regions/1/source_path",
+      "/windows/2/regions/2/source_path",
+      "/windows/2/regions/3/source_path",
+      "/windows/3/frames/0/path",
+      "/windows/3/frames/0/stored_detection/path",
+      "/windows/3/frames/1/path",
+      "/windows/3/frames/1/stored_detection/path",
+      "/windows/3/frames/10/path",
+      "/windows/3/frames/11/path",
+      "/windows/3/frames/12/path",
+      "/windows/3/frames/13/path",
+      "/windows/3/frames/14/path",
+      "/windows/3/frames/2/path",
+      "/windows/3/frames/2/stored_detection/path",
+      "/windows/3/frames/3/path",
+      "/windows/3/frames/3/stored_detection/path",
+      "/windows/3/frames/4/path",
+      "/windows/3/frames/4/stored_detection/path",
+      "/windows/3/frames/5/path",
+      "/windows/3/frames/5/stored_detection/path",
+      "/windows/3/frames/6/path",
+      "/windows/3/frames/7/path",
+      "/windows/3/frames/8/path",
+      "/windows/3/frames/9/path",
+      "/windows/3/observations/active_window_path",
+      "/windows/3/observations/identity_path",
+      "/windows/3/regions/0/source_path",
+      "/windows/3/regions/1/source_path",
+      "/windows/3/regions/2/source_path"
+    ],
+    "credential_values_removed": 0,
+    "source_filename": "window-identity-comparison.json",
+    "source_sha256": "cbaf4156baf334ccf5600e5b130e798418c17c1de370f92a3607d0f1f01b64a9"
+  }
+}

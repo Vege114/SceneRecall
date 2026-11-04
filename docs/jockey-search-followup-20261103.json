@@ -1,0 +1,393 @@
+{
+  "schema": "jockey-search-followup-v1",
+  "date": "2026-11-03",
+  "timezone": "Asia/Shanghai",
+  "original_query": "爱城华恋与神乐光站在东京塔上",
+  "previous_record": "docs/jockey-search-comparison-20261103.json",
+  "render_results": [
+    {
+      "knowledge_store_id": "ks_01a19fdb-0da5-7733-ad51-71c85f488a45",
+      "elapsed_ms": 14239,
+      "session_id": "sess_01a1a0be-3c27-7000-b036-99c3354104ff",
+      "response_id": "resp_01a1a0bf-5359-7122-954d-ff95e092c0ae",
+      "title": "上次“爱城华恋与神乐光站在东京塔上”共享库原始检索候选 · 非确认《少女歌剧》命中",
+      "view_tree": {
+        "type": "stack",
+        "children": [
+          {
+            "type": "notice",
+            "level": "info",
+            "title": "均为原始快速检索候选，未经语义确认",
+            "text": "以下 10 条是上次“爱城华恋与神乐光站在东京塔上”共享库快速检索原样返回的候选，不是已确认的《少女歌剧》命中。排名、item ID 与精确时间段均按原样保留，未重新检索、未替换、未重排。原始快速检索耗时与本次结果展示耗时分开计算。"
+          },
+          {
+            "type": "narrativeBlock",
+            "items": [
+              {
+                "text": "这里按上次的原始顺序原样重放 10 条候选：第 1 名来自《In Search Of A Flat Earth》，第 2–6 名来自《The Century of the Self》，第 7 名来自《8 Bit & '8 Bitish' Graphics》，第 9 名来自《Alain de Botton: Status Anxiety》，第 10 名来自《AlphaGo - The Movie》。每条均已绑定原 item ID 与精确到小数的秒级时间段，点击即可在播放器中跳转播放。下方表格为 1:1 原表复现，画廊按同一排名顺序排列；请注意这些只是检索候选，尚不能据此断定是《少女歌剧》相关画面。"
+              }
+            ]
+          },
+          {
+            "type": "table",
+            "columns": [
+              "原排名",
+              "精确时间范围",
+              "播放器"
+            ],
+            "rows": [
+              [
+                1,
+                "1271.0333–1281.7667 秒",
+                {
+                  "text": "[1] In Search Of A Flat Earth",
+                  "video_id": "6ae9739e23ddd4f89b30482b",
+                  "start": 1271.0333251953125,
+                  "end": 1281.7667236328125
+                }
+              ],
+              [
+                2,
+                "9215.9–9219.833 秒",
+                {
+                  "text": "[2] The Century of the Self",
+                  "video_id": "6ae976a27c0001afded8b577",
+                  "start": 9215.900390625,
+                  "end": 9219.8330078125
+                }
+              ],
+              [
+                3,
+                "1046.3–1050.1666 秒",
+                {
+                  "text": "[3] The Century of the Self",
+                  "video_id": "6ae976a27c0001afded8b577",
+                  "start": 1046.300048828125,
+                  "end": 1050.1666259765625
+                }
+              ],
+              [
+                4,
+                "11292.167–11298.167 秒",
+                {
+                  "text": "[4] The Century of the Self",
+                  "video_id": "6ae976a27c0001afded8b577",
+                  "start": 11292.1669921875,
+                  "end": 11298.1669921875
+                }
+              ],
+              [
+                5,
+                "1873.5667–1880.1666 秒",
+                {
+                  "text": "[5] The Century of the Self",
+                  "video_id": "6ae976a27c0001afded8b577",
+                  "start": 1873.566650390625,
+                  "end": 1880.1666259765625
+                }
+              ],
+              [
+                6,
+                "13730.767–13740.634 秒",
+                {
+                  "text": "[6] The Century of the Self",
+                  "video_id": "6ae976a27c0001afded8b577",
+                  "start": 13730.7666015625,
+                  "end": 13740.6337890625
+                }
+              ],
+              [
+                7,
+                "1072.5–1083.3667 秒",
+                {
+                  "text": "[7] 8 Bit & '8 Bitish' Graphics",
+                  "video_id": "6ae9737278eab368021411b2",
+                  "start": 1072.5,
+                  "end": 1083.36669921875
+                }
+              ],
+              [
+                8,
+                "3041.9666–3052.3666 秒",
+                {
+                  "text": "[8] The Century of the Self",
+                  "video_id": "6ae976a27c0001afded8b577",
+                  "start": 3041.966552734375,
+                  "end": 3052.36669921875
+                }
+              ],
+              [
+                9,
+                "2898.6333–2904.3667 秒",
+                {
+                  "text": "[9] Alain de Botton: Status Anxiety",
+                  "video_id": "6ae97c85bfff31e58fac4bd7",
+                  "start": 2898.63330078125,
+                  "end": 2904.36669921875
+                }
+              ],
+              [
+                10,
+                "637.7–640.76666 秒",
+                {
+                  "text": "[10] AlphaGo - The Movie",
+                  "video_id": "6ae97bbe9ab207771607e0ee",
+                  "start": 637.7000122070312,
+                  "end": 640.7666625976562
+                }
+              ]
+            ]
+          },
+          {
+            "type": "videoFrame",
+            "coordinate": "grid",
+            "intent": {
+              "play": true
+            },
+            "items": [
+              {
+                "video_id": "6ae9739e23ddd4f89b30482b",
+                "start": 1271.0333251953125,
+                "end": 1281.7667236328125,
+                "summary": "#1 · 1271.03–1281.77s — In Search Of A Flat Earth",
+                "filename": "In Search Of A Flat Earth"
+              },
+              {
+                "video_id": "6ae976a27c0001afded8b577",
+                "start": 9215.900390625,
+                "end": 9219.8330078125,
+                "summary": "#2 · 9215.9–9219.83s — The Century of the Self",
+                "filename": "The Century of the Self (Full Adam Curtis Documentary)"
+              },
+              {
+                "video_id": "6ae976a27c0001afded8b577",
+                "start": 1046.300048828125,
+                "end": 1050.1666259765625,
+                "summary": "#3 · 1046.3–1050.17s — The Century of the Self",
+                "filename": "The Century of the Self (Full Adam Curtis Documentary)"
+              },
+              {
+                "video_id": "6ae976a27c0001afded8b577",
+                "start": 11292.1669921875,
+                "end": 11298.1669921875,
+                "summary": "#4 · 11292.17–11298.17s — The Century of the Self",
+                "filename": "The Century of the Self (Full Adam Curtis Documentary)"
+              },
+              {
+                "video_id": "6ae976a27c0001afded8b577",
+                "start": 1873.566650390625,
+                "end": 1880.1666259765625,
+                "summary": "#5 · 1873.57–1880.17s — The Century of the Self",
+                "filename": "The Century of the Self (Full Adam Curtis Documentary)"
+              },
+              {
+                "video_id": "6ae976a27c0001afded8b577",
+                "start": 13730.7666015625,
+                "end": 13740.6337890625,
+                "summary": "#6 · 13730.77–13740.63s — The Century of the Self",
+                "filename": "The Century of the Self (Full Adam Curtis Documentary)"
+              },
+              {
+                "video_id": "6ae9737278eab368021411b2",
+                "start": 1072.5,
+                "end": 1083.36669921875,
+                "summary": "#7 · 1072.5–1083.37s — 8 Bit & '8 Bitish' Graphics",
+                "filename": "8 Bit & '8 Bitish' Graphics-Outside the Box"
+              },
+              {
+                "video_id": "6ae976a27c0001afded8b577",
+                "start": 3041.966552734375,
+                "end": 3052.36669921875,
+                "summary": "#8 · 3041.97–3052.37s — The Century of the Self",
+                "filename": "The Century of the Self (Full Adam Curtis Documentary)"
+              },
+              {
+                "video_id": "6ae97c85bfff31e58fac4bd7",
+                "start": 2898.63330078125,
+                "end": 2904.36669921875,
+                "summary": "#9 · 2898.63–2904.37s — Alain de Botton: Status Anxiety",
+                "filename": "Alain de Botton: Status Anxiety"
+              },
+              {
+                "video_id": "6ae97bbe9ab207771607e0ee",
+                "start": 637.7000122070312,
+                "end": 640.7666625976562,
+                "summary": "#10 · 637.7–640.77s — AlphaGo - The Movie",
+                "filename": "AlphaGo - The Movie | Full award-winning documentary"
+              }
+            ]
+          }
+        ]
+      },
+      "save_available": false
+    },
+    {
+      "knowledge_store_id": "ks_01a18061-0f89-7c73-b7e2-4bb13b94721d",
+      "elapsed_ms": 15447,
+      "session_id": "sess_01a1a0be-3af9-7e20-bd52-5af65e795e86",
+      "response_id": "resp_01a1a0bf-5464-7ec1-9d07-502aa6c48f0f",
+      "title": "上次原始候选 Gallery · Trending Videos（非确认命中）",
+      "view_tree": {
+        "type": "stack",
+        "children": [
+          {
+            "type": "narrativeBlock",
+            "items": [
+              {
+                "text": "这是上次用「爱城华恋与神乐光站在东京塔上」在共享库中检索得到的 10 条原始候选，按原有排名 1–10 原样呈现，未做新的语义检索、未替换或重排。它们是未经确认的候选，并不等于《少女歌剧》的已确认命中。每条候选保留可播放播放器，并附上原始 item ID 与精确的起止时间段；原始快速检索耗时与本次结果展示耗时是分开计算的。"
+              }
+            ]
+          },
+          {
+            "type": "videoFrame",
+            "coordinate": "grid",
+            "intent": {
+              "play": true
+            },
+            "items": [
+              {
+                "video_id": "6ae16127417d1d58e41c39ac",
+                "start": 14.8,
+                "end": 25.2,
+                "filename": "media.mp4",
+                "summary": "候选 #1 · 原始排名第 1",
+                "meta": {
+                  "rank": 1,
+                  "item_id": "6ae16127417d1d58e41c39ac",
+                  "clip": "00:14.8–00:25.2"
+                }
+              },
+              {
+                "video_id": "6ae16127417d1d58e41c39ac",
+                "start": 10.667,
+                "end": 14.8,
+                "filename": "media.mp4",
+                "summary": "候选 #2 · 原始排名第 2",
+                "meta": {
+                  "rank": 2,
+                  "item_id": "6ae16127417d1d58e41c39ac",
+                  "clip": "00:10.667–00:14.8"
+                }
+              },
+              {
+                "video_id": "6ae16127417d1d58e41c39ac",
+                "start": 0,
+                "end": 10.667,
+                "filename": "media.mp4",
+                "summary": "候选 #3 · 原始排名第 3",
+                "meta": {
+                  "rank": 3,
+                  "item_id": "6ae16127417d1d58e41c39ac",
+                  "clip": "00:00–00:10.667"
+                }
+              },
+              {
+                "video_id": "6ae161b8c9a551c9569098a9",
+                "start": 0,
+                "end": 11.467,
+                "filename": "media.mp4",
+                "summary": "候选 #4 · 原始排名第 4",
+                "meta": {
+                  "rank": 4,
+                  "item_id": "6ae161b8c9a551c9569098a9",
+                  "clip": "00:00–00:11.467"
+                }
+              },
+              {
+                "video_id": "6ae161d26f6a413bc18c7b0d",
+                "start": 0,
+                "end": 35.867,
+                "filename": "media.mp4",
+                "summary": "候选 #5 · 原始排名第 5",
+                "meta": {
+                  "rank": 5,
+                  "item_id": "6ae161d26f6a413bc18c7b0d",
+                  "clip": "00:00–00:35.867"
+                }
+              },
+              {
+                "video_id": "6ae161f1417d1d58e41c3b6e",
+                "start": 0,
+                "end": 11.4,
+                "filename": "media.mp4",
+                "summary": "候选 #6 · 原始排名第 6",
+                "meta": {
+                  "rank": 6,
+                  "item_id": "6ae161f1417d1d58e41c3b6e",
+                  "clip": "00:00–00:11.4"
+                }
+              },
+              {
+                "video_id": "6ae161b61ff2343f43965106",
+                "start": 0,
+                "end": 10.6,
+                "filename": "media.mp4",
+                "summary": "候选 #7 · 原始排名第 7",
+                "meta": {
+                  "rank": 7,
+                  "item_id": "6ae161b61ff2343f43965106",
+                  "clip": "00:00–00:10.6"
+                }
+              },
+              {
+                "video_id": "6ae16122417d1d58e41c399e",
+                "start": 7.467,
+                "end": 12.067,
+                "filename": "media.mp4",
+                "summary": "候选 #8 · 原始排名第 8",
+                "meta": {
+                  "rank": 8,
+                  "item_id": "6ae16122417d1d58e41c399e",
+                  "clip": "00:07.467–00:12.067"
+                }
+              },
+              {
+                "video_id": "6ae1612b6e542b45cfe5421f",
+                "start": 122.767,
+                "end": 127.7,
+                "filename": "media.mp4",
+                "summary": "候选 #9 · 原始排名第 9",
+                "meta": {
+                  "rank": 9,
+                  "item_id": "6ae1612b6e542b45cfe5421f",
+                  "clip": "02:02.767–02:07.7"
+                }
+              },
+              {
+                "video_id": "6ae161516f6a413bc18c7a1a",
+                "start": 126.167,
+                "end": 129.567,
+                "filename": "media.mp4",
+                "summary": "候选 #10 · 原始排名第 10",
+                "meta": {
+                  "rank": 10,
+                  "item_id": "6ae161516f6a413bc18c7a1a",
+                  "clip": "02:06.167–02:09.567"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "save_available": false
+    }
+  ],
+  "saved_link_status": "jockey_save_artifact failed for both initial renders with endpoint_not_exists / INVALID_ARGUMENT; no stable artifact URL available",
+  "timing_note": "Render calls only display previous candidates; they are separate from original jockey_search timings. No new same-corpus search has occurred.",
+  "local_media": {
+    "manifest": ".cache/jockey-local-upload-manifest-20261103.json",
+    "count": 12,
+    "total_bytes": 11513261619,
+    "format": "mkv",
+    "exists_verified": true,
+    "uploaded": false
+  },
+  "ingestion": {
+    "knowledge_store_id": "ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+    "upload_url": "https://connect.twelvelabs.io/upload?knowledgeStore=ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+    "status": "awaiting_user_web_login",
+    "ui_observed": "Log in to your account; Email address; Continue; Continue with Google",
+    "user_upload_authorization": true,
+    "authentication_handoff_requested": true
+  }
+}

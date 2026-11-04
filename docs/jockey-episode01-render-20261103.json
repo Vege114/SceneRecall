@@ -1,0 +1,108 @@
+{
+  "started_utc": "2026-11-03T10:32:06.310Z",
+  "ended_utc": "2026-11-03T10:32:19.596Z",
+  "elapsed_ms": 13286,
+  "response_id": "resp_01a1a0f7-60b9-7a12-9018-1aff5400fd83",
+  "session_id": "sess_01a1a0f7-5fd0-7472-9aa5-7a37dbcb6dec",
+  "save_available": false,
+  "view_tree": {
+    "type": "stack",
+    "children": [
+      {
+        "type": "narrativeBlock",
+        "items": [
+          {
+            "text": "以下為原句「愛城華戀與神樂光站在東京塔上」在第1集（item 6ae9b39d479a2fb4116d0884）中的原始檢索結果前5名，保持原始排名、未重新排序、未擴展時間範圍。這些片段僅作候選展示，尚未確認皆為目標場景，請點擊卡片播放自行判斷。原始檢索耗時 3.575 秒。"
+          }
+        ]
+      },
+      {
+        "type": "videoFrame",
+        "coordinate": "grid",
+        "intent": {
+          "play": true
+        },
+        "items": [
+          {
+            "video_id": "6ae9b39d479a2fb4116d0884",
+            "start": 1056.566650390625,
+            "end": 1059.566650390625,
+            "summary": "第1名｜1056.5667–1059.5667 秒（17:36.57–17:39.57）",
+            "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv"
+          },
+          {
+            "video_id": "6ae9b39d479a2fb4116d0884",
+            "start": 869.1666870117188,
+            "end": 878.7666625976562,
+            "summary": "第2名｜869.1667–878.76666 秒（14:29.17–14:38.77）",
+            "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv"
+          },
+          {
+            "video_id": "6ae9b39d479a2fb4116d0884",
+            "start": 1080.1666259765625,
+            "end": 1087.36669921875,
+            "summary": "第3名｜1080.1666–1087.3667 秒（18:00.17–18:07.37）",
+            "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv"
+          },
+          {
+            "video_id": "6ae9b39d479a2fb4116d0884",
+            "start": 1423.433349609375,
+            "end": 1440.7667236328125,
+            "summary": "第4名｜1423.4333–1440.7667 秒（23:43.43–24:00.77）",
+            "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv"
+          },
+          {
+            "video_id": "6ae9b39d479a2fb4116d0884",
+            "start": 600.9666748046875,
+            "end": 608.9666748046875,
+            "summary": "第5名｜600.9667–608.9667 秒（10:00.97–10:08.97）",
+            "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv"
+          }
+        ]
+      }
+    ]
+  },
+  "citations": [
+    {
+      "asset_id": "6ae9b39d479a2fb4116d0884",
+      "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv",
+      "start_index": 111,
+      "end_index": 113,
+      "clip_start_seconds": 1056.566650390625,
+      "clip_end_seconds": 1059.566650390625
+    },
+    {
+      "asset_id": "6ae9b39d479a2fb4116d0884",
+      "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv",
+      "start_index": 145,
+      "end_index": 147,
+      "clip_start_seconds": 869.1666870117188,
+      "clip_end_seconds": 878.7666625976562
+    },
+    {
+      "asset_id": "6ae9b39d479a2fb4116d0884",
+      "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv",
+      "start_index": 180,
+      "end_index": 182,
+      "clip_start_seconds": 1080.1666259765625,
+      "clip_end_seconds": 1087.36669921875
+    },
+    {
+      "asset_id": "6ae9b39d479a2fb4116d0884",
+      "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv",
+      "start_index": 215,
+      "end_index": 217,
+      "clip_start_seconds": 1423.433349609375,
+      "clip_end_seconds": 1440.7667236328125
+    },
+    {
+      "asset_id": "6ae9b39d479a2fb4116d0884",
+      "filename": "[DMG&MH&VCB-Studio] Shoujo Kageki Revue Starlight [01][Ma10p_1080p][x265_flac_aac].mkv",
+      "start_index": 248,
+      "end_index": 250,
+      "clip_start_seconds": 600.9666748046875,
+      "clip_end_seconds": 608.9666748046875
+    }
+  ],
+  "note": "Native inline gallery, separate from measured search. Signed playback URLs intentionally not persisted."
+}

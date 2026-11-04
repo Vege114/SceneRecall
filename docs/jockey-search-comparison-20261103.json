@@ -1,0 +1,616 @@
+{
+  "schema": "jockey-scenerecall-comparison-v1",
+  "date": "2026-11-03",
+  "timezone": "Asia/Shanghai",
+  "query": "爱城华恋与神乐光站在东京塔上",
+  "intended_scope": "Revue Starlight TV episodes 1-12, same source files as local baseline",
+  "status": "blocked_on_matching_corpus_upload",
+  "conclusion": "No valid same-corpus speed comparison. Jockey returned ranked candidates from shared corpora, not an identified matching Revue Starlight TV corpus. Target scene was not verified.",
+  "timing_method": {
+    "jockey": "Date.now() immediately before jockey_search invocation until returned tool Promise resolves; includes connector/transport/tool processing, excludes store discovery, later audit and rendering; wall clock, 1 ms nominal resolution.",
+    "invocation_schedule": "The two searches were launched concurrently on different stores.",
+    "samples_per_store": 1,
+    "cache_state": "unknown",
+    "server_processing_time_ms": null
+  },
+  "local_baseline": {
+    "source_report": "docs/SEARCH_QUERY_EQUIVALENCE_20261103.md",
+    "timing_source": "docs/search-equivalence-full-timing-20261103.json",
+    "raw_response": ".cache/equivalent-full-response-20261103.json",
+    "scope": "Revue Starlight TV episodes 1-12",
+    "query_kind": "visual",
+    "request_to_json_ms": 84362.80000007153,
+    "click_to_result_dom_ms": 84365.5,
+    "backend_total_ms": 83898.855,
+    "result_count": 10,
+    "all_match_levels": "partial",
+    "target_verified": false,
+    "enhancements": false,
+    "visual_verification": false,
+    "knowledge_mode": "baseline",
+    "query_vector_cache_hit": true,
+    "concurrent_searches_or_tests": false,
+    "image_loading_measured": false,
+    "rerun_in_this_trial": false
+  },
+  "jockey": {
+    "list_knowledge_stores_elapsed_ms": 3954,
+    "search_options": {
+      "modalities": [
+        "visual"
+      ],
+      "group_by": "none",
+      "limit": 10
+    },
+    "runs": [
+      {
+        "store_id": "ks_01a19fdb-0da5-7733-ad51-71c85f488a45",
+        "store_name": "HackerTube x Jockey",
+        "started_utc": "2026-11-03T09:13:44.796Z",
+        "ended_utc": "2026-11-03T09:13:54.143Z",
+        "started_asia_shanghai": "2026-11-03T17:13:44.796+08:00",
+        "elapsed_ms": 9347,
+        "response": {
+          "hits": [
+            {
+              "item_id": "ksi_01a19feb-c7b4-7f51-b753-5c83d6a75f53",
+              "asset_type": "video",
+              "rank": 1,
+              "matches": [
+                {
+                  "start_sec": 1271.0333,
+                  "end_sec": 1281.7667,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "rank": 2,
+              "matches": [
+                {
+                  "start_sec": 9215.9,
+                  "end_sec": 9219.833,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": "state. We will not let them"
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "rank": 3,
+              "matches": [
+                {
+                  "start_sec": 1046.3,
+                  "end_sec": 1050.1666,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": "appeal to the masses effectively and the whole sort of"
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "rank": 4,
+              "matches": [
+                {
+                  "start_sec": 11292.167,
+                  "end_sec": 11298.167,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": "business responded eagerly to this new individualism, but it soon became one of the main forces driving the"
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "rank": 5,
+              "matches": [
+                {
+                  "start_sec": 1873.5667,
+                  "end_sec": 1880.1666,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": "Bernard is now became one of the central figures in a business elite that dominated American society and politics. In the nineteen twenties."
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "rank": 6,
+              "matches": [
+                {
+                  "start_sec": 13730.767,
+                  "end_sec": 13740.634,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a19feb-156d-7791-b00c-3271e6b90aca",
+              "asset_type": "video",
+              "rank": 7,
+              "matches": [
+                {
+                  "start_sec": 1072.5,
+                  "end_sec": 1083.3667,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "rank": 8,
+              "matches": [
+                {
+                  "start_sec": 3041.9666,
+                  "end_sec": 3052.3667,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": "Burnet's. He was about to help create a vision of the utopia that free market capitalism would build in America if it was unleashed."
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a1a00e-8624-72a3-acb3-79f149264727",
+              "asset_type": "video",
+              "rank": 9,
+              "matches": [
+                {
+                  "start_sec": 2898.6333,
+                  "end_sec": 2904.3667,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": "triumphed over spiritual ones. And there's one aspect of this decline in Christian belief with particular implications"
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a1a00c-d0a4-7bd0-a78d-f37e31ff7e21",
+              "asset_type": "video",
+              "rank": 10,
+              "matches": [
+                {
+                  "start_sec": 637.7,
+                  "end_sec": 640.76666,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            }
+          ],
+          "applied": {
+            "modalities": [
+              "visual"
+            ],
+            "group_by": "none",
+            "limit": 10,
+            "metadata_filter": null,
+            "enrichment_filter": null,
+            "location": null
+          },
+          "next_page_token": "eyJzZWFyY2hfaWQiOiIwMWExYTBhZi1iYjUwLTdhZDItOGEzNy0yMzAwNmIxNmNkZmIiLCJvZmZzZXQiOjEwfQ=="
+        }
+      },
+      {
+        "store_id": "ks_01a18061-0f89-7c73-b7e2-4bb13b94721d",
+        "store_name": "Trending Videos",
+        "started_utc": "2026-11-03T09:13:44.796Z",
+        "ended_utc": "2026-11-03T09:13:48.489Z",
+        "started_asia_shanghai": "2026-11-03T17:13:44.796+08:00",
+        "elapsed_ms": 3693,
+        "response": {
+          "hits": [
+            {
+              "item_id": "ksi_01a18065-5281-79d2-9392-73d1b8f0ab23",
+              "asset_type": "video",
+              "rank": 1,
+              "matches": [
+                {
+                  "start_sec": 14.8,
+                  "end_sec": 25.2,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18065-5281-79d2-9392-73d1b8f0ab23",
+              "asset_type": "video",
+              "rank": 2,
+              "matches": [
+                {
+                  "start_sec": 10.666667,
+                  "end_sec": 14.8,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18065-5281-79d2-9392-73d1b8f0ab23",
+              "asset_type": "video",
+              "rank": 3,
+              "matches": [
+                {
+                  "start_sec": 0,
+                  "end_sec": 10.666667,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18066-8898-7912-84e1-e2c023c9f50e",
+              "asset_type": "video",
+              "rank": 4,
+              "matches": [
+                {
+                  "start_sec": 0,
+                  "end_sec": 11.466666,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18066-9192-7c32-b8d6-36f6a4eaf8e8",
+              "asset_type": "video",
+              "rank": 5,
+              "matches": [
+                {
+                  "start_sec": 0,
+                  "end_sec": 35.866665,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18066-b48b-7d53-9e11-e1b4ea2edc68",
+              "asset_type": "video",
+              "rank": 6,
+              "matches": [
+                {
+                  "start_sec": 0,
+                  "end_sec": 11.4,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18066-841f-73f0-892e-ed02784632ed",
+              "asset_type": "video",
+              "rank": 7,
+              "matches": [
+                {
+                  "start_sec": 0,
+                  "end_sec": 10.6,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18065-6c99-74b1-a068-a2d7399cab85",
+              "asset_type": "video",
+              "rank": 8,
+              "matches": [
+                {
+                  "start_sec": 7.4666667,
+                  "end_sec": 12.066667,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18065-71f3-7f81-b4f8-d9616ec8fdf5",
+              "asset_type": "video",
+              "rank": 9,
+              "matches": [
+                {
+                  "start_sec": 122.76667,
+                  "end_sec": 127.7,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            },
+            {
+              "item_id": "ksi_01a18065-92e5-7290-9ed9-5185ae237066",
+              "asset_type": "video",
+              "rank": 10,
+              "matches": [
+                {
+                  "start_sec": 126.166664,
+                  "end_sec": 129.56667,
+                  "modalities": [
+                    "visual"
+                  ],
+                  "transcription": null
+                }
+              ]
+            }
+          ],
+          "applied": {
+            "modalities": [
+              "visual"
+            ],
+            "group_by": "none",
+            "limit": 10,
+            "metadata_filter": null,
+            "enrichment_filter": null,
+            "location": null
+          },
+          "next_page_token": "eyJzZWFyY2hfaWQiOiIwMWExYTBhZi1hNTViLTc1ZjMtYmJhNi1lZTNhYTdjNDZkNjkiLCJvZmZzZXQiOjEwfQ=="
+        }
+      }
+    ],
+    "corpus_audit": [
+      {
+        "store_name": "HackerTube x Jockey",
+        "access": "shared",
+        "count": 154,
+        "identified_revue_titles": [],
+        "duration_range_sec": [
+          142.98848,
+          14083.669
+        ],
+        "top_hits": [
+          {
+            "rank": 1,
+            "item": {
+              "item_id": "ksi_01a19feb-c7b4-7f51-b753-5c83d6a75f53",
+              "asset_type": "video",
+              "status": "ready",
+              "created_at": "2026-11-03T05:39:52.171275Z",
+              "updated_at": "2026-11-03T05:39:52.171275Z",
+              "metadata": {},
+              "asset": {
+                "title": "In Search Of A Flat Earth",
+                "duration_sec": 4576.328,
+                "size_bytes": 886752500
+              }
+            },
+            "matches": [
+              {
+                "start_sec": 1271.0333,
+                "end_sec": 1281.7667,
+                "modalities": [
+                  "visual"
+                ],
+                "transcription": null
+              }
+            ]
+          },
+          {
+            "rank": 2,
+            "item": {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "status": "ready",
+              "created_at": "2026-11-03T05:53:06.625416Z",
+              "updated_at": "2026-11-03T05:53:06.625416Z",
+              "metadata": {},
+              "asset": {
+                "title": "The Century of the Self (Full Adam Curtis Documentary)",
+                "duration_sec": 14083.669,
+                "size_bytes": 823612900
+              }
+            },
+            "matches": [
+              {
+                "start_sec": 9215.9,
+                "end_sec": 9219.833,
+                "modalities": [
+                  "visual"
+                ],
+                "transcription": "state. We will not let them"
+              }
+            ]
+          },
+          {
+            "rank": 3,
+            "item": {
+              "item_id": "ksi_01a19ff7-e5ff-7e13-8846-051f7286a005",
+              "asset_type": "video",
+              "status": "ready",
+              "created_at": "2026-11-03T05:53:06.625416Z",
+              "updated_at": "2026-11-03T05:53:06.625416Z",
+              "metadata": {},
+              "asset": {
+                "title": "The Century of the Self (Full Adam Curtis Documentary)",
+                "duration_sec": 14083.669,
+                "size_bytes": 823612900
+              }
+            },
+            "matches": [
+              {
+                "start_sec": 1046.3,
+                "end_sec": 1050.1666,
+                "modalities": [
+                  "visual"
+                ],
+                "transcription": "appeal to the masses effectively and the whole sort of"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "store_name": "Trending Videos",
+        "access": "shared",
+        "count": 74,
+        "identified_revue_titles": [],
+        "duration_range_sec": [
+          4.295692,
+          923.6434
+        ],
+        "top_hits": [
+          {
+            "rank": 1,
+            "item": {
+              "item_id": "ksi_01a18065-5281-79d2-9392-73d1b8f0ab23",
+              "asset_type": "video",
+              "status": "ready",
+              "created_at": "2026-10-28T02:44:46.829034Z",
+              "updated_at": "2026-10-28T02:44:46.829034Z",
+              "metadata": {
+                "creator.handle": "rachelmonica.c",
+                "creator.name": "Rachel Monica | Healthy Love & Your Dream Relationship"
+              },
+              "asset": {
+                "title": "media.mp4",
+                "duration_sec": 30.252745,
+                "size_bytes": 13363201
+              }
+            },
+            "matches": [
+              {
+                "start_sec": 14.8,
+                "end_sec": 25.2,
+                "modalities": [
+                  "visual"
+                ],
+                "transcription": null
+              }
+            ]
+          },
+          {
+            "rank": 2,
+            "item": {
+              "item_id": "ksi_01a18065-5281-79d2-9392-73d1b8f0ab23",
+              "asset_type": "video",
+              "status": "ready",
+              "created_at": "2026-10-28T02:44:46.829034Z",
+              "updated_at": "2026-10-28T02:44:46.829034Z",
+              "metadata": {
+                "creator.handle": "rachelmonica.c",
+                "creator.name": "Rachel Monica | Healthy Love & Your Dream Relationship"
+              },
+              "asset": {
+                "title": "media.mp4",
+                "duration_sec": 30.252745,
+                "size_bytes": 13363201
+              }
+            },
+            "matches": [
+              {
+                "start_sec": 10.666667,
+                "end_sec": 14.8,
+                "modalities": [
+                  "visual"
+                ],
+                "transcription": null
+              }
+            ]
+          },
+          {
+            "rank": 3,
+            "item": {
+              "item_id": "ksi_01a18065-5281-79d2-9392-73d1b8f0ab23",
+              "asset_type": "video",
+              "status": "ready",
+              "created_at": "2026-10-28T02:44:46.829034Z",
+              "updated_at": "2026-10-28T02:44:46.829034Z",
+              "metadata": {
+                "creator.handle": "rachelmonica.c",
+                "creator.name": "Rachel Monica | Healthy Love & Your Dream Relationship"
+              },
+              "asset": {
+                "title": "media.mp4",
+                "duration_sec": 30.252745,
+                "size_bytes": 13363201
+              }
+            },
+            "matches": [
+              {
+                "start_sec": 0,
+                "end_sec": 10.666667,
+                "modalities": [
+                  "visual"
+                ],
+                "transcription": null
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "prepared_store": {
+      "id": "ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+      "name": "SceneRecall 少女歌剧检索对比 2026-11-03",
+      "access": "owned",
+      "owner": "personal",
+      "description": "用于与本地 SceneRecall 比较《少女歌剧》TV 第1–12集的画面检索。查询：爱城华恋与神乐光站在东京塔上。上传及索引耗时与查询耗时分别记录。",
+      "item_count": 0,
+      "created_at": "2026-11-03T09:15:20.26845Z",
+      "updated_at": "2026-11-03T09:15:20.26845Z",
+      "metadata": {},
+      "readiness": null
+    },
+    "upload": {
+      "knowledge_store_id": "ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+      "upload_url": "https://connect.twelvelabs.io/upload?knowledgeStore=ks_01a1a0b1-0d4a-7a23-b425-5fbb2e937633",
+      "detail": "Share this link with the user to open and upload their files. After they upload, call jockey_list_knowledge_store_items for this knowledge store and wait for the new items to reach ready before querying."
+    }
+  },
+  "limitations": [
+    "Different corpora; no speedup ratio is meaningful.",
+    "Local historical request-to-JSON is the nearest client-facing comparison boundary but not identical to the plugin tool boundary.",
+    "No successful target match has been verified on either system from these records.",
+    "The shared Trending Videos items use generic filenames; absence of a target title does not prove that no brief clip contains the target.",
+    "Jockey timings are one concurrent probe per shared store and cannot establish stable performance.",
+    "Local files have not been uploaded or indexed in Jockey by this trial."
+  ],
+  "next_steps": [
+    "Upload the same Revue Starlight TV episode 1-12 source files via the prepared web upload link.",
+    "Poll the prepared store until all 12 files are ready.",
+    "Run the exact Chinese visual query sequentially and time the tool return; record upload/indexing separately.",
+    "Verify returned clips against the intended characters and Tokyo Tower scene before comparing latency."
+  ]
+}

@@ -1,5 +1,39 @@
 # SceneRecall 验证记录
 
+## 检索阈值、人物证据与计时（2026-11-04）
+
+本轮将矩阵预算保持为 **1 GiB**，搜索页默认阈值从历史实验的 75% 调整到 **50%**，对完整本地候选执行严格大于筛选及降序展示；同步人物命中帧计分、权威来源复核和详细耗时记录。成果入口见[本轮检索记录](SEARCH_SESSION_20261104.md)。
+
+发布前在当前累计工作区执行一次相关后端回归和一次前端全套，不把历史交叉运行累计进下表：
+
+| 检查 | 结果与范围 |
+| --- | --- |
+| 后端相关回归 | **28 个测试文件，346 项通过，76.23 秒**；覆盖人物身份映射、候选／确认边界、原始分母、canonical 重新计分、全部候选阈值、知识、缓存、并发和增量发布，以及来源／版本／操作计时 |
+| 后端静态检查 | 本轮修改／新增后端及测试文件 Ruff 通过 |
+| 前端全套 | **38 个文件，387 项通过，14.17 秒**；默认 50% 请求和展示、显式 75% 历史口径、阈值边界及计时展示均覆盖 |
+| 生产构建 | `npm run build` 中 TypeScript 与 Vite 通过，默认 50% 新 bundle 为 `index-BDChCxLQ.js` |
+| Chrome 页面 | 重载本地服务页面后，原作品／全部集数范围的「最低相对匹配度」显示 **50**；未提交新搜索，未更改索引或调用模型 |
+
+后端只出现两个第三方依赖弃用告警，无测试失败。本轮后端验证是相关范围回归，不能写成全项目后端套件完成；此前的全范围结果保留在历史条目中。
+
+后端复现命令（仓库根目录；每次使用新的临时资料目录）：
+
+```powershell
+$backendReviewTemp = Join-Path (Get-Location).Path ('.cache\pytest-backend-publish-review-' + [guid]::NewGuid().ToString('N'))
+.\.venv-windows\Scripts\python.exe -m pytest tests/test_character_grounded_search.py tests/test_character_ranking_api.py tests/test_character_query.py tests/test_character_query_equivalence_api.py tests/test_identity_bindings.py tests/test_characters.py tests/test_character_catalog_identity_projection.py tests/test_retrieval_identity.py tests/test_retrieval_identity_api.py tests/test_retrieval_identity_annotations.py tests/test_search_threshold.py tests/test_search_threshold_api.py tests/test_knowledge_all_candidates.py tests/test_knowledge_store.py tests/test_knowledge_service.py tests/test_knowledge_recall.py tests/test_search_operation_timing.py tests/test_snapshot_detail_timing.py tests/test_source_detail_timing.py tests/test_search_timing.py tests/test_search.py tests/test_query_matrix_cache.py tests/test_matrix_cache_diagnostics.py tests/test_query_concurrency.py tests/test_query_api_scope.py tests/test_search_incremental.py tests/test_search_background.py tests/test_search_bulk_publish.py -q --basetemp $backendReviewTemp --tb=short -o faulthandler_timeout=30
+```
+
+前端在 `frontend` 目录执行 `npm test`、`npm run build`。
+
+真实请求、离线重算和新默认设置分别记录：
+
+- [最终人物规则的真实请求](search-character-priority-final-20261104.json)使用 **75%**，12 集、3,669 个融合候选、最终 0 条；服务 30.182506 秒但包含冷矩阵构建，且零条结果不发生实质来源重建。不能据此宣称较旧暖请求稳定提速。
+- [离线阈值分布](SEARCH_THRESHOLD_20261104.md)使用现存索引与已缓存查询向量，不调用模型或搜索 API。50% 对应 **16 个候选窗口**，是权威回源与合并前数量；没有新 50% 真实请求的完成时长或返回数量。
+- 第一集约 10:08 小人物漏检、未确认身份和空间关系不足仍未解决，详见[人物核查](SEARCH_CHARACTER_PRIORITY_20261104.md)。工程测试通过不等于目标画面检索质量通过。
+- [性能研究](SEARCH_OPTIMIZATION_RESEARCH_20261104.md)仅整理成熟方案及适用条件，未实施减少来源恢复或版本投影等优化。
+
+导出的[交互曲线](search-threshold-curve-20261104.html)保留原展示时的 75% 起点，支持调整到 50%；此前已在 736px、360px 宽度检查布局和 75／50／30／25／24.9 阈值的数量。仓库另保存完整分数及溯源，原视频、原帧、模型、会话凭据与本地缓存不上传。
+
 ## 八组功能分拆与累计回归（2026-11-03）
 
 本轮在简称／全名一致性修复之后，将剩余实现分为八组提交，并补齐相应使用说明。验证先在导出的独立代码副本中逐组加入所需前置功能，再检查累计版本；分组测试使用隔离资料库、合成素材和受控替身。以下数量表示各次运行结果，**包含重复用例，不能相加为独立测试总数**。

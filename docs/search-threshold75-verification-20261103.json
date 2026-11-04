@@ -1,0 +1,92 @@
+{
+  "schema": "threshold-search-verification-v1",
+  "query": "爱城华恋与神乐光站在东京塔上",
+  "scope": "Shoujo Kageki Revue Starlight, all 12 episodes",
+  "kind": "visual",
+  "started_utc": "2026-11-03T13:37:59.963Z",
+  "min_match_score": 75,
+  "comparison": ">",
+  "score_basis": "relative_rrf_v1",
+  "score_definition": "100 * candidate RRF / highest RRF in complete fused recall before verification and deduplication; not a probability",
+  "real_query_count": 1,
+  "service_restarted": true,
+  "warmup_queries": 0,
+  "disk_query_vector_cache_hit": true,
+  "matrix_cache": {
+    "matrix_cache_hit": false,
+    "matrix_built": true,
+    "streaming_fallback": false,
+    "cache_status": "built",
+    "fallback_reason": null,
+    "memoized_fallback": false,
+    "build_attempted": true,
+    "attempted_retained_bytes": 404330896,
+    "retained_bytes_phase": "complete",
+    "cache_budget_bytes": 1073741824,
+    "build_budget_bytes": 1073741824
+  },
+  "matrix_build_ms": 62401.379,
+  "click_to_result_ms": 105764.79999995232,
+  "server_ms": 105428.542,
+  "server_partition_ms": {
+    "version_checks": 20161.666,
+    "source_records": 20305.111,
+    "parallel_recall": 64251.179,
+    "other": 710.586
+  },
+  "complete_recall_counts": {
+    "lexical": 3377,
+    "semantic": 0,
+    "visual": 3669,
+    "concept": 0
+  },
+  "fused_candidate_count": 3669,
+  "returned_count": 3,
+  "visible_results": [
+    {
+      "rank": 1,
+      "episode": 11,
+      "displayed_match_score": 100,
+      "seek_text": "00:02:58"
+    },
+    {
+      "rank": 2,
+      "episode": 8,
+      "displayed_match_score": 99.8,
+      "seek_text": "00:06:23"
+    },
+    {
+      "rank": 3,
+      "episode": 7,
+      "displayed_match_score": 94,
+      "seek_text": "00:06:21"
+    }
+  ],
+  "known_episode01_target_present": false,
+  "raw_timing_file": "search-threshold75-full-timing-20261103.json",
+  "raw_timing_sha256": "1cfed3332de6486f10494f4b8d75cefc8a140f3b2e4def4c1a9397474ed16a1b",
+  "screenshot": ".cache/search-threshold75-full-result-20261103.jpg",
+  "interpretation": "This is a one-run functional check after a restart, including a matrix build. It is not comparable to the prior warm 10-result benchmark. The requested 75 threshold was retained; no lower-threshold rerun was performed.",
+  "checks": {
+    "threshold_api": "6 passed",
+    "search_threshold": "15 passed",
+    "search_related": "31 passed",
+    "knowledge_related": "85 passed",
+    "frontend_related": "77 passed",
+    "typecheck_build": "passed",
+    "ruff_diff_check": "passed"
+  },
+  "code_sha256": {
+    "backend\\scenerecall\\models.py": "cbdd3b182202177b56699548f0351732409c6b408ffe1d03896137b59d38bbaf",
+    "backend\\scenerecall\\main.py": "69fd5a9dfc9d14d990feeca35839ea992822c7c728b49e32bb492325c189815f",
+    "backend\\scenerecall\\search.py": "f27e401e64b89d7dc090c842b6e71d5627d59b2279545b41468b7f98a79c070a",
+    "backend\\scenerecall\\visual_index.py": "756f6242ce9f7167df1a738de6ae8d3c1bf848d1cb7d17920dd1e5f24c7400eb",
+    "backend\\scenerecall\\knowledge_recall.py": "d48c4d547b81c87d1ad637441aa11a93ea73a67ef6c515157f2295854558efea",
+    "backend\\scenerecall\\knowledge_service.py": "feb350e2517fa59a025c0d823fb1074efa8a3549c426abbccc4090a5f04643d9",
+    "backend\\scenerecall\\knowledge_store.py": "a0c34fb18a8827472ba67f8244b76ef3bf1acb080e86edf8ac29e1e0871f320f",
+    "backend\\scenerecall\\work_entities.py": "c7d9db2146a13460f27b2624e3be3734fa694be737538942356de5f3a8a7f881",
+    "backend\\scenerecall\\query_cache.py": "6a19b5e352300ee2549a4e83485220f6da77d759d32990bc6196a3dc39d71caf",
+    "frontend\\src\\components\\Search.tsx": "6fe8353a0693dda3e0bbc25323fa5515b2170d79888375a57db7e8a8342ea718",
+    "frontend\\src\\types.ts": "d47efee512b9834c9676c3ce551fbd2be285987b28fbb05efe18113097039ba7"
+  }
+}
