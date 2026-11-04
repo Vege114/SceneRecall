@@ -18,6 +18,7 @@ from types import MappingProxyType
 import numpy as np
 
 from .execution import run_in_thread
+from .character_ranking import character_frame_support, frame_support_priority
 from .query_cache import MatrixCache, initialize_revision, note_matrix_build, query_revision
 from .search_timing import record_interval, timed, trace_span
 
@@ -286,6 +287,8 @@ class VisualIndex:
 
     async def search(self, query, filters, encoder, degraded, limit=50):
         engine = self.engine
+        if filters.get("_all_candidates"):
+            limit = None
         with trace_span("visual.model_identity"):
             signature, _identity = self.namespace(encoder)
         cache_started = time.perf_counter()
@@ -315,14 +318,15 @@ class VisualIndex:
                 db.execute("INSERT OR REPLACE INTO visual_query_cache VALUES (?,?,?,?)",
                            (signature, query_hash, dimensions, vector.tobytes()))
         with trace_span("visual.rank"):
-            return await run_in_thread(self._rank, signature, vector, dimensions, where, params, limit)
+            options = {"targets": filters["_character_targets"]} if filters.get("_character_targets") else {}
+            return await run_in_thread(self._rank, signature, vector, dimensions, where, params, limit, **options)
 
     @timed("visual.rank.work")
-    def _rank(self, signature, vector, dimensions, where, params, limit):
+    def _rank(self, signature, vector, dimensions, where, params, limit, *, targets=()):
         with self.engine._db() as db:
             db.execute("BEGIN")
             if vector.shape != (dimensions,):
-                return self._rank_stream(db, signature, vector, dimensions, where, params, limit)
+                return self._rank_stream(db, signature, vector, dimensions, where, params, limit, targets=targets)
             revision = query_revision(db)
             # A replacement database may retain an old revision from a backup.
             stat = self.engine.path.stat()
@@ -341,9 +345,11 @@ class VisualIndex:
                 phase.set(matrix_cache_hit=snapshot is not None and not built,
                           matrix_built=built, streaming_fallback=snapshot is None, **cache_details)
             if snapshot is None:
-                return self._rank_stream(db, signature, vector, dimensions, where, params, limit)
+                return self._rank_stream(db, signature, vector, dimensions, where, params, limit, targets=targets)
             records, blocks = snapshot
             scoring_started = time.perf_counter()
+            support = ({identity: character_frame_support(json.loads(row[0]), targets)
+                        for identity, row in records.items()} if targets else {})
             matches = {}
             for matrix, rows in blocks:
                 scores = matrix @ vector
@@ -352,16 +358,20 @@ class VisualIndex:
                     if not math.isfinite(score) or score <= 0:
                         continue
                     old = matches.get(record_id)
-                    if old is None or score > old[0]:
-                        matches[record_id] = score, frame_id, at_ms
+                    priority = frame_support_priority(support.get(record_id, {}).get(frame_id, {}))
+                    # Missing regions are not absence evidence. Keep the best
+                    # visual scene; identity support only breaks exact ties.
+                    if old is None or (score, priority) > (old[0], old[3]):
+                        matches[record_id] = score, frame_id, at_ms, priority
             record_interval("visual.matrix_score", scoring_started, block_count=len(blocks),
                             record_count=len(records), frame_count=sum(len(rows) for _matrix, rows in blocks))
             sort_started = time.perf_counter()
             ordered = sorted(matches, key=lambda identity: (
                 -matches[identity][0], records[identity][1], records[identity][2], identity))
             result = []
-            for identity in ordered[:min(50, max(1, limit))]:
-                score, frame_id, at_ms = matches[identity]
+            selected = ordered if limit is None else ordered[:min(50, max(1, limit))]
+            for identity in selected:
+                score, frame_id, at_ms, _priority = matches[identity]
                 result.append({**json.loads(records[identity][0]), "visual_similarity": score,
                     "visual_signature": signature, "hit_frame_id": frame_id, "seek_ms": at_ms,
                     "evidence_ids": [frame_id], "retrieval_branches": ["visual"]})
@@ -418,8 +428,9 @@ class VisualIndex:
         return (MappingProxyType(records), tuple(blocks)), size
 
     @timed("visual.streaming_rank.work")
-    def _rank_stream(self, db, signature, vector, dimensions, where, params, limit):
+    def _rank_stream(self, db, signature, vector, dimensions, where, params, limit, *, targets=()):
         matches = {}
+        priorities = {}
         # Filter in SQL before scoring; a small selected work must not lose its
         # nearest candidates to frames from a larger unrelated work. Read current
         # evidence after query encoding, in one snapshot, and parse each window
@@ -433,6 +444,8 @@ class VisualIndex:
                 valid[row["id"]] = record
         if not valid:
             return []
+        support = ({identity: character_frame_support(record, targets) for identity, record in valid.items()}
+                   if targets else {})
         rows = db.execute(f"""SELECT l.record_id,l.frame_id,l.at_ms,c.vector,c.dimensions
             FROM visual_links l JOIN visual_cache c
               ON c.signature=l.signature AND c.cache_key=l.cache_key
@@ -457,13 +470,15 @@ class VisualIndex:
                 if not math.isfinite(score) or score <= 0:
                     continue
                 old = matches.get(row["record_id"])
-                if old is None or score > old["visual_similarity"]:
+                priority = frame_support_priority(support.get(row["record_id"], {}).get(row["frame_id"], {}))
+                if old is None or (score, priority) > (old["visual_similarity"], priorities[row["record_id"]]):
+                    priorities[row["record_id"]] = priority
                     matches[row["record_id"]] = {**valid[row["record_id"]], "visual_similarity": score,
                         "visual_signature": signature, "hit_frame_id": row["frame_id"], "seek_ms": row["at_ms"],
                         "evidence_ids": [row["frame_id"]], "retrieval_branches": ["visual"]}
         ordered = sorted(matches.values(), key=lambda row: (-row["visual_similarity"], row["asset_id"],
                                                             row["start_ms"], row["id"]))
-        return ordered[:min(50, max(1, limit))]
+        return ordered if limit is None else ordered[:min(50, max(1, limit))]
 
     @staticmethod
     def _prepare_references(references):

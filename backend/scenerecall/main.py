@@ -593,25 +593,46 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             trace.attributes.update(query_kind=kind if kind in {"visual", "subtitle", "scene", "audio"} else "all",
                                     character_filter=bool(payload.filters.get("character") or payload.filters.get("character_id")),
                                     query_characters=len(payload.query), filter_count=len(payload.filters),
-                                    enhancements=payload.enhancements, visual_verification=payload.visual_verification)
+                                    enhancements=payload.enhancements, visual_verification=payload.visual_verification,
+                                    min_match_score=payload.min_match_score)
         if preparation.started and preparation.states["index"]["status"] != "ready":
             raise HTTPException(503, preparation.states["index"].get("message", "搜索索引正在准备，请稍后再试"),
                                 headers={"Retry-After": "2"})
         bindings = settings()["bindings"]
         search.clear_completed_query()
         result = await search.search(payload.query, filters=payload.filters, limit=payload.limit,
+                                    min_match_score=payload.min_match_score,
                                     knowledge_mode=payload.knowledge_mode, knowledge_scope_id=payload.knowledge_scope_id,
                                     knowledge_target=payload.knowledge_target,
                                     **{k + "_profile_id": bindings.get(k) if k == "embedding" or payload.enhancements else None
                                        for k in ("embedding", "query", "decision", "answer")})
         effective_query = search.completed_query_text(payload.query)
+        character_targets = search.completed_character_targets()
         from .execution import run_in_thread
         @timed("canonical.source_records.work")
         def current_candidates():
             current = {}
-            for owner in search.result_asset_ids(result.get("results", [])):
+            candidates = result.get("results", [])
+            requested_ids = {value for row in candidates for value in
+                             [row.get("id"), *row.get("member_ids", []), *row.get("source_ids", [])]
+                             if isinstance(value, str)}
+            with trace_span("canonical.owner_lookup", candidate_count=len(candidates),
+                            requested_id_count=len(requested_ids)) as phase:
+                owners = search.result_asset_ids(candidates)
+                phase.set(owner_count=len(owners))
+            for owner_index, owner in enumerate(owners):
                 try:
-                    current.update((row["id"], row) for row in library.records(owner))
+                    with trace_span("canonical.asset_records", owner_index=owner_index) as phase:
+                        records = library.records(owner)
+                        produced = {}
+                        for row in records:
+                            kind = row.get("kind")
+                            key = kind if kind in {"visual", "scene", "subtitle", "audio"} else "other"
+                            produced[key] = produced.get(key, 0) + 1
+                        phase.set(produced_count=len(records),
+                                  requested_record_count=sum(row["id"] in requested_ids for row in records),
+                                  **{f"produced_{kind}_count": count for kind, count in produced.items()})
+                        current.update((row["id"], row) for row in records)
                 except FileNotFoundError:
                     # A concurrently deleted asset cannot supply source citations.
                     continue
@@ -640,8 +661,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                             canonical = recomputed[0]
                             merged_valid = True
                 changed |= canonical["text"] != record.get("text")
-                ranking = {k: record[k] for k in ("score", "match_type", "match_reason", "evidence_ids",
-                    "hit_frame_id", "seek_ms", "member_ids", "retrieval_branches") if k in record}
+                ranking = {k: record[k] for k in ("score", "raw_rrf_score", "match_score", "match_score_basis", "decision_score",
+                    "match_type", "match_reason", "evidence_ids",
+                    "hit_frame_id", "hit_frame_basis", "seek_ms", "member_ids", "retrieval_branches") if k in record}
                 if not merged_valid:
                     ranking.pop("member_ids", None)
                 if "evidence_ids" in ranking:
@@ -672,12 +694,14 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                         matched_character_scope_id=record["matched_character_scope_id"], evidence_ids=evidence)
                 if ranking.get("hit_frame_id") not in canonical.get("evidence_frame_ids", []):
                     ranking.pop("hit_frame_id", None)
+                    ranking.pop("hit_frame_basis", None)
                     ranking.pop("seek_ms", None)
                 elif "hit_frame_id" in ranking:
                     frame = next((f for f in canonical.get("ordered_frames", []) if f["id"] == ranking["hit_frame_id"]), None)
                     if frame is not None:
                         ranking["seek_ms"] = frame["at_ms"]
-                        ranking["seek_basis"] = "visual_frame"
+                        ranking["seek_basis"] = ("character_frame" if ranking.get("hit_frame_basis") == "character_evidence"
+                                                 else "visual_frame")
                     ranking["thumbnail"] = ranking["hit_frame_id"]
                 if canonical.get("evidence_type") == "retrieval_window":
                     from .retrieval_events import event_seek
@@ -694,6 +718,31 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 if uncertain_names:
                     ranking.update(match_type="partial", unverified_character_names=uncertain_names,
                                    match_reason="匹配到候选角色，画面人物的实名尚未确认")
+                if character_targets and canonical.get("kind") in {"visual", "scene"}:
+                    from .character_ranking import grounded_rrf_score, summarize_character_match
+                    frame_id = ranking.get("hit_frame_id")
+                    character_match = summarize_character_match(canonical, character_targets, frame_id)
+                    ranking["character_match"] = character_match
+                    if record.get("character_match") != character_match:
+                        changed = True
+                    # Recheck ranking evidence against current authoritative
+                    # regions, after validating the actual display frame. A
+                    # revoked identity must not keep its old ranking bonus.
+                    contributions = record.get("_rrf_contributions")
+                    reference = record.get("_match_score_reference")
+                    if contributions is not None:
+                        score = grounded_rrf_score(canonical, character_targets, contributions, frame_id)
+                        previous_score = grounded_rrf_score(record, character_targets, contributions,
+                                                            record.get("hit_frame_id"))
+                        if score != previous_score:
+                            changed = True
+                        if payload.min_match_score is not None or record.get("score") == previous_score:
+                            ranking["score"] = score
+                        if payload.min_match_score is not None and reference:
+                            ranking["match_score"] = min(100., max(0., 100 * score / reference))
+                    if character_match["status"] != "confirmed":
+                        changed |= ranking.get("match_type") == "full"
+                        ranking.update(match_type="partial", match_reason=character_match["reason"])
                 results.append(enrich({**canonical, **ranking}))
             elif record.get("source_ids") and all(rid in actual_records for rid in record["source_ids"]):
                 sources = [actual_records[rid] for rid in record["source_ids"]]
@@ -715,11 +764,24 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
             from .retrieval_verification import verify_candidates
             with trace_span("visual_verification"):
                 response = await verify_candidates(library, providers, bindings.get("vision"), effective_query, response)
+            # A model's window-level judgment cannot establish the requested
+            # identities on a different display frame.
+            for row in response["results"]:
+                character_match = row.get("character_match")
+                if character_match and character_match["status"] != "confirmed" and row.get("match_type") == "full":
+                    row.update(match_type="partial", match_reason=character_match["reason"])
+                    response["explanation"] = None
+        if payload.min_match_score is not None:
+            # Freshness/optional verification can remove candidates. Preserve the
+            # original full-recall reference score and report the actual final list.
+            response["results"] = [row for row in response["results"] if row["match_score"] > payload.min_match_score]
+            response["results"].sort(key=lambda row: (-row["match_score"], row["id"]))
+            response["selection"]["returned_count"] = len(response["results"])
         await search.check_completed_query()
         app.state.search_http_diagnostics = {"canonical_ms": canonical_ms,
                                              "total_ms": (perf_counter() - query_started) * 1000}
         if trace is not None:
-            trace.attributes["result_count"] = len(results)
+            trace.attributes["result_count"] = len(response["results"])
         with trace_span("response.json") as phase:
             rendered = JSONResponse(response)
             phase.set(bytes=len(rendered.body))

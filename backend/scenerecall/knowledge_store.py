@@ -17,6 +17,7 @@ from pydantic import Field, model_validator
 from .characters import CharacterStore, scope_id as character_scope_id
 from .library import confined_path, digest, now, safe_id, uid
 from .models import Contract
+from .search_timing import aggregate_operation, timed, timed_lock, timing_count
 from .visual_identity import _write_bytes
 
 VERSION = "knowledge-cards-v1"
@@ -165,12 +166,18 @@ class KnowledgeStore:
         source = self._source(saved, source_id)
         path = confined_path(self.store._path(saved["work_scope_id"]).parent, source["path"])
         try:
-            content = path.read_bytes()
+            with aggregate_operation("source_read", identity=str(path)) as operation:
+                content = path.read_bytes()
+                operation.set(bytes=len(content))
         except FileNotFoundError as exc:
             raise ValueError("资料原文快照缺失") from exc
-        if hashlib.sha256(content).hexdigest() != source["sha256"]:
+        with aggregate_operation("source_sha256", identity=str(path), bytes=len(content)):
+            content_hash = hashlib.sha256(content).hexdigest()
+        if content_hash != source["sha256"]:
             raise ValueError("资料原文快照哈希校验失败")
-        return source, content.decode("utf-8-sig")
+        with aggregate_operation("source_decode", bytes=len(content)):
+            text = content.decode("utf-8-sig")
+        return source, text
 
     def source_content(self, scope, source_id):
         saved = self.scope_catalog(scope)
@@ -189,6 +196,7 @@ class KnowledgeStore:
             return self._public_source(row)
 
     def _target(self, saved, reference):
+        timing_count("knowledge_target")
         reference = KnowledgeTarget.model_validate(reference).model_dump(exclude_none=True)
         if reference["kind"] == "concept":
             row = saved["entities"].get(reference["concept_id"])
@@ -216,6 +224,7 @@ class KnowledgeStore:
     def _references(self, saved, references, *, allow_revoked=False):
         result = []
         for reference in references:
+            timing_count("knowledge_source_reference")
             reference = SourceReference.model_validate(reference).model_dump()
             source, text = self._source_text(saved, reference["source_id"])
             if source["snapshot_id"] != reference["snapshot_id"] or reference["end"] > len(text):
@@ -344,6 +353,7 @@ class KnowledgeStore:
             self.store._commit(saved, "knowledge_alignment", identity, before, reason)
             return copy.deepcopy(row)
 
+    @timed("knowledge.projection")
     def projection(self, scope):
         """Snapshot only reviewed, current cards. Never include film bindings.
 
@@ -351,13 +361,16 @@ class KnowledgeStore:
         must release it before any worker or model await, and recheck signature
         before publishing a derived generation.
         """
-        with self.library.lock:
+        with timed_lock(self.library.lock, "library_lock_wait"):
             saved = self.scope_catalog(scope)
+            timing_count("knowledge_cards", len(saved["knowledge_cards"]))
+            timing_count("knowledge_sources", len(saved["source_documents"]))
             cards = []
             for card in sorted(saved["knowledge_cards"].values(), key=lambda row: row["card_id"]):
                 public = self._public_card(saved, card)
                 if public["effective_status"] != "reviewed":
                     continue
+                timing_count("knowledge_reviewed_cards")
                 target_ref, target = self._target(saved, card["target_ref"])
                 parts = ["作品 " + saved["title"], "版本 " + saved["work_version"],
                          "主目标 " + target["name"], "别名 " + " / ".join(filter(None, target["aliases"])),
@@ -375,9 +388,11 @@ class KnowledgeStore:
                 for source in public["sources"]:
                     parts.extend(["来源 " + source["title"], "原文 " + source["quote"]])
                 text = "\n".join(part for part in parts if part.strip())
+                with aggregate_operation("projection_sha256"):
+                    projection_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
                 cards.append({**public, "text": text, "statement_text": card["text"], "target_ref": target_ref,
                               "object_ref": object_ref, "target_key": target_key(target_ref),
-                              "projection_hash": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+                              "projection_hash": projection_hash})
             source_state = [{key: row[key] for key in ("source_id", "snapshot_id", "sha256", "title", "url", "status")}
                             for row in sorted(saved["source_documents"].values(), key=lambda row: row["source_id"])]
             signature_cards = [{key: card.get(key) for key in (
@@ -388,7 +403,7 @@ class KnowledgeStore:
                     "work_version": saved["work_version"], "title": saved["title"], "signature": signature,
                     "cards": cards, "alignments": self._active_alignments(saved, cards)}
 
-    def lexical_hits(self, scope, query):
+    def lexical_hits(self, scope, query, *, limit=50):
         from .search import normalize, tokenize
         if not isinstance(query, str) or not query.strip():
             return []
@@ -402,4 +417,4 @@ class KnowledgeStore:
                 hits.append({**card, "score": score, "retrieval_source": "lexical", "mapping_status": "reviewed",
                              "has_film_evidence": False, "evidence_type": "knowledge_source"})
         hits.sort(key=lambda row: (-row["score"], row["card_id"]))
-        return hits[:50]
+        return hits[:limit]

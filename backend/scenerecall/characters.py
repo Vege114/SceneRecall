@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .library import SCHEMA, atomic_json, confined_path, digest, now, read_json, safe_id
 from .models import Observation
+from .search_timing import aggregate_operation, timed_lock, trace_span
 
 
 EDITABLE_FIELDS = {"name", "aliases", "description", "notes", "appearance"}
@@ -965,14 +966,17 @@ class CharacterStore:
             return next(profile for profile in self.catalog(asset_id)["profiles"] if profile["id"] == target)
 
     def decorate_observations(self, asset_id: str, records: list[dict]) -> list[dict]:
-        with self.library.lock:
+        with trace_span("identity.decorate", record_count=len(records)) as phase, timed_lock(self.library.lock):
             organization = self.library.organization._read()
             asset = self.library.get_asset(asset_id, _catalog=organization)
             scope = scope_id(asset)
             registry = self._read(scope)
             policy = self.cast_policy(registry, asset.get("anime_profile"))
             from .visual_identity import decorate_identity_records
-            result = decorate_identity_records(self.library, asset_id, copy.deepcopy(records))
+            with aggregate_operation("record_copy"):
+                copied = copy.deepcopy(records)
+            result = decorate_identity_records(self.library, asset_id, copied)
+            phase.set(entity_count=sum(len(record.get("entities", [])) for record in result))
             for record in result:
                 for entity in record.get("entities", []):
                     original = entity.get("character_id")

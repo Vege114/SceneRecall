@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 
 from .library import SCHEMA, atomic_json, confined_path, digest, now, read_json, safe_id
+from .search_timing import aggregate_operation, timing_count, trace_span
 
 STRATEGY = "retrieval-first-v1"
 
@@ -66,29 +67,36 @@ class RetrievalStore:
         return record
 
     def records(self, asset_id):
-        active = read_json(self.directory(asset_id) / "active.json", {"units": {}})
-        result = []
-        for identity, entry in active.get("units", {}).items():
-            record = read_json(confined_path(self.library.asset_dir(asset_id), entry["path"]))
-            if record is None or record.get("id") != identity or digest(record) != entry["digest"]:
-                raise ValueError("检索记录激活引用不完整")
-            if entry.get("observation"):
-                observed = entry["observation"]
-                observation = read_json(confined_path(self.library.asset_dir(asset_id), observed["path"]))
-                if observation is None or digest(observation) != observed["digest"] or observation["unit_id"] != identity:
-                    raise ValueError("局部观察激活引用无效")
-                record = {**record, **{key: observation[key] for key in ("summary", "entities", "events",
-                    "spatial_observations", "uncertainties", "identity_policy", "provenance") if key in observation}}
-            if entry.get("identity"):
-                from .retrieval_identity import merge
-                reference = entry["identity"]
-                identity_observation = read_json(confined_path(self.library.asset_dir(asset_id), reference["path"]))
-                if (identity_observation is None or digest(identity_observation) != reference["digest"]
-                        or identity_observation.get("unit_id") != identity
-                        or identity_observation.get("window_digest") != entry["digest"]):
-                    raise ValueError("本地人物观察激活引用无效")
-                record = merge(record, identity_observation)
-            result.append(copy.deepcopy(record))
+        with trace_span("retrieval.load_validate") as phase:
+            active = read_json(self.directory(asset_id) / "active.json", {"units": {}})
+            result = []
+            timing_count("window_count", len(active.get("units", {})))
+            for identity, entry in active.get("units", {}).items():
+                record = read_json(confined_path(self.library.asset_dir(asset_id), entry["path"]))
+                if record is None or record.get("id") != identity or digest(record) != entry["digest"]:
+                    raise ValueError("检索记录激活引用不完整")
+                if entry.get("observation"):
+                    timing_count("observation_sidecar_count")
+                    observed = entry["observation"]
+                    observation = read_json(confined_path(self.library.asset_dir(asset_id), observed["path"]))
+                    if observation is None or digest(observation) != observed["digest"] or observation["unit_id"] != identity:
+                        raise ValueError("局部观察激活引用无效")
+                    record = {**record, **{key: observation[key] for key in ("summary", "entities", "events",
+                        "spatial_observations", "uncertainties", "identity_policy", "provenance") if key in observation}}
+                if entry.get("identity"):
+                    timing_count("identity_sidecar_count")
+                    from .retrieval_identity import merge
+                    reference = entry["identity"]
+                    identity_observation = read_json(confined_path(self.library.asset_dir(asset_id), reference["path"]))
+                    if (identity_observation is None or digest(identity_observation) != reference["digest"]
+                            or identity_observation.get("unit_id") != identity
+                            or identity_observation.get("window_digest") != entry["digest"]):
+                        raise ValueError("本地人物观察激活引用无效")
+                    with aggregate_operation("identity_merge"):
+                        record = merge(record, identity_observation)
+                with aggregate_operation("record_copy"):
+                    result.append(copy.deepcopy(record))
+            phase.set(record_count=len(result))
         from .identity_bindings import resolve_observations
         return resolve_observations(self.library, asset_id, sorted(result, key=lambda row: (row["start_ms"], row["id"])))
 

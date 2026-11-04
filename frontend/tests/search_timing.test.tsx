@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AppContext, type AppContextValue } from '../src/context';
 import { DEFAULTS } from '../src/types';
 import SearchPage from '../src/components/Search';
+import SearchTimingDetails from '../src/components/SearchTiming';
 import { api } from '../src/api';
-import { searchClickStart, searchTransportTiming, type SearchTiming } from '../src/searchTiming';
+import { searchClickStart, searchPhaseDisplayName, searchTransportTiming, type SearchTiming } from '../src/searchTiming';
 
 const trace: SearchTiming = { schema: 'search-timing-v1', request_id: 'request-test', total_ms: 10,
   boundary: 'test', attributes: { result_count: 0 }, spans: [
@@ -40,6 +41,54 @@ describe('search timing boundaries', () => {
     expect(result.search_timing?.request_id).toBe('request-test');
     const other = await api<{ search_timing?: SearchTiming }>('/assets');
     expect(other.search_timing).toBeUndefined();
+  });
+
+  it('keeps old records readable without inventing operation totals', () => {
+    render(<SearchTimingDetails server={trace} />);
+    expect(screen.queryByText('文件与校验操作汇总')).toBeNull();
+    expect(screen.getByText('后端应用总时长 (0 / —)')).toBeTruthy();
+    const record = JSON.parse(screen.getByLabelText('搜索耗时机器记录').textContent || '{}');
+    expect(record.server.operations).toBeUndefined();
+  });
+
+  it('shows request-wide operations separately, with deduplication coverage and unmodified machine totals', async () => {
+    const measured: SearchTiming = { ...trace, operations: {
+      file_read_text: { count: 9, elapsed_ms: 18.5, identity_calls: 9, unique_count: 3, repeated_count: 6 },
+      json_parse: { count: 12, elapsed_ms: 5.25, identity_calls: 12, unique_count: 4, repeated_count: 7, identity_limit_reached: true, error_count: 1 },
+      digest_sha256: { count: 3, elapsed_ms: 1.25 },
+    } };
+    const transported = searchTransportTiming(new Response('{}', {
+      headers: { 'X-Search-Timing': JSON.stringify(measured) },
+    }), 100, 118, 123).search_timing;
+    render(<SearchTimingDetails server={transported} />);
+    const table = screen.getByLabelText('文件与校验操作汇总');
+    expect(table.closest('details')?.hasAttribute('open')).toBe(false);
+    const user = userEvent.setup();
+    await user.click(screen.getByText('搜索总耗时与阶段记录'));
+    await user.click(screen.getByText('文件与校验操作汇总'));
+    expect(table.closest('details')?.hasAttribute('open')).toBe(true);
+    const reads = within(table).getByText('读取文本（含解码）').closest('tr')!;
+    expect(within(reads).getAllByRole('cell').map((cell) => cell.textContent)).toEqual([
+      '读取文本（含解码）', '9', '18.5 ms', '3', '6', '带资源身份的调用数: 9',
+    ]);
+    expect(within(table).getByText(/达到去重上限: 是；失败次数: 1/)).toBeTruthy();
+    expect(within(table).getByText('计算 SHA-256').closest('tr')?.textContent).toContain('———');
+    expect(screen.getByText(/不能视为纯磁盘 I\/O/)).toBeTruthy();
+    expect(screen.getByText(/不能再加到阶段时长上/)).toBeTruthy();
+    const record = JSON.parse(screen.getByLabelText('搜索耗时机器记录').textContent || '{}');
+    expect(record.server.operations).toEqual(measured.operations);
+    expect(record.server.total_ms).toBe(10);
+    expect(record.server.spans).toEqual(trace.spans);
+  });
+
+  it('ignores invalid optional operation rows and labels new phases using the nearest known prefix', () => {
+    const malformed = { ...trace, operations: { invalid: null, incomplete: { count: 1 } } } as unknown as SearchTiming;
+    render(<SearchTimingDetails server={malformed} />);
+    expect(screen.queryByText('文件与校验操作汇总')).toBeNull();
+    expect(searchPhaseDisplayName('canonical.source_records.work.future_detail'))
+      .toBe('读取最新来源证据（线程执行） · future_detail');
+    expect(searchPhaseDisplayName('records.future_detail')).toBe('来源记录重建 · future_detail');
+    expect(searchPhaseDisplayName('unknown.phase')).toBe('unknown.phase');
   });
 
   it('measures submit to committed results and shows a privacy-safe machine record', async () => {

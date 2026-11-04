@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
 from .library import digest
+from .search_timing import aggregate_operation, timed, timed_lock, timing_count
 
 
 class KnowledgeRecallProvider(Protocol):
@@ -54,8 +55,10 @@ def _size(value, seen=None):
 
 def _stamp(path):
     try:
-        value = path.stat()
+        with aggregate_operation("file_stat", identity=str(path)):
+            value = path.stat()
     except FileNotFoundError:
+        timing_count("file_stat_missing")
         return None
     return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
@@ -90,23 +93,27 @@ new bindings must be searchable before a delayed search projection is refreshed.
 
     def _load(self, path, loader, transform=lambda value: value):
         key = str(path)
-        with self._lock:
+        with timed_lock(self._lock, "knowledge_cache_lock_wait"):
             while self._cache and self.stats["bytes"] > self.max_bytes:
                 _, removed = self._cache.popitem(last=False)
                 self.stats["bytes"] -= removed[3]
                 self.stats["evictions"] += 1
+                timing_count("knowledge_cache_eviction")
             stamp = _stamp(path)
             cached = self._cache.get(key)
             if cached is not None and cached[0] == stamp and self.max_bytes > 0:
                 self.stats["hits"] += 1
+                timing_count("knowledge_cache_hit")
                 self._cache.move_to_end(key)
                 return cached[1], cached[2]
             if cached is not None:
                 self._cache.pop(key)
                 self.stats["bytes"] -= cached[3]
             self.stats["misses"] += 1
+            timing_count("knowledge_cache_miss")
             for _ in range(2):
-                value = loader()
+                with aggregate_operation("knowledge_cache_load", identity=key):
+                    value = loader()
                 after = _stamp(path)
                 if after == stamp:
                     break
@@ -114,15 +121,19 @@ new bindings must be searchable before a delayed search projection is refreshed.
             else:
                 raise ValueError("作品知识资料正在更新，请重试")
             identity = digest([key, stamp, value.get("revision"), digest(value)])
-            value = transform(value)
-            size = _size((key, stamp, value, identity))
+            with aggregate_operation("knowledge_cache_transform"):
+                value = transform(value)
+            with aggregate_operation("knowledge_cache_size"):
+                size = _size((key, stamp, value, identity))
             while self._cache and self.stats["bytes"] + size > self.max_bytes:
                 _, removed = self._cache.popitem(last=False)
                 self.stats["bytes"] -= removed[3]
                 self.stats["evictions"] += 1
+                timing_count("knowledge_cache_eviction")
             if size <= self.max_bytes:
                 self._cache[key] = (stamp, value, identity, size)
                 self.stats["bytes"] += size
+                timing_count("knowledge_cache_stored_bytes", size)
             return value, identity
 
     def _catalog(self, saved):
@@ -134,17 +145,20 @@ new bindings must be searchable before a delayed search projection is refreshed.
             by_concept.setdefault(binding["concept_id"], []).append(binding)
             by_record.setdefault((binding["asset_id"], binding["record_id"]), []).append(binding)
         self.stats["catalog_builds"] += 1
+        timing_count("knowledge_catalog_build")
         return {"work_scope_id": saved["work_scope_id"], "revision": saved["revision"],
                 "entities": saved["entities"], "by_concept": by_concept, "by_record": by_record}
 
+    @timed("knowledge.baseline.snapshot")
     def snapshot(self, asset_ids):
         store = self.store
         catalogs, identities, scopes, fingerprints = {}, {}, {}, {}
         # The application's writes use this lock. Atomic file identity checks in
         # _load additionally catch replacement by another store/process.
-        with store.library.lock:
+        with timed_lock(store.library.lock, "library_lock_wait"):
             memberships, membership_identity = self._load(store.membership_path, store._memberships)
             for asset_id in sorted(set(asset_ids)):
+                timing_count("baseline_assets")
                 scope = memberships["assets"].get(asset_id)
                 if scope is None:
                     continue
@@ -156,6 +170,8 @@ new bindings must be searchable before a delayed search projection is refreshed.
                     catalogs[scope], identities[scope] = self._load(
                         store._path(scope), lambda scope=scope: store._read(scope), self._catalog)
                 scopes[asset_id], fingerprints[asset_id] = scope, fingerprint
+        timing_count("baseline_scopes", len(catalogs))
+        timing_count("baseline_scoped_assets", len(scopes))
         token = digest([membership_identity, identities, scopes, fingerprints])
         return KnowledgeSnapshot(token, catalogs, scopes, fingerprints)
 
@@ -164,17 +180,19 @@ new bindings must be searchable before a delayed search projection is refreshed.
         # Keep their knowledge branch independent of the number of indexed rows.
         # File identity is still checked, so adding the first scope invalidates
         # this fast path without restarting the provider.
-        with self.store.library.lock:
+        with timed_lock(self.store.library.lock, "library_lock_wait"):
             memberships, identity = self._load(self.store.membership_path, self.store._memberships)
             if not memberships["assets"]:
+                timing_count("knowledge_empty_memberships")
                 return KnowledgeSnapshot(digest([identity, {}, {}, {}]), {}, {}, {})
         return self.snapshot(engine.filtered_asset_ids(filters))
 
     def revision(self, filters, engine):
         return self._query_snapshot(filters, engine).token
 
-    def candidate_refs(self, query, snapshot):
-        selected = {scope: {row["concept_id"]: score for score, row in self.store._rank_concepts(saved, query)}
+    def candidate_refs(self, query, snapshot, *, limit=5):
+        selected = {scope: {row["concept_id"]: score for score, row in self.store._rank_concepts(
+                        saved, query, limit=limit)}
                     for scope, saved in snapshot.catalogs.items()}
         ids = set()
         for scope, concepts in selected.items():
@@ -200,13 +218,13 @@ new bindings must be searchable before a delayed search projection is refreshed.
             if match is not None:
                 results.append(match)
         results.sort(key=lambda pair: (-pair[0], pair[1]["asset_id"], pair[1]["start_ms"], pair[1]["id"]))
-        return [row for _, row in results[:50]]
+        return [row for _, row in results[:None if filters.get("_all_candidates") else 50]]
 
     def search(self, query, filters, engine):
         if not isinstance(query, str) or not query.strip():
             return []
         snapshot = self._query_snapshot(filters, engine)
-        selected, ids = self.candidate_refs(query, snapshot)
+        selected, ids = self.candidate_refs(query, snapshot, limit=None if filters.get("_all_candidates") else 5)
         if not ids:
             self.stats["candidate_records"] = 0
             return []

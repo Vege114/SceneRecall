@@ -16,6 +16,7 @@ import hashlib
 import math
 
 from .library import confined_path, digest, read_json, safe_id
+from .search_timing import aggregate_operation, timing_count, trace_span
 
 POLICY_VERSION = "identity-binding-v2"
 CHARACTER_KINDS = {"person", "character", "anthropomorphic_character"}
@@ -61,25 +62,28 @@ class BindingResolver:
         from .characters import CharacterStore, scope_id
         from .visual_identity import ReferenceGallery, VisualIdentityPipeline
 
-        self.library, self.asset_id = library, asset_id
-        self.asset = library.get_asset(asset_id)
-        self.characters = CharacterStore(library)
-        self.scope = scope_id(self.asset)
-        self.registry = self.characters._read(self.scope)
-        policy = self.characters.cast_policy(self.registry, self.asset.get("anime_profile"))
-        self.profiles = {key: row for key, row in self.registry["profiles"].items()
-                         if self.characters.profile_allowed(row, policy)}
-        self.pipeline = VisualIdentityPipeline(library)
-        self.directory = self.pipeline._directory(asset_id)
-        self.settings = self.pipeline.settings(asset_id)
-        self.decisions = read_json(self.directory / "decisions.json", {"decisions": {}})["decisions"]
-        gallery = ReferenceGallery(library)
-        self.gallery_directory = gallery._directory(self.scope)
-        self.references = {row["id"]: row for row in gallery._read(self.scope)["references"]}
-        self.trusted = gallery.active_reference_ids(asset_id)
-        self.matching = gallery.active_reference_ids(asset_id, include_candidates=True)
-        self.frames = read_json(library.asset_dir(asset_id) / "frames" / "registry.json", {})
-        self.regions, self.reference_hashes = {}, {}
+        with trace_span("identity.resolver_init") as phase:
+            self.library, self.asset_id = library, asset_id
+            self.asset = library.get_asset(asset_id)
+            self.characters = CharacterStore(library)
+            self.scope = scope_id(self.asset)
+            self.registry = self.characters._read(self.scope)
+            policy = self.characters.cast_policy(self.registry, self.asset.get("anime_profile"))
+            self.profiles = {key: row for key, row in self.registry["profiles"].items()
+                             if self.characters.profile_allowed(row, policy)}
+            self.pipeline = VisualIdentityPipeline(library)
+            self.directory = self.pipeline._directory(asset_id)
+            self.settings = self.pipeline.settings(asset_id)
+            self.decisions = read_json(self.directory / "decisions.json", {"decisions": {}})["decisions"]
+            gallery = ReferenceGallery(library)
+            self.gallery_directory = gallery._directory(self.scope)
+            self.references = {row["id"]: row for row in gallery._read(self.scope)["references"]}
+            self.trusted = gallery.active_reference_ids(asset_id)
+            self.matching = gallery.active_reference_ids(asset_id, include_candidates=True)
+            self.frames = read_json(library.asset_dir(asset_id) / "frames" / "registry.json", {})
+            self.regions, self.reference_hashes = {}, {}
+            phase.set(profile_count=len(self.profiles), reference_count=len(self.references),
+                      frame_count=len(self.frames), decision_count=len(self.decisions))
 
     def canonical(self, identity):
         if not identity:
@@ -98,7 +102,10 @@ class BindingResolver:
         except ValueError:
             return None
         if identity not in self.regions:
+            timing_count("region_cache_miss_count")
             self.regions[identity] = read_json(self.directory / "regions" / f"{identity}.json")
+        else:
+            timing_count("region_cache_hit_count")
         row = self.regions[identity]
         if (not row or row.get("id") != identity or row.get("frame_id") not in frame_ids
                 or row["frame_id"] not in self.frames
@@ -113,11 +120,17 @@ class BindingResolver:
                 or any(current.get(field) != evidence.get(field) for field in ("version", "sha256"))):
             return False
         if key not in self.reference_hashes:
+            timing_count("reference_hash_cache_miss_count")
             try:
                 path = confined_path(self.gallery_directory, f"{safe_id(key)}.png")
-                self.reference_hashes[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+                with aggregate_operation("file_read_bytes", identity=str(path)):
+                    content = path.read_bytes()
+                with aggregate_operation("reference_sha256", reference_bytes=len(content)):
+                    self.reference_hashes[key] = hashlib.sha256(content).hexdigest()
             except (OSError, ValueError):
                 self.reference_hashes[key] = None
+        else:
+            timing_count("reference_hash_cache_hit_count")
         return self.reference_hashes[key] == evidence["sha256"]
 
     def calibrated(self, region, identity, *, single=False):
@@ -233,16 +246,42 @@ class BindingResolver:
             if not character_entity(entity):
                 entity["character_id"] = None
                 for key in ("character_name", "candidate_character_id", "identity_binding", "binding_status",
-                            "identity_status", "association_status", "association_source"):
+                            "identity_status", "association_status", "association_source", "identity_region_evidence"):
                     entity.pop(key, None)
                 continue
             decision = self._decision(entity, result, claims)
+            # Identity support may cover fewer frames than a model's general
+            # entity description. Publish only validated region-to-frame links
+            # so retrieval cannot transfer a name to another frame in a window.
+            region_evidence = []
+            if decision["status"] in {"human_confirmed", "auto_bound", "candidate"}:
+                frame_ids = set(entity.get("evidence_frame_ids") or [])
+                keys = dict.fromkeys([entity.get("identity_region_id"),
+                                      *(entity.get("identity_support_region_ids") or [])])
+                if decision.get("source") == "human":
+                    # A manual decision on one region does not identify the
+                    # other regions mentioned by a broad model description.
+                    field = "character_id" if decision["status"] == "human_confirmed" else "candidate_character_id"
+                    status = "confirmed" if decision["status"] == "human_confirmed" else "candidate"
+                    keys = [key for key in keys if self.decisions.get(key, {}).get("status") == status
+                            and self.canonical(self.decisions[key].get(field)) == decision.get(field)]
+                elif decision["status"] == "auto_bound":
+                    keys = decision.get("region_ids", [])
+                else:
+                    # Automatic candidate fallback was computed from the main
+                    # region only. A failed pair may depict a different person.
+                    keys = [entity.get("identity_region_id")]
+                for key in keys:
+                    region = self.region(key, frame_ids) if key else None
+                    if region is not None:
+                        region_evidence.append({"region_id": region["id"], "frame_id": region["frame_id"]})
             decision.update(policy_version=POLICY_VERSION, observation_id=result.get("id"), entity_id=entity.get("id"),
                             character_scope_id=self.scope)
             decision["id"] = "binding_" + digest(decision)
             identity = decision.get("character_id")
             bound = decision["status"] in {"auto_bound", "human_confirmed"}
             entity.update(identity_binding=decision, binding_status=decision["status"],
+                          identity_region_evidence=region_evidence,
                           identity_status="confirmed" if bound else decision["status"],
                           association_status="confirmed" if bound else decision["status"],
                           association_source=decision.get("source", POLICY_VERSION),
@@ -270,7 +309,11 @@ def resolve_observation(library, asset_id, observation):
 
 
 def resolve_observations(library, asset_id, observations):
-    if not any(uses_policy(row) for row in observations):
-        return copy.deepcopy(observations)
-    resolver = BindingResolver(library, asset_id)
-    return [resolver.resolve(row) for row in observations]
+    with trace_span("identity.resolve_batch", record_count=len(observations)) as phase:
+        if not any(uses_policy(row) for row in observations):
+            phase.set(policy_present=False)
+            with aggregate_operation("record_copy"):
+                return copy.deepcopy(observations)
+        phase.set(policy_present=True)
+        resolver = BindingResolver(library, asset_id)
+        return [resolver.resolve(row) for row in observations]

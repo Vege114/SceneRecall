@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import re
 import sqlite3
 import threading
@@ -22,13 +23,28 @@ from typing import Any
 import jieba
 
 from .execution import run_in_thread
+from .character_ranking import BRANCHES, character_evidence_frame, grounded_rrf_score, summarize_character_match
 from .providers import ProviderError, ProviderManager
-from .search_timing import current_trace, record_interval, timed, trace_span
+from .search_timing import aggregate_operation, current_trace, record_interval, timed, trace_span
 
 jieba.setLogLevel(logging.WARNING)
 _query_embeddings = ContextVar("query_embeddings", default=None)
 _completed_query = ContextVar("completed_query", default=None)
 _knowledge_details = ContextVar("knowledge_details", default=None)
+
+
+def _snapshot_attributes(phase, **attributes):
+    """Number revision passes within this trace, including the final HTTP fence."""
+    attributes["phase"] = phase
+    trace = current_trace()
+    if trace is not None:
+        with trace._lock:
+            index = trace.attributes.get("snapshot_passes", 0) + 1
+            trace.attributes["snapshot_passes"] = index
+        attributes["pass"] = index
+    return attributes
+
+
 ALLOWED_FILTERS = {"asset_id", "work_id", "kind", "season", "episode", "character", "character_id",
                    "concept_id", "project_id", "anime_id", "folder_id", "tag"}
 STOP_WORDS = {
@@ -650,19 +666,26 @@ class SearchEngine:
     @timed("snapshot.revision.work")
     def query_token(self, filters):
         from .query_cache import query_revision
-        with self._db() as db:
-            revision = query_revision(db)
+        with trace_span("snapshot.revision.sqlite"):
+            with self._db() as db:
+                revision = query_revision(db)
         knowledge = None
         if self.knowledge_provider is not None:
             try:
-                knowledge = self.knowledge_provider.revision(filters, self)
+                with trace_span("snapshot.revision.knowledge"):
+                    knowledge = self.knowledge_provider.revision(filters, self)
             except (OSError, ValueError, RuntimeError) as exc:
                 # An unavailable optional provider degrades its own branch.
                 knowledge = ("unavailable", type(exc).__name__, str(exc))
         encoder = self.visual_encoder
         path = getattr(encoder, "path", None)
         try:
-            stamp = path.stat() if path is not None else None
+            with trace_span("snapshot.revision.encoder"):
+                if path is not None:
+                    with aggregate_operation("file_stat", identity=str(path)):
+                        stamp = path.stat()
+                else:
+                    stamp = None
             encoder_token = (id(encoder), (stamp.st_ino, stamp.st_size, stamp.st_mtime_ns, stamp.st_ctime_ns)
                              if stamp is not None else None)
         except OSError:
@@ -683,15 +706,19 @@ class SearchEngine:
         completed = _completed_query.get()
         return completed[3] if completed is not None and completed[0] is self else fallback
 
+    def completed_character_targets(self):
+        completed = _completed_query.get()
+        return copy.deepcopy(completed[4]) if completed is not None and completed[0] is self and len(completed) > 4 else []
+
     async def check_completed_query(self):
         completed = _completed_query.get()
         if completed is not None and completed[0] is self:
-            await self._check_query_token(completed[2], completed[1])
+            await self._check_query_token(completed[2], completed[1], phase="after_canonical")
 
-    @timed("snapshot.validate")
-    async def _check_query_token(self, token, filters):
-        if await run_in_thread(self.query_token, filters) != token:
-            raise SearchSnapshotChanged("资料正在更新，请重试搜索")
+    async def _check_query_token(self, token, filters, *, phase="validation"):
+        with trace_span("snapshot.validate", **_snapshot_attributes(phase)):
+            if await run_in_thread(self.query_token, filters) != token:
+                raise SearchSnapshotChanged("资料正在更新，请重试搜索")
 
     async def _concept(self, query: str, filters: dict) -> list[dict]:
         from .visual_index import evidence_digest
@@ -740,7 +767,7 @@ class SearchEngine:
                 "concept_bindings", "matched_concept_ids", "evidence_ids") if field in candidate},
                 "match_basis": "setting_concept_appearance", "event_verified": False, "retrieval_branches": ["concept"]})
             seen.add(row["id"])
-            if len(selected) == 50:
+            if not filters.get("_all_candidates") and len(selected) == 50:
                 break
         return selected
 
@@ -784,13 +811,15 @@ class SearchEngine:
     @timed("lexical.sql_tokenize.work")
     def _lexical(self, query: str, filters: dict, limit: int = 50, *, aliases=()) -> list[dict]:
         where, params = self._where(filters)
+        all_candidates = bool(filters.get("_all_candidates"))
+        limit_sql, limit_params = ("", []) if all_candidates else (" LIMIT ?", [limit])
         normalized = normalize(query)
         if not normalized:
             return []
         with self._db() as db:
             exact = db.execute(f"SELECT r.data FROM records r WHERE {where} AND instr(r.normalized,?)>0 "
-                               "ORDER BY r.is_context ASC, length(r.normalized) ASC LIMIT ?",
-                               [*params, normalized, limit]).fetchall()
+                               "ORDER BY r.is_context ASC, length(r.normalized) ASC, r.id ASC" + limit_sql,
+                               [*params, normalized, *limit_params]).fetchall()
             candidates = {json.loads(row[0])["id"]: json.loads(row[0]) for row in exact}
             tokens = list(dict.fromkeys([*tokenize(query),
                                          *(term for alias in aliases for term in tokenize(alias))]))
@@ -799,11 +828,13 @@ class SearchEngine:
             if fts_query:
                 rows = db.execute(f"""SELECT r.data FROM evidence_fts JOIN records r ON r.rowid=evidence_fts.rowid
                                     WHERE evidence_fts MATCH ? AND {where}
-                                    ORDER BY bm25(evidence_fts) LIMIT ?""", [fts_query, *params, limit]).fetchall()
+                                    ORDER BY bm25(evidence_fts), r.id ASC""" + limit_sql,
+                                  [fts_query, *params, *limit_params]).fetchall()
                 for row in rows:
                     record = json.loads(row[0])
                     candidates.setdefault(record["id"], record)
-        return list(candidates.values())[:limit]
+        rows = list(candidates.values())
+        return rows if all_candidates else rows[:limit]
 
     @timed("semantic.snapshot.work")
     def _semantic_snapshot(self, profile_id, filters):
@@ -820,16 +851,21 @@ class SearchEngine:
             return signature, dict(namespace), valid
 
     @timed("semantic.index_read_rank.work")
-    def _semantic_candidates(self, namespace, query_vector, valid, filtered):
+    def _semantic_candidates(self, namespace, query_vector, valid, filtered, *, all_candidates=False):
         # Import, connection setup, table opening and query preparation can all
         # block. Keep their complete lifetime in the cancellation-owned worker.
         import lancedb
         table = lancedb.connect(str(self.index_dir / "vectors")).open_table(namespace["table_name"])
         search = table.search(query_vector).distance_type("cosine")
-        if filtered:
+        if filtered or all_candidates:
             # Filter before Top-50 so a small work cannot lose its own neighbors.
             id_filter = "id IN (" + ",".join("'" + value.replace("'", "''") + "'" for value in valid) + ")"
             search = search.where(id_filter, prefilter=True)
+        if all_candidates:
+            # A flat scoped query cannot silently omit an above-threshold row
+            # behind an approximate neighbor index or a fixed Top-K budget.
+            rows = search.bypass_vector_index().limit(len(valid)).to_list()
+            return sorted(rows, key=lambda row: (row["_distance"], row["id"]))
         return search.limit(50).to_list()
 
     async def _semantic(self, query: str, filters: dict, profile_id: str,
@@ -853,7 +889,8 @@ class SearchEngine:
         if len(query_vector) != namespace["dimensions"]:
             degraded.append("查询向量维度与索引不一致，请重建当前模型索引")
             return []
-        rows = await run_in_thread(self._semantic_candidates, namespace, query_vector, valid, bool(filters))
+        options = {"all_candidates": True} if filters.get("_all_candidates") else {}
+        rows = await run_in_thread(self._semantic_candidates, namespace, query_vector, valid, bool(filters), **options)
         records, stale = [], False
         for row in rows:
             current = valid.get(row["id"])
@@ -874,14 +911,20 @@ class SearchEngine:
     async def search(self, query: str, filters: dict | None = None, embedding_profile_id: str | None = None,
                      query_profile_id: str | None = None, decision_profile_id: str | None = None,
                      answer_profile_id: str | None = None, limit: int = 10, knowledge_mode="baseline",
-                     knowledge_scope_id=None, knowledge_target=None) -> dict:
+                     knowledge_scope_id=None, knowledge_target=None, min_match_score: float | None = None) -> dict:
         query = query.strip()
         if not query or len(query) > 2000:
             raise ValueError("检索问题长度须为 1–2000 个字符")
         limit = max(1, min(int(limit), 50))
+        if min_match_score is not None:
+            min_match_score = float(min_match_score)
+            if not math.isfinite(min_match_score) or not 0 <= min_match_score <= 100:
+                raise ValueError("匹配分阈值须为 0–100 的有限数值")
         filters = {key: value for key, value in (filters or {}).items() if key in ALLOWED_FILTERS}
         degraded = []
         filters = copy.deepcopy(filters)
+        if min_match_score is not None:
+            filters["_all_candidates"] = True
         if knowledge_mode != "baseline" or knowledge_scope_id or knowledge_target:
             filters.update(_knowledge_mode=knowledge_mode, _knowledge_scope=knowledge_scope_id,
                            _knowledge_target=knowledge_target)
@@ -899,10 +942,10 @@ class SearchEngine:
                 attempt_filters = copy.deepcopy(filters)
                 warnings = list(degraded)
                 planning_sources = []
-                with trace_span("snapshot.acquire", attempt=attempt):
+                with trace_span("snapshot.acquire", **_snapshot_attributes("initial", attempt=attempt)):
                     token = await run_in_thread(self.query_token, attempt_filters)
                 try:
-                    query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                    query_text, lexical_aliases, character_intent = await self._resolve_character_query(query, attempt_filters, token, warnings)
                     search_text = query_text
                     if query_profile_id:
                         try:
@@ -918,44 +961,45 @@ class SearchEngine:
                                     previous_filters, previous_token = attempt_filters, token
                                     planning_sources.append((previous_filters, previous_token))
                                     attempt_filters = interpreted_filters
-                                    with trace_span("snapshot.acquire", attempt=attempt, interpreted=True):
+                                    with trace_span("snapshot.acquire", **_snapshot_attributes("interpreted", attempt=attempt, interpreted=True)):
                                         token = await run_in_thread(self.query_token, attempt_filters)
                                     # Fence the interpretation source *after* acquiring
                                     # the new snapshot, closing the scope-switch gap.
-                                    await self._check_query_token(previous_token, previous_filters)
-                                    query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                                    await self._check_query_token(previous_token, previous_filters, phase="interpretation_source")
+                                    query_text, lexical_aliases, character_intent = await self._resolve_character_query(query, attempt_filters, token, warnings)
                                 if query_text != planned_query:
                                     continue
                                 search_text = interpreted.data["search_text"]
                                 if search_text != query_text:
-                                    search_text, interpreted_aliases = await self._resolve_character_query(search_text, attempt_filters, token, warnings)
+                                    search_text, interpreted_aliases, _interpreted_intent = await self._resolve_character_query(search_text, attempt_filters, token, warnings)
                                     lexical_aliases = tuple(sorted(set(lexical_aliases).union(interpreted_aliases)))
                                 break
                             else:
                                 warnings.append("查询理解反复改变角色范围，已使用原筛选与本地角色解析")
                                 attempt_filters = copy.deepcopy(filters)
-                                with trace_span("snapshot.acquire", attempt=attempt, interpretation_fallback=True):
+                                with trace_span("snapshot.acquire", **_snapshot_attributes("interpretation_fallback", attempt=attempt, interpretation_fallback=True)):
                                     token = await run_in_thread(self.query_token, attempt_filters)
-                                query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                                query_text, lexical_aliases, character_intent = await self._resolve_character_query(query, attempt_filters, token, warnings)
                                 search_text = query_text
                         except ProviderError as exc:
                             warnings.append("查询理解失败，已保留原始问题：" + str(exc))
                             if attempt_filters != filters:
                                 attempt_filters = copy.deepcopy(filters)
-                                with trace_span("snapshot.acquire", attempt=attempt, interpretation_fallback=True):
+                                with trace_span("snapshot.acquire", **_snapshot_attributes("interpretation_fallback", attempt=attempt, interpretation_fallback=True)):
                                     token = await run_in_thread(self.query_token, attempt_filters)
-                                query_text, lexical_aliases = await self._resolve_character_query(query, attempt_filters, token, warnings)
+                                query_text, lexical_aliases, character_intent = await self._resolve_character_query(query, attempt_filters, token, warnings)
                             search_text = query_text
                     result = await self._search_snapshot(query_text, search_text, attempt_filters, embedding_profile_id,
-                        decision_profile_id, answer_profile_id, limit, warnings, token, diagnostics, lexical_aliases)
+                        decision_profile_id, answer_profile_id, limit, warnings, token, diagnostics, lexical_aliases,
+                        min_match_score=min_match_score, character_intent=character_intent)
                     for planning_filters, planning_token in planning_sources:
-                        await self._check_query_token(planning_token, planning_filters)
-                    await self._check_query_token(token, attempt_filters)
+                        await self._check_query_token(planning_token, planning_filters, phase="planning_source")
+                    await self._check_query_token(token, attempt_filters, phase="after_recall")
                     diagnostics["retries"] = attempt
                     trace = current_trace()
                     if trace is not None:
                         trace.attributes["snapshot_retries"] = attempt
-                    _completed_query.set((self, attempt_filters, token, query_text))
+                    _completed_query.set((self, attempt_filters, token, query_text, character_intent["targets"]))
                     return result
                 except SearchSnapshotChanged:
                     if attempt:
@@ -981,7 +1025,8 @@ class SearchEngine:
                         seen = {row["id"] for row in rows}
                         expanded = await run_in_thread(self._lexical, search_text, scoped, **options)
                         rows.extend(row for row in expanded if row["id"] not in seen)
-                        rows = rows[:50]
+                        if not scoped.get("_all_candidates"):
+                            rows = rows[:50]
                 elif name == "semantic":
                     if embedding_profile_id:
                         try:
@@ -1039,24 +1084,31 @@ class SearchEngine:
                         raise ValueError("角色名称表不可用")
                     resolved = await run_in_thread(self.character_resolver.resolve, query, filters, self)
                     phase.set(matched_count=len(resolved["matches"]), changed=resolved["changed"])
-                    return resolved["text"], tuple(resolved.get("aliases", ()))
+                    targets = resolved.get("targets", [{key: row[key] for key in ("scope_id", "character_id", "name")}
+                                                       for row in resolved["matches"]
+                                                       if all(key in row for key in ("scope_id", "character_id", "name"))])
+                    return resolved["text"], tuple(resolved.get("aliases", ())), {
+                        "targets": targets}
                 except (OSError, ValueError):
                     degraded.append("角色简称解析不可用，已保留原始查询")
                     phase.set(matched_count=0, changed=False, unavailable=True)
-        return query, ()
+        return query, (), {"targets": []}
 
     async def _search_snapshot(self, query, search_text, filters, embedding_profile_id,
                                decision_profile_id, answer_profile_id, limit, degraded, token, diagnostics,
-                               lexical_aliases=()):
+                               lexical_aliases=(), *, min_match_score=None, character_intent=None):
+        character_intent = character_intent or {"targets": []}
+        targets = character_intent["targets"]
+        recall_filters = {**filters, "_character_targets": targets} if targets else filters
         knowledge_available = not (isinstance(token[1], tuple) and token[1][:1] == ("unavailable",))
-        branches = await self._recall_parallel(query, search_text, filters, embedding_profile_id, diagnostics,
+        branches = await self._recall_parallel(query, search_text, recall_filters, embedding_profile_id, diagnostics,
                                                 knowledge_available, lexical_aliases)
         lexical, semantic, visual, concept = [rows for rows, _warnings in branches]
         for _rows, warnings in branches:
             degraded.extend(warnings)
         merge_started = time.perf_counter()
-        records, scores = {}, defaultdict(float)
-        for ranking in (lexical, semantic, visual, concept):
+        records, scores, contributions = {}, defaultdict(float), {}
+        for branch, ranking in zip(BRANCHES, (lexical, semantic, visual, concept)):
             for rank, record in enumerate(ranking, 1):
                 previous = records.get(record["id"], {})
                 records[record["id"]] = {**previous, **record,
@@ -1066,19 +1118,45 @@ class SearchEngine:
                     records[record["id"]]["evidence_ids"] = list(dict.fromkeys(
                         previous.get("evidence_ids", []) + record.get("evidence_ids", [])))
                 scores[record["id"]] += 1 / (60 + rank)
-        ordered = sorted(records.values(), key=lambda record: scores[record["id"]], reverse=True)
+                contribution = contributions.setdefault(record["id"], {})
+                contribution[branch] = contribution.get(branch, 0.) + 1 / (60 + rank)
+        raw_scores = dict(scores)
+        if targets:
+            for identity, record in records.items():
+                if record.get("kind") in {"visual", "scene"} and not record.get("hit_frame_id"):
+                    frame_id = character_evidence_frame(record, targets)
+                    if frame_id:
+                        record.update(hit_frame_id=frame_id, hit_frame_basis="character_evidence", seek_basis="character_frame")
+                        frame = next((row for row in record.get("ordered_frames", []) if row.get("id") == frame_id), None)
+                        if frame is not None and isinstance(frame.get("at_ms"), int):
+                            record["seek_ms"] = frame["at_ms"]
+                        record["evidence_ids"] = list(dict.fromkeys([*record.get("evidence_ids", []), frame_id]))
+                scores[identity] = grounded_rrf_score(record, targets, contributions[identity], record.get("hit_frame_id"))
+        ordered = sorted(records.values(), key=lambda record: (-scores[record["id"]], record["id"]))
+        threshold_mode = min_match_score is not None
+        # Grounding deductions must remain visible in the percentage. Scaling
+        # the surviving effective maximum back to 100 would cancel them out.
+        reference_scores = raw_scores if threshold_mode and targets else scores
+        max_score = max(reference_scores.values(), default=0)
         candidates = []
         for record in ordered:
             exact = record["kind"] == "subtitle" and normalize(query) in normalize(record.get("text", ""))
             candidates.append({**record, "score": scores[record["id"]],
+                               **({"match_score": min(100., max(0., 100 * scores[record["id"]] / max_score)) if max_score > 0 else 0.}
+                                  if threshold_mode else {}),
+                               **({"raw_rrf_score": raw_scores[record["id"]],
+                                   "character_match": summarize_character_match(record, targets, record.get("hit_frame_id")),
+                                   "_rrf_contributions": contributions[record["id"]],
+                                   "_match_score_reference": max_score} if targets and record.get("kind") in {"visual", "scene"} else {}),
                                "match_type": "full" if exact else "partial",
                                "match_reason": ("设定匹配该实体；画面证据仅确认出场，未证明当前功能或动作"
                                                 if record.get("match_basis") in {"setting_concept_appearance", "knowledge_character_appearance"} else
                                                 "台词原文包含查询文本" if exact else "包含相关证据，组合条件尚待核对")})
         record_interval("results.merge_rank", merge_started, candidate_count=len(candidates))
+        candidate_count = len(candidates)
         rerank_started = time.perf_counter()
         if decision_profile_id and candidates:
-            await self._check_query_token(token, filters)
+            await self._check_query_token(token, filters, phase="before_rerank")
             try:
                 decision = await self.providers.decide(decision_profile_id, query, candidates[:20])
                 judgments = decision.data["candidates"]
@@ -1086,50 +1164,79 @@ class SearchEngine:
                     expanded = await self.providers.decide(decision_profile_id, query, candidates[20:40])
                     judgments.extend(expanded.data["candidates"])
                 by_id = {row["id"]: row for row in candidates}
-                reranked = []
+                # Threshold selection always uses the complete fusion score.
+                # A small optional model budget may reject or annotate rows,
+                # but cannot silently remove candidates it never evaluated.
+                reranked = dict(by_id) if threshold_mode else []
                 for judgment in judgments:
-                    if judgment["id"] not in by_id or judgment["match_type"] == "none":
+                    if judgment["id"] not in by_id:
+                        continue
+                    if judgment["match_type"] == "none":
+                        if threshold_mode:
+                            reranked.pop(judgment["id"], None)
                         continue
                     candidate = by_id[judgment["id"]]
                     match_type = judgment["match_type"]
                     if (candidate.get("context_stale") or candidate.get("match_basis") in {"setting_concept_appearance", "knowledge_character_appearance"}) and match_type == "full":
                         match_type = "partial"
-                    reranked.append({**candidate, "score": judgment["score"],
+                    judged = {**candidate, **({"decision_score": judgment["score"]} if threshold_mode
+                                             else {"score": judgment["score"]}),
                                      "match_type": match_type,
                                      "match_reason": "依据记录核对全部条件" if match_type == "full"
-                                     else "记录仅支持部分查询条件"})
-                candidates = sorted(reranked, key=lambda row: row["score"], reverse=True)
+                                     else "记录仅支持部分查询条件"}
+                    if threshold_mode:
+                        reranked[judgment["id"]] = judged
+                    else:
+                        reranked.append(judged)
+                candidates = (sorted(reranked.values(), key=lambda row: (-row["match_score"], row["id"]))
+                              if threshold_mode else sorted(reranked, key=lambda row: (-row["score"], row["id"])))
             except ProviderError as exc:
                 degraded.append("候选核对失败，已保留召回结果：" + str(exc))
         record_interval("results.provider_rerank", rerank_started, enabled=bool(decision_profile_id and candidates))
         select_started = time.perf_counter()
         # Suppress a context hit when one of its shorter source cues already contains
         # the complete literal quote. Context remains when the query spans cue boundaries.
+        if threshold_mode:
+            candidates = [candidate for candidate in candidates if candidate["match_score"] > min_match_score]
+        eligible = {candidate["id"]: candidate for candidate in candidates} if threshold_mode else records
         chosen = []
         for candidate in merge_visual_candidates(candidates):
+            character_match = candidate.get("character_match")
+            if character_match and character_match["status"] != "confirmed":
+                candidate.update(match_type="partial", match_reason=character_match["reason"])
             uncertain_names = unverified_character_names(query, candidate)
             if uncertain_names:
                 candidate.update(match_type="partial", unverified_character_names=uncertain_names,
                                  match_reason="匹配到候选角色，画面人物的实名尚未确认")
             if candidate.get("is_context") and any(
-                normalize(query) in normalize(records.get(source, {}).get("text", ""))
+                normalize(query) in normalize(eligible.get(source, {}).get("text", ""))
                 for source in candidate.get("source_ids", [])
             ):
                 continue
             chosen.append(candidate)
-            if len(chosen) == limit:
+            if not threshold_mode and len(chosen) == limit:
                 break
+        if threshold_mode:
+            chosen.sort(key=lambda row: (-row["match_score"], row["id"]))
         explanation = (f"找到 {len(chosen)} 个候选片段；请结合原片核对标记为部分匹配的结果。"
                        if chosen else "未找到有足够证据支持的片段。")
         record_interval("results.deduplicate_select", select_started, result_count=len(chosen))
         if answer_profile_id and chosen:
-            await self._check_query_token(token, filters)
+            await self._check_query_token(token, filters, phase="before_compose")
             try:
                 with trace_span("results.compose"):
-                    answer = await self.providers.compose(answer_profile_id, query, chosen)
+                    answer_candidates = chosen[:10] if threshold_mode else chosen
+                    answer = await self.providers.compose(answer_profile_id, query, answer_candidates)
                 explanation = answer.data["text"]
+                if threshold_mode and len(chosen) > len(answer_candidates):
+                    explanation = f"以下解释仅覆盖排名前 {len(answer_candidates)} 个片段；全部 {len(chosen)} 个结果见列表。\n" + explanation
             except ProviderError as exc:
                 degraded.append("解释生成失败，已使用证据摘要：" + str(exc))
         details = _knowledge_details.get() or {}
         degraded.extend(details.get("knowledge_diagnostics", {}).get("degraded", []))
-        return {"results": chosen, "degraded": list(dict.fromkeys(degraded)), "explanation": explanation, **details}
+        selection = ({"selection": {"mode": "threshold", "min_match_score": min_match_score,
+                      "score_basis": "character_grounded_rrf_v1" if targets and any(row.get("kind") in {"visual", "scene"}
+                                                for row in records.values()) else "relative_rrf_v1", "candidate_count": candidate_count,
+                      "returned_count": len(chosen)}} if threshold_mode else {})
+        return {"results": chosen, "degraded": list(dict.fromkeys(degraded)), "explanation": explanation,
+                **details, **selection}

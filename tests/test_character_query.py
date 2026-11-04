@@ -288,7 +288,7 @@ async def test_name_change_during_interpreted_snapshot_acquisition_retries_plan(
         calls.append(query)
         return SimpleNamespace(data={"search_text": query, "filters": {"kind": "subtitle"}})
 
-    async def snapshot(*args):
+    async def snapshot(*args, **_kwargs):
         recalled.append(args[:3])
         return {"results": [], "degraded": args[7], "explanation": ""}
 
@@ -324,7 +324,7 @@ async def test_interpreted_scope_change_replans_using_new_character_and_aliases(
         calls.append(query)
         return SimpleNamespace(data={"search_text": query + "在东京塔", "filters": {"kind": "subtitle"}})
 
-    async def snapshot(*args):
+    async def snapshot(*args, **_kwargs):
         recalled.append((args[0], args[1], args[2], args[10]))
         return {"results": [], "degraded": args[7], "explanation": ""}
 
@@ -348,7 +348,7 @@ async def test_repeated_interpretation_scope_changes_fall_back_to_user_scope(sto
         kind = "subtitle" if len(calls) == 1 else "visual"
         return SimpleNamespace(data={"search_text": query + "旧解释", "filters": {"kind": kind}})
 
-    async def snapshot(*args):
+    async def snapshot(*args, **_kwargs):
         recalled.append((args[0], args[1], args[2], args[10]))
         return {"results": [], "degraded": args[7], "explanation": ""}
 

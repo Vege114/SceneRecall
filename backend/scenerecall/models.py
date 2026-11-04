@@ -141,6 +141,7 @@ class SearchInput(Contract):
     query: str = Field(min_length=1, max_length=4000)
     filters: dict = Field(default_factory=dict)
     limit: int = Field(default=10, ge=1, le=50)
+    min_match_score: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     enhancements: bool = False
     visual_verification: bool = False
     knowledge_mode: Literal["baseline", "lightrag"] = "baseline"

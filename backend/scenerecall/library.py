@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from .models import AssetInput, Observation
 from .file_io import atomic_replace
+from .search_timing import aggregate_operation, timing_count, trace_span
 
 SCHEMA = "1.0"
 _WINDOWS_PATHS = os.name == "nt"
@@ -34,7 +35,10 @@ def uid(prefix: str) -> str:
 
 
 def digest(value) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:24]
+    with aggregate_operation("digest_serialize"):
+        encoded = json.dumps(value, sort_keys=True, ensure_ascii=False).encode()
+    with aggregate_operation("digest_sha256", digest_bytes=len(encoded)):
+        return hashlib.sha256(encoded).hexdigest()[:24]
 
 
 def safe_id(value: str) -> str:
@@ -63,9 +67,16 @@ def atomic_json(path: Path, data) -> None:
 
 
 def read_json(path: Path, default=None):
-    if not path.exists():
+    with aggregate_operation("fs_exists", identity=str(path)):
+        exists = path.exists()
+    if not exists:
+        timing_count("file_missing_count")
         return default
-    result = json.loads(path.read_text(encoding="utf-8"))
+    with aggregate_operation("file_read_text", identity=str(path)):
+        text = path.read_text(encoding="utf-8")
+    timing_count("json_text_chars", len(text))
+    with aggregate_operation("json_parse", identity=str(path)):
+        result = json.loads(text)
     if isinstance(result, dict) and result.get("schema_version", SCHEMA) != SCHEMA:
         raise ValueError(f"不支持的数据格式版本: {path.name}")
     return result
@@ -86,9 +97,17 @@ def atomic_jsonl(path: Path, records: list[dict]) -> None:
 
 
 def read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
+    with aggregate_operation("fs_exists", identity=str(path)):
+        exists = path.exists()
+    if not exists:
+        timing_count("file_missing_count")
         return []
-    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    with aggregate_operation("file_read_text", identity=str(path)):
+        text = path.read_text(encoding="utf-8")
+    timing_count("json_text_chars", len(text))
+    with aggregate_operation("json_parse", identity=str(path)):
+        records = [json.loads(line) for line in text.splitlines() if line.strip()]
+    timing_count("jsonl_record_count", len(records))
     if any(r.get("schema_version", SCHEMA) != SCHEMA for r in records):
         raise ValueError("不支持的数据格式版本")
     return records
@@ -765,114 +784,141 @@ class Library:
         from .retrieval_store import RetrievalStore
         characters = CharacterStore(self)
         result = []
-        for asset in [self.get_asset(asset_id)] if asset_id else self.list_assets():
-            annotations = self.annotations(asset["id"])
-            observations = characters.decorate_observations(asset["id"], self.observations(asset["id"]))
-            scenes = characters.decorate_observations(asset["id"], SceneStore(self).list(asset["id"]))
+        with trace_span("records.asset_metadata") as phase:
+            assets = [self.get_asset(asset_id)] if asset_id else self.list_assets()
+            phase.set(asset_count=len(assets))
+        for asset in assets:
+            with trace_span("records.annotations") as phase:
+                annotations = self.annotations(asset["id"])
+                phase.set(record_count=len(annotations))
+            with trace_span("records.observations") as phase:
+                observations = characters.decorate_observations(asset["id"], self.observations(asset["id"]))
+                phase.set(record_count=len(observations))
+            with trace_span("records.scenes") as phase:
+                scenes = characters.decorate_observations(asset["id"], SceneStore(self).list(asset["id"]))
+                phase.set(record_count=len(scenes))
             # Original observations stay immutable and collectible, but are not
             # duplicated as search hits where a new scene plan replaced them.
-            observations = [row for row in observations if not any(
-                scene["start_ms"] < row["end_ms"] and scene["end_ms"] > row["start_ms"] for scene in scenes)]
-            audio = AudioIdentityService(self, characters).records(asset["id"])
-            for scene in scenes:
-                if scene.get("audio_evidence"):
-                    scene["audio_evidence"] = project_audio_evidence(scene["audio_evidence"], audio)
-            retrieval = RetrievalStore(self).records(asset["id"])
-            for record in observations + scenes + retrieval + self.subtitles(asset["id"]) + audio:
-                record = project_actions(record)
-                is_visual = "summary" in record or record.get("evidence_type") == "retrieval_window"
-                is_scene = "chunk_id" in record
-                is_audio = record.get("kind") == "audio"
-                is_retrieval = record.get("evidence_type") == "retrieval_window"
-                related = [a for a in annotations if a["record_id"] == record["id"]]
-                text = record.get("summary", record.get("text", ""))
-                favorite, note, user_confirmed = False, "", False
-                names = []
-                entities = copy.deepcopy(record.get("entities", []))
-                for annotation in related:
-                    if annotation.get("summary") is not None:
-                        text = annotation["summary"]
-                        user_confirmed = True
-                    if "favorite" in annotation:
-                        favorite = annotation["favorite"]
-                    if annotation.get("note") is not None:
-                        note = annotation["note"]
-                    if annotation.get("character_name") and not annotation.get("needs_reassociation"):
+            with trace_span("records.observation_filter", input_count=len(observations), scene_count=len(scenes)) as phase:
+                observations = [row for row in observations if not any(
+                    scene["start_ms"] < row["end_ms"] and scene["end_ms"] > row["start_ms"] for scene in scenes)]
+                phase.set(output_count=len(observations))
+            with trace_span("records.audio") as phase:
+                audio = AudioIdentityService(self, characters).records(asset["id"])
+                for scene in scenes:
+                    if scene.get("audio_evidence"):
+                        scene["audio_evidence"] = project_audio_evidence(scene["audio_evidence"], audio)
+                phase.set(record_count=len(audio))
+            with trace_span("records.retrieval") as phase:
+                retrieval = RetrievalStore(self).records(asset["id"])
+                phase.set(record_count=len(retrieval))
+            with trace_span("records.subtitles") as phase:
+                subtitles = self.subtitles(asset["id"])
+                phase.set(record_count=len(subtitles))
+            with trace_span("records.assemble", input_count=len(observations) + len(scenes) + len(retrieval)
+                            + len(subtitles) + len(audio)) as phase:
+                before_count = len(result)
+                for record in observations + scenes + retrieval + subtitles + audio:
+                    record = project_actions(record)
+                    is_visual = "summary" in record or record.get("evidence_type") == "retrieval_window"
+                    is_scene = "chunk_id" in record
+                    is_audio = record.get("kind") == "audio"
+                    is_retrieval = record.get("evidence_type") == "retrieval_window"
+                    related = [a for a in annotations if a["record_id"] == record["id"]]
+                    text = record.get("summary", record.get("text", ""))
+                    favorite, note, user_confirmed = False, "", False
+                    names = []
+                    entities = copy.deepcopy(record.get("entities", []))
+                    for annotation in related:
+                        if annotation.get("summary") is not None:
+                            text = annotation["summary"]
+                            user_confirmed = True
+                        if "favorite" in annotation:
+                            favorite = annotation["favorite"]
+                        if annotation.get("note") is not None:
+                            note = annotation["note"]
+                        if annotation.get("character_name") and not annotation.get("needs_reassociation"):
+                            for entity in entities:
+                                if entity["id"] == annotation.get("entity_id"):
+                                    if entity.get("identity_region_id") or annotation.get("identity_review"):
+                                        # A region's current reversible decision is authoritative.
+                                        # Old annotations cannot resurrect a revoked binding or
+                                        # freeze an old name after the shared profile is renamed.
+                                        user_confirmed |= (entity.get("binding_status") == "human_confirmed"
+                                            or entity.get("association_status") == "confirmed"
+                                            and entity.get("association_source") == "human")
+                                        continue
+                                    user_confirmed = True
+                                    names += [annotation["character_name"], *(annotation.get("aliases") or [])]
+                                    entity["name"] = annotation["character_name"]
+                                    entity["character_name"] = annotation["character_name"]
+                                    entity["aliases"] = annotation.get("aliases") or []
+                    description = text
+                    if is_scene:
+                        description += " " + " ".join(fact["text"] for field in ("visual_facts", "dialogue_facts", "inferences")
+                                                      for fact in record.get(field, []))
+                    # An unreadable cue remains visible for repair but is not searchable content.
+                    if is_audio:
+                        if record.get("association_status") == "confirmed" and record.get("character_name"):
+                            names.extend([record["character_name"], *record.get("character_aliases", [])])
+                        text = text or "语音片段（无文字）"
+                        description = " ".join([text, *names])
+                    if not text.strip() and not is_retrieval:
+                        continue
+                    if is_visual:
                         for entity in entities:
-                            if entity["id"] == annotation.get("entity_id"):
-                                if entity.get("identity_region_id") or annotation.get("identity_review"):
-                                    # A region's current reversible decision is authoritative.
-                                    # Old annotations cannot resurrect a revoked binding or
-                                    # freeze an old name after the shared profile is renamed.
-                                    user_confirmed |= (entity.get("binding_status") == "human_confirmed"
-                                        or entity.get("association_status") == "confirmed"
-                                        and entity.get("association_source") == "human")
-                                    continue
-                                user_confirmed = True
-                                names += [annotation["character_name"], *(annotation.get("aliases") or [])]
-                                entity["name"] = annotation["character_name"]
-                                entity["character_name"] = annotation["character_name"]
-                                entity["aliases"] = annotation.get("aliases") or []
-                description = text
-                if is_scene:
-                    description += " " + " ".join(fact["text"] for field in ("visual_facts", "dialogue_facts", "inferences")
-                                                  for fact in record.get(field, []))
-                # An unreadable cue remains visible for repair but is not searchable content.
-                if is_audio:
-                    if record.get("association_status") == "confirmed" and record.get("character_name"):
-                        names.extend([record["character_name"], *record.get("character_aliases", [])])
-                    text = text or "语音片段（无文字）"
-                    description = " ".join([text, *names])
-                if not text.strip() and not is_retrieval:
-                    continue
-                if is_visual:
-                    for entity in entities:
-                        description += " " + " ".join(str(entity.get(k, "")) for k in ("appearance", "label", "name", "description"))
-                        if entity.get("character_id"):
-                            names.extend([entity.get("character_name", ""), *(entity.get("aliases") or [])])
-                        elif entity.get("candidate_character_id") and entity.get("candidate_character_name"):
-                            description += " 候选角色：" + " ".join([
-                                entity["candidate_character_name"], *(entity.get("candidate_character_aliases") or [])])
-                    for event in record.get("events", []):
-                        description += " " + str(event.get("action", ""))
-                    description += " " + " ".join(record.get("resolved_actions", []))
-                    description += " " + " ".join(names)
-                frames = record.get("evidence_frame_ids", [])
-                result.append({"id": record["id"], "record_id": record["id"], "asset_id": asset["id"],
-                               **{key: asset.get(key) for key in ("project_id", "project_name", "anime_id", "anime_title",
-                                                                 "folder_id", "folder_ids", "tags")},
-                               "work_id": asset["work_id"], "title": asset["title"], "series": asset.get("series", ""),
-                               "season": asset.get("season"), "episode": asset.get("episode"), "version": asset["version"],
-                               "kind": "audio" if is_audio else "scene" if is_scene else "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
-                               "end_ms": record["end_ms"], "text": description.strip(), "summary": text,
-                               "subtitle_text": text if not is_visual else None, "language": record.get("language"),
-                               "thumbnail": frames[0] if frames else None, "evidence_frame_ids": frames,
-                               **{key: record[key] for key in ("source_stream_index", "source_codec", "source_language",
-                                   "source_title", "offset_ms", "timing_clipped", "source_start_ms", "source_end_ms")
-                                  if key in record},
-                               "source": record.get("source", "scene" if is_scene else "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
-                               "entities": entities, "events": record.get("events", []),
-                               "resolved_actions": record.get("resolved_actions", []),
-                               **({key: record.get(key) for key in ("speaker_id", "character_id", "character_name",
-                                   "candidate_character_id", "association_status", "association_source", "candidates",
-                                   "audio_stream_index", "audio_ref", "audio_url", "model_versions", "overlap",
-                                   "subtitle_ids", "frame_ids", "dub_version", "visual_evidence")} if is_audio else {}),
-                               "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
-                               "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", []),
-                               **({key: record[key] for key in ("evidence_type", "strategy", "source_fingerprint", "sampling_version",
-                                   "ordered_frames", "frame_ids", "shot_ids", "local_frame_ids", "context_frame_ids",
-                                   "subtitle_ids", "held_frame_spans", "identity_policy", "provenance",
-                                   "spatial_observations", "character_revision") if key in record} if is_retrieval else {}),
-                               **({key: record.get(key) for key in ("content_kind", "chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
-                                   "visual_facts", "dialogue_facts", "inferences", "representative_frame_ids",
-                                   "understanding_level", "needs_deep", "needs_identity_review", "needs_action_deep",
-                                   "audio_evidence", "reason", "provenance", "dependencies",
-                                   "context_stale", "stale_reasons")} if is_scene else {})})
+                            description += " " + " ".join(str(entity.get(k, "")) for k in ("appearance", "label", "name", "description"))
+                            if entity.get("character_id"):
+                                names.extend([entity.get("character_name", ""), *(entity.get("aliases") or [])])
+                            elif entity.get("candidate_character_id") and entity.get("candidate_character_name"):
+                                description += " 候选角色：" + " ".join([
+                                    entity["candidate_character_name"], *(entity.get("candidate_character_aliases") or [])])
+                        for event in record.get("events", []):
+                            description += " " + str(event.get("action", ""))
+                        description += " " + " ".join(record.get("resolved_actions", []))
+                        description += " " + " ".join(names)
+                    frames = record.get("evidence_frame_ids", [])
+                    result.append({"id": record["id"], "record_id": record["id"], "asset_id": asset["id"],
+                                   **{key: asset.get(key) for key in ("project_id", "project_name", "anime_id", "anime_title",
+                                                                     "folder_id", "folder_ids", "tags")},
+                                   "work_id": asset["work_id"], "title": asset["title"], "series": asset.get("series", ""),
+                                   "season": asset.get("season"), "episode": asset.get("episode"), "version": asset["version"],
+                                   "kind": "audio" if is_audio else "scene" if is_scene else "visual" if is_visual else "subtitle", "start_ms": record["start_ms"],
+                                   "end_ms": record["end_ms"], "text": description.strip(), "summary": text,
+                                   "subtitle_text": text if not is_visual else None, "language": record.get("language"),
+                                   "thumbnail": frames[0] if frames else None, "evidence_frame_ids": frames,
+                                   **{key: record[key] for key in ("source_stream_index", "source_codec", "source_language",
+                                       "source_title", "offset_ms", "timing_clipped", "source_start_ms", "source_end_ms")
+                                      if key in record},
+                                   "source": record.get("source", "scene" if is_scene else "vision"), "review_status": "user_confirmed" if user_confirmed else record.get("review_status", "unreviewed"),
+                                   "entities": entities, "events": record.get("events", []),
+                                   "resolved_actions": record.get("resolved_actions", []),
+                                   **({key: record.get(key) for key in ("speaker_id", "character_id", "character_name",
+                                       "candidate_character_id", "association_status", "association_source", "candidates",
+                                       "audio_stream_index", "audio_ref", "audio_url", "model_versions", "overlap",
+                                       "subtitle_ids", "frame_ids", "dub_version", "visual_evidence")} if is_audio else {}),
+                                   "character": " ".join(dict.fromkeys(names)), "favorite": favorite, "note": note,
+                                   "run_id": record.get("run_id"), "uncertainties": record.get("uncertainties", []),
+                                   **({key: record[key] for key in ("evidence_type", "strategy", "source_fingerprint", "sampling_version",
+                                       "ordered_frames", "frame_ids", "shot_ids", "local_frame_ids", "context_frame_ids",
+                                       "subtitle_ids", "held_frame_spans", "identity_policy", "provenance",
+                                       "spatial_observations", "character_revision") if key in record} if is_retrieval else {}),
+                                   **({key: record.get(key) for key in ("content_kind", "chunk_id", "shot_ids", "frame_ids", "subtitle_ids",
+                                       "visual_facts", "dialogue_facts", "inferences", "representative_frame_ids",
+                                       "understanding_level", "needs_deep", "needs_identity_review", "needs_action_deep",
+                                       "audio_evidence", "reason", "provenance", "dependencies",
+                                       "context_stale", "stale_reasons")} if is_scene else {})})
+                phase.set(output_count=len(result) - before_count)
         from .work_entities import WorkEntityStore
-        result = WorkEntityStore(self).project_records(result)
+        with trace_span("records.work_projection", input_count=len(result)) as phase:
+            result = WorkEntityStore(self).project_records(result)
+            phase.set(output_count=len(result))
         if compact_subtitles:
             from .subtitle_projection import compact_subtitle_records
-            return compact_subtitle_records(result)
+            with trace_span("records.subtitle_compact", input_count=len(result)) as phase:
+                compacted = compact_subtitle_records(result)
+                phase.set(output_count=len(compacted))
+            return compacted
         return result
 
     def save_run(self, asset_id: str, run_id: str, data: dict):

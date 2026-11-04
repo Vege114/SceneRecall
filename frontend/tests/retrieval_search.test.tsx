@@ -82,6 +82,53 @@ describe('Direct visual retrieval evidence', () => {
     expect(screen.getByRole('link', { name: '查看原片' }).getAttribute('href')).toBe('#/asset/episode?t=0');
   });
 
+  it.each([
+    ['confirmed', 2, 0], ['candidate', 0, 2], ['partial', 1, 1],
+  ] as const)('shows the server-provided hit-frame character coverage for %s without asserting the action', (status, confirmed, candidate) => {
+    mount(<ResultCard result={{ ...result, character_match: {
+      status, required_count: 2, confirmed_count: confirmed, candidate_count: candidate,
+      frame_id: 'frame_hit', reason: '按命中帧的当前人物区域核对',
+    } }} />);
+    const evidence = screen.getByLabelText('命中帧人物证据');
+    expect(within(evidence).getByText(`命中帧人物：已确认 ${confirmed}/2，候选 ${candidate}/2`)).toBeTruthy();
+    expect(within(evidence).getByText('按命中帧的当前人物区域核对')).toBeTruthy();
+    expect(within(evidence).getByText(/候选人数不含已确认人物；人物身份不证明动作与空间关系/)).toBeTruthy();
+    expect(within(evidence).getByRole('link', { name: '查看命中帧人物证据' }).getAttribute('href'))
+      .toBe('/api/assets/episode/frames/frame_hit');
+    expect(screen.getByText('部分匹配')).toBeTruthy();
+    expect(screen.queryByText('完整匹配')).toBeNull();
+  });
+
+  it('describes absent hit-frame identity evidence as unverified with possible missed detections', () => {
+    mount(<ResultCard result={{ ...result, character_match: {
+      status: 'unverified', required_count: 2, confirmed_count: 0, candidate_count: 0,
+      reason: '命中帧没有可用的目标人物身份记录',
+    } }} />);
+    const evidence = screen.getByLabelText('命中帧人物证据');
+    expect(within(evidence).getByText('命中帧的指定人物尚未证实（可能漏检）')).toBeTruthy();
+    expect(within(evidence).getByText('命中帧没有可用的目标人物身份记录')).toBeTruthy();
+    expect(within(evidence).queryByText(/没有人物|仅背景相似/)).toBeNull();
+    expect(within(evidence).queryByRole('link')).toBeNull();
+  });
+
+  it('shows an unverified character summary once when the backend reason repeats it', () => {
+    const summary = '命中帧的指定人物尚未证实（可能漏检）';
+    mount(<ResultCard result={{ ...result, character_match: {
+      status: 'unverified', required_count: 2, confirmed_count: 0, candidate_count: 0, reason: ` ${summary} `,
+    } }} />);
+    expect(within(screen.getByLabelText('命中帧人物证据')).getAllByText(summary)).toHaveLength(1);
+  });
+
+  it('does not infer hit-frame character co-occurrence from record-level entity labels', () => {
+    mount(<ResultCard result={{ ...result, entities: [
+      { id: 'person-a', candidate_character_id: 'karen', candidate_character_name: '爱城华恋', binding_status: 'candidate' },
+      { id: 'person-b', candidate_character_id: 'hikari', candidate_character_name: '神乐光', binding_status: 'candidate' },
+    ] }} />);
+    expect(screen.getByText('候选：爱城华恋')).toBeTruthy();
+    expect(screen.getByText('候选：神乐光')).toBeTruthy();
+    expect(screen.queryByLabelText('命中帧人物证据')).toBeNull();
+  });
+
   it('shows uncertain candidate names separately from reliable bindings and suppresses revoked model names', () => {
     mount(<ResultCard result={{ ...result, entities: [
       { id: 'e1', type: 'character', character_name: '旧猜测', candidate_character_id: 'karen', candidate_character_name: '爱城华恋', candidate_character_aliases: ['华恋'], binding_status: 'candidate', association_source: 'ccip_uncalibrated' },
@@ -107,6 +154,19 @@ describe('Direct visual retrieval evidence', () => {
     expect(screen.getByRole('link', { name: '查看命中原帧' }).getAttribute('href')).toBe('/api/assets/episode/frames/frame_hit');
     expect(screen.getByText(/按局部事件证据定位：转身/)).toBeTruthy();
     expect(screen.getByText('部分匹配')).toBeTruthy();
+  });
+
+  it('labels character-evidence positioning even outside retrieval windows and preserves the supplied seek time', () => {
+    const value = context();
+    const { rerender } = mount(<ResultCard result={{ ...result, evidence_type: undefined,
+      hit_frame_id: 'frame_start', hit_frame_basis: 'character_evidence', seek_ms: 1000, seek_basis: 'character_frame',
+    }} />, value);
+    expect(screen.getByText('按人物身份依据定位；动作与位置仍需核对')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '查看原片' }).getAttribute('href')).toBe('#/asset/episode?t=1000');
+    expect(screen.getByText('部分匹配')).toBeTruthy();
+    expect(screen.queryByText('完整匹配')).toBeNull();
+    rerender(<AppContext.Provider value={value}><ResultCard result={{ ...result, hit_frame_basis: 'visual', seek_basis: 'visual_frame' }} /></AppContext.Provider>);
+    expect(screen.queryByText('按人物身份依据定位；动作与位置仍需核对')).toBeNull();
   });
 
   it('advertises visual retrieval without a text embedding binding and only sends a search request', async () => {

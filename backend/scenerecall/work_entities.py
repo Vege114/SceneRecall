@@ -496,7 +496,7 @@ class WorkEntityStore:
         return result
 
     @staticmethod
-    def _rank_concepts(saved, query, concept_ids=()):
+    def _rank_concepts(saved, query, concept_ids=(), *, limit=5):
         if len(concept_ids) > 5 or any(identity not in saved["entities"] for identity in concept_ids):
             raise ValueError("按需档案最多五个，且必须属于当前作品")
         from .search import normalize, tokenize
@@ -526,7 +526,7 @@ class WorkEntityStore:
             if score:
                 ranked.append((score, row))
         ranked.sort(key=lambda pair: (-pair[0], pair[1]["concept_id"]))
-        return ranked[:5]
+        return ranked[:limit]
 
     def context(self, asset_id, query="", concept_ids=()):
         saved = self._required(asset_id)
@@ -577,7 +577,9 @@ class WorkEntityStore:
         if not records or not isinstance(query, str) or not query.strip():
             return []
         catalogs, fingerprints, asset_scopes, bindings = self._projection_state(records)
-        selected = {scope: {row["concept_id"]: score for score, row in self._rank_concepts(saved, query)}
+        all_candidates = bool((filters or {}).get("_all_candidates"))
+        selected = {scope: {row["concept_id"]: score for score, row in self._rank_concepts(
+                        saved, query, limit=None if all_candidates else 5)}
                     for scope, saved in catalogs.items()}
         results = []
         for record in records:
@@ -592,7 +594,7 @@ class WorkEntityStore:
             if match is not None:
                 results.append(match)
         results.sort(key=lambda pair: (-pair[0], pair[1]["asset_id"], pair[1]["start_ms"], pair[1]["id"]))
-        return [row for _, row in results[:50]]
+        return [row for _, row in results[:None if all_candidates else 50]]
 
     @staticmethod
     def _occurrence_match(projected, selected):

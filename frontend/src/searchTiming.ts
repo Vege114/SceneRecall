@@ -16,6 +16,17 @@ export interface SearchTiming {
   boundary: string;
   attributes: Record<string, string | number | boolean | null>;
   spans: SearchSpan[];
+  operations?: Record<string, SearchOperationTiming>;
+}
+
+export interface SearchOperationTiming {
+  count: number;
+  elapsed_ms: number;
+  identity_calls?: number;
+  unique_count?: number;
+  repeated_count?: number;
+  identity_limit_reached?: boolean;
+  [key: string]: number | boolean | undefined;
 }
 
 export interface SearchClientTiming {
@@ -78,12 +89,20 @@ export function searchTransportTiming(response: Response, started: number, heade
 }
 
 export const searchPhaseLabel: Record<string, string> = {
+  snapshot: '资料版本', knowledge: '作品资料', character: '角色名录',
+  canonical: '来源核对', records: '来源记录重建', identity: '角色身份核对', retrieval: '检索窗口证据',
   'http.application': '后端应用总时长', 'http.handler': '搜索接口处理',
   'search.engine': '搜索引擎', 'query.interpret': '可选查询理解',
   'query.character_names': '角色简称与别名解析',
   'query.character_names.revision': '核对角色名录版本',
   'snapshot.acquire': '取得索引与资料版本', 'snapshot.revision.work': '读取资料版本（线程执行）',
+  'snapshot.revision.sqlite': '读取 SQLite 索引版本',
+  'snapshot.revision.knowledge': '核对作品资料版本', 'snapshot.revision.encoder': '核对编码器文件版本',
   'snapshot.validate': '检查资料版本', 'recall.parallel': '并行召回墙钟时长',
+  'knowledge.scopes': '确定作品资料范围', 'knowledge.projection': '重建已审核作品资料投影',
+  'knowledge.revision.runtime': '读取知识运行时版本', 'knowledge.revision.identity': '核对角色身份资料版本',
+  'knowledge.revision.baseline': '核对基础作品资料版本', 'knowledge.baseline.snapshot': '取得基础作品资料快照',
+  'character.snapshot': '取得角色名录快照',
   'recall.lexical': '字面召回', 'recall.semantic': '文字语义召回',
   'recall.visual': '直接画面召回', 'recall.concept': '作品资料召回',
   'lexical.sql_tokenize.work': '字面 SQL 与分词（线程执行）',
@@ -102,5 +121,37 @@ export const searchPhaseLabel: Record<string, string> = {
   'results.deduplicate_select': '去重与选择结果', 'results.compose': '可选结果解释',
   'canonical.source_records': '读取最新来源证据（含线程调度）',
   'canonical.source_records.work': '读取最新来源证据（线程执行）',
+  'canonical.owner_lookup': '查找候选来源素材', 'canonical.asset_records': '重建单个素材的来源记录',
+  'records.asset_metadata': '读取素材元信息', 'records.annotations': '读取人工注释',
+  'records.observations': '读取画面观察', 'records.scenes': '读取场景记录',
+  'records.observation_filter': '筛选有效画面观察', 'records.audio': '读取音频记录',
+  'records.retrieval': '读取检索窗口记录', 'records.subtitles': '读取字幕记录',
+  'records.assemble': '组装来源记录', 'records.work_projection': '补充作品资料字段',
+  'records.subtitle_compact': '合并字幕记录', 'retrieval.load_validate': '读取并核验检索窗口证据',
+  'identity.decorate': '补充角色身份字段', 'identity.resolver_init': '初始化身份解析资料',
+  'identity.resolve_batch': '批量解析角色身份',
   'canonical.enrich': '核对、补齐展示结果', 'visual_verification': '可选视觉复核', 'response.json': '序列化 JSON 响应',
+};
+
+// New nested phases remain identifiable before a dedicated display label is added.
+export function searchPhaseDisplayName(name: string) {
+  if (searchPhaseLabel[name]) return searchPhaseLabel[name];
+  const prefix = Object.keys(searchPhaseLabel)
+    .filter((key) => name.startsWith(`${key}.`))
+    .sort((left, right) => right.length - left.length)[0];
+  return prefix ? `${searchPhaseLabel[prefix]} · ${name.slice(prefix.length + 1)}` : name;
+}
+
+export const searchOperationLabel: Record<string, string> = {
+  fs_exists: '检查文件是否存在', fs_stat: '读取文件元信息', file_stat: '读取文件元信息', file_glob: '匹配目录文件',
+  file_read_text: '读取文本（含解码）', file_read_bytes: '读取文件字节',
+  json_parse: '解析 JSON', digest_serialize: '哈希前序列化（含 UTF-8 编码）', digest_sha256: '计算 SHA-256',
+  source_read: '读取知识来源字节', source_sha256: '计算知识来源哈希', source_decode: '解码知识来源文本',
+  projection_sha256: '计算作品资料投影哈希', reference_sha256: '计算角色参考图哈希',
+  scope_view: '读取作品范围', knowledge_cache_load: '载入作品资料缓存',
+  knowledge_cache_transform: '转换作品资料缓存', knowledge_cache_size: '估算作品资料缓存大小',
+  character_profile_load: '载入角色档案', character_names_build: '构建角色姓名表',
+  record_copy: '复制记录', identity_merge: '合并身份字段',
+  lock_wait: '等待锁', library_lock_wait: '等待素材库锁',
+  knowledge_cache_lock_wait: '等待作品资料缓存锁', character_cache_lock_wait: '等待角色缓存锁',
 };

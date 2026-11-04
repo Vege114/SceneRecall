@@ -13,7 +13,7 @@ from collections import OrderedDict
 
 from .characters import CharacterStore, scope_id
 from .library import digest
-from .search_timing import timed
+from .search_timing import aggregate_operation, timed, timed_lock, timing_count
 
 
 _HAN = re.compile(r"[\u3400-\u9fff]+\Z")
@@ -116,7 +116,11 @@ def resolve_text(query, names):
     # registered nicknames/translations may share no characters with them.
     aliases = sorted(name for name, ranks in names.items()
                      if len(ranks.get(2, {})) == 1 and identities.intersection(ranks[2]))
-    return {"text": text, "matches": selected, "changed": text != query, "aliases": aliases}
+    targets = list({(row["scope_id"], row["character_id"]): {
+        "scope_id": row["scope_id"], "character_id": row["character_id"], "name": row["name"]}
+        for row in selected}.values())
+    return {"text": text, "matches": selected, "changed": text != query, "aliases": aliases,
+            "targets": targets}
 
 
 class CharacterQueryResolver:
@@ -126,14 +130,16 @@ class CharacterQueryResolver:
         self._cache = OrderedDict()
         self._lock = threading.RLock()
 
+    @timed("character.snapshot")
     def _snapshot(self, filters, engine):
         # The index supplies the actual search scope. Character filters are
         # excluded because their own spelling may need resolution first.
         scoped = {key: value for key, value in filters.items() if key not in {"character", "character_id"}}
-        with self.library.lock, self._lock:
+        with timed_lock(self.library.lock, "library_lock_wait"), timed_lock(self._lock, "character_cache_lock_wait"):
             organization = self.library.organization._read()
             policies = {}
             for asset_id in engine.filtered_asset_ids(scoped, visual_only=False):
+                timing_count("character_assets")
                 try:
                     asset = self.library.get_asset(asset_id, _catalog=organization)
                 except FileNotFoundError:
@@ -142,18 +148,26 @@ class CharacterQueryResolver:
                 scope = scope_id(asset)
                 policies.setdefault(scope, []).append(asset.get("anime_profile"))
             profiles, stamps = [], []
+            timing_count("character_scopes", len(policies))
             for scope, archives in sorted(policies.items()):
-                stamp = self.characters._file_signature(self.characters._path(scope))
+                path = self.characters._path(scope)
+                with aggregate_operation("file_stat", identity=str(path)):
+                    stamp = self.characters._file_signature(path)
                 key = (scope, stamp, digest(archives))
                 saved = self._cache.get(key)
                 if saved is None:
-                    registry = self.characters._read(scope)
-                    cast_policies = [self.characters.cast_policy(registry, archive) for archive in archives]
-                    saved = [{**profile, "scope_id": scope} for profile in registry["profiles"].values()
-                             if any(self.characters.profile_allowed(profile, policy) for policy in cast_policies)]
+                    timing_count("character_profile_cache_miss")
+                    with aggregate_operation("character_profile_load"):
+                        registry = self.characters._read(scope)
+                        cast_policies = [self.characters.cast_policy(registry, archive) for archive in archives]
+                        saved = [{**profile, "scope_id": scope} for profile in registry["profiles"].values()
+                                 if any(self.characters.profile_allowed(profile, policy) for policy in cast_policies)]
                     self._cache[key] = saved
                     while len(self._cache) > 64:
                         self._cache.popitem(last=False)
+                        timing_count("character_cache_eviction")
+                else:
+                    timing_count("character_profile_cache_hit")
                 self._cache.move_to_end(key)
                 profiles.extend(saved)
                 stamps.append(key)
@@ -161,10 +175,15 @@ class CharacterQueryResolver:
             names_key = ("names", signature)
             names = self._cache.get(names_key)
             if names is None:
-                names = name_index(profiles)
+                timing_count("character_names_cache_miss")
+                with aggregate_operation("character_names_build"):
+                    names = name_index(profiles)
                 self._cache[names_key] = names
                 while len(self._cache) > 64:
                     self._cache.popitem(last=False)
+                    timing_count("character_cache_eviction")
+            else:
+                timing_count("character_names_cache_hit")
             self._cache.move_to_end(names_key)
             return signature, names
 

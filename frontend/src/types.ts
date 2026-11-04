@@ -271,8 +271,9 @@ export interface CharacterLibrary {
 export interface RetrievalEvidence {
   evidence_type?: 'retrieval_window';
   hit_frame_id?: string;
+  hit_frame_basis?: 'visual' | 'character_evidence';
   seek_ms?: number;
-  seek_basis?: 'visual_frame' | 'local_event';
+  seek_basis?: 'visual_frame' | 'character_frame' | 'local_event';
   event_evidence?: { record_id: string; action: string; start_ms: number; end_ms: number; evidence_frame_ids: string[] };
   ordered_frames?: { id: string; at_ms: number; pts?: number; time_base?: string | [number, number]; thumbnail_url?: string }[];
   member_ids?: string[];
@@ -455,6 +456,15 @@ export interface Estimate {
   cost_estimate_max?: number | null;
   warnings: string[];
 }
+export type SearchScoreBasis = 'relative_rrf_v1' | 'character_grounded_rrf_v1';
+export interface SearchCharacterMatch {
+  status: 'confirmed' | 'candidate' | 'partial' | 'unverified';
+  required_count: number;
+  confirmed_count: number;
+  candidate_count: number;
+  frame_id?: string;
+  reason?: string;
+}
 export interface SearchResult extends SceneEvidence, RetrievalEvidence {
   entities?: Entity[];
   id: string;
@@ -476,6 +486,9 @@ export interface SearchResult extends SceneEvidence, RetrievalEvidence {
   source: string;
   review_status: string;
   score?: number;
+  match_score?: number;
+  match_score_basis?: SearchScoreBasis;
+  character_match?: SearchCharacterMatch;
   match_type?: 'full' | 'partial';
   match_reason?: string;
   subtitle_text?: string;
@@ -493,6 +506,13 @@ export interface SearchResponse {
   search_timing?: import('./searchTiming').SearchTiming;
   client_timing?: import('./searchTiming').SearchClientTiming;
   results: SearchResult[];
+  selection?: {
+    mode: 'threshold';
+    min_match_score: number;
+    score_basis: SearchScoreBasis;
+    candidate_count: number;
+    returned_count: number;
+  };
   degraded: string[];
   knowledge_hits?: import('./components/KnowledgePanel').KnowledgeHit[];
   knowledge_diagnostics?: Record<string, unknown>;

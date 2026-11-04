@@ -51,6 +51,10 @@ def test_valid_automatic_match_projects_without_rewriting_observations_or_featur
     assert person["binding_status"] == "auto_bound"
     assert person["character_id"] == identity and person["character_name"] == "Aoi"
     assert person["match_confidence"] is None
+    assert person["identity_region_evidence"] == [
+        {"region_id": observation["entities"][0]["identity_region_id"], "frame_id": "frame_a"},
+        {"region_id": observation["entities"][0]["identity_support_region_ids"][0], "frame_id": "frame_b"},
+    ]
     assert result["events"][0]["actor_ids"] == ["P1"]
     assert result["events"][0]["actor_names"] == ["Aoi"]
     assert result["summary"] == observation["summary"] and observation == original
@@ -79,8 +83,10 @@ def test_human_confirmation_and_unknown_override_automatic_results(calibrated):
     projected = resolve_observation(library, "asset_one", observation)["entities"][0]
     assert projected["binding_status"] == "human_confirmed" and projected["character_id"] == other
     pipeline.review("asset_one", region, status="unknown", reason="人工撤销")
+    observation["entities"][0]["identity_region_evidence"] = projected["identity_region_evidence"]
     projected = resolve_observation(library, "asset_one", observation)["entities"][0]
     assert projected["binding_status"] == "unknown" and projected["character_id"] is None
+    assert projected["identity_region_evidence"] == []
     assert projected["association_source"] == "human"
 
 
@@ -124,6 +130,40 @@ def test_missing_or_changed_automatic_evidence_remains_candidate(calibrated, cha
     person = resolve_observation(library, "asset_one", observation)["entities"][0]
     assert person["binding_status"] == "candidate" and person["character_id"] is None
     assert person["candidate_character_id"] == identity
+    assert {row["frame_id"] for row in person["identity_region_evidence"]} <= {"frame_a", "frame_b"}
+
+
+def test_identity_region_evidence_does_not_borrow_unobserved_entity_frames(calibrated):
+    library, _characters, _gallery, _pipeline, _backend, _identity, _other, _refs, observation = calibrated
+    # A broad description can mention a third frame, but its identity support
+    # still comes from only the two actual, validated person regions.
+    observation["evidence_frame_ids"].append("frame_background")
+    observation["entities"][0]["evidence_frame_ids"].append("frame_background")
+    person = resolve_observation(library, "asset_one", observation)["entities"][0]
+    assert {row["frame_id"] for row in person["identity_region_evidence"]} == {"frame_a", "frame_b"}
+
+
+def test_manual_region_does_not_confirm_unreviewed_support_frame(calibrated):
+    library, _characters, _gallery, pipeline, _backend, identity, _other, _refs, observation = calibrated
+    main = observation["entities"][0]["identity_region_id"]
+    pipeline.review("asset_one", main, status="confirmed", character_id=identity, reason="仅确认当前区域")
+    person = resolve_observation(library, "asset_one", observation)["entities"][0]
+    assert person["binding_status"] == "human_confirmed"
+    assert person["identity_region_evidence"] == [{"region_id": main, "frame_id": "frame_a"}]
+
+
+def test_candidate_pair_failure_does_not_borrow_support_identity(calibrated):
+    from scenerecall.library import atomic_json
+    library, _characters, _gallery, pipeline, _backend, identity, other, _refs, observation = calibrated
+    entity = observation["entities"][0]
+    support = pipeline._directory("asset_one") / "regions" / (entity["identity_support_region_ids"][0] + ".json")
+    region = read_json(support)
+    region["match"]["character_id"] = other
+    region["match"]["candidates"][0]["character_id"] = other
+    atomic_json(support, region)
+    person = resolve_observation(library, "asset_one", observation)["entities"][0]
+    assert person["binding_status"] == "candidate" and person["candidate_character_id"] == identity
+    assert person["identity_region_evidence"] == [{"region_id": entity["identity_region_id"], "frame_id": "frame_a"}]
 
 
 def test_independent_single_frame_calibration_can_bind_without_second_current_frame(calibrated):
@@ -146,7 +186,9 @@ def test_current_frame_ownership_and_duplicate_entity_claims_cannot_bind(calibra
     library, _characters, _gallery, _pipeline, _backend, _identity, _other, _refs, observation = calibrated
     wrong = deepcopy(observation)
     wrong["entities"][0]["evidence_frame_ids"] = ["foreign_frame"]
-    assert resolve_observation(library, "asset_one", wrong)["entities"][0]["binding_status"] == "unknown"
+    wrong["entities"][0]["identity_region_evidence"] = [{"region_id": "old", "frame_id": "foreign_frame"}]
+    projected = resolve_observation(library, "asset_one", wrong)["entities"][0]
+    assert projected["binding_status"] == "unknown" and projected["identity_region_evidence"] == []
     repeated = deepcopy(observation)
     repeated["entities"].append({**deepcopy(repeated["entities"][0]), "id": "P2"})
     assert all(row["binding_status"] == "unknown"
@@ -204,8 +246,10 @@ def test_conflicting_human_candidates_do_not_promote_one_arbitrarily(calibrated)
 def test_noncharacter_entities_preserve_visible_features_without_identity_state(calibrated, kind):
     library, _characters, _gallery, _pipeline, _backend, identity, _other, _refs, observation = calibrated
     observation["entities"] = [{"id": "O1", "kind": kind, "name": "可见对象", "description": "银色外壳",
-                               "character_id": identity, "candidate_concept_ids": ["concept_one"]}]
+                               "character_id": identity, "candidate_concept_ids": ["concept_one"],
+                               "identity_region_evidence": [{"region_id": "old", "frame_id": "frame_a"}]}]
     entity = resolve_observation(library, "asset_one", observation)["entities"][0]
     assert entity["name"] == "可见对象" and entity["description"] == "银色外壳"
     assert entity["character_id"] is None and "association_status" not in entity and "binding_status" not in entity
     assert entity["candidate_concept_ids"] == ["concept_one"]
+    assert "identity_region_evidence" not in entity

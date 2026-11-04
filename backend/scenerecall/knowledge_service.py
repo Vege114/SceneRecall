@@ -9,6 +9,7 @@ from .knowledge_recall import KnowledgeRecallResult, KnowledgeSnapshot, WorkEnti
 from .knowledge_store import target_key
 from .library import digest
 from .search import SearchSnapshotChanged, normalize
+from .search_timing import aggregate_operation, timed, timing_count, trace_span
 
 
 def confirmed_character_evidence(record, identities, character_scope=None):
@@ -39,13 +40,16 @@ class KnowledgeService:
         self.library = self.store.library
         self.baseline = WorkEntityRecall(self.store)
 
+    @timed("knowledge.scopes")
     def scopes(self, filters, engine):
         explicit = filters.get("_knowledge_scope")
         memberships = self.store._memberships()["assets"]
         if explicit:
             self.knowledge.scope_catalog(explicit)
         owners = engine.filtered_asset_ids(filters)
+        timing_count("selected_assets", len(owners))
         scopes = sorted({memberships[asset] for asset in owners if asset in memberships})
+        timing_count("selected_scopes", len(scopes))
         if explicit:
             asset_filter = filters.get("asset_id")
             if asset_filter and memberships.get(asset_filter) != explicit:
@@ -61,12 +65,16 @@ class KnowledgeService:
                                  if scope in allowed}, assets,
                                  {asset: value for asset, value in snapshot.fingerprints.items() if asset in assets})
 
+    @timed("knowledge.revision.identity")
     def _identity_token(self, scope):
         # Identity projection depends on decisions, references, calibration and
         # active receipts, not just character names. File identities avoid model IO.
         from .characters import scope_id
         paths = set()
-        for asset in self.store.scope_view(scope)["asset_ids"]:
+        with aggregate_operation("scope_view"):
+            assets = self.store.scope_view(scope)["asset_ids"]
+        timing_count("scope_assets", len(assets))
+        for asset in assets:
             try:
                 asset_row = self.library.get_asset(asset)
             except (FileNotFoundError, ValueError):
@@ -83,28 +91,39 @@ class KnowledgeService:
             character_root = self.library.root / "works" / scope_id(asset_row)
             gallery = character_root / "reference-images"
             paths.update([character_root / "characters.json", gallery / "gallery.json", gallery])
-            if gallery.is_dir():
-                paths.update(gallery.glob("*.png"))
+            with aggregate_operation("file_stat", identity=str(gallery)):
+                is_gallery = gallery.is_dir()
+            if is_gallery:
+                with aggregate_operation("file_glob", identity=str(gallery)):
+                    paths.update(gallery.glob("*.png"))
         stamps = []
+        timing_count("identity_paths", len(paths))
         for path in paths:
             try:
-                stat = path.stat()
+                with aggregate_operation("file_stat", identity=str(path)):
+                    stat = path.stat()
                 stamps.append((str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
             except FileNotFoundError:
+                timing_count("file_stat_missing")
                 stamps.append((str(path), None))
         return digest(sorted(stamps))
 
     def revision(self, filters, engine):
         scopes = self.scopes(filters, engine)
+        timing_count("revision_scopes", len(scopes))
         values = []
         for scope in scopes:
             projection = self.knowledge.projection(scope)
             # Busy/error text are transient operational state, not index versions.
-            status = self.runtime.status(projection)
+            with trace_span("knowledge.revision.runtime") as runtime_phase:
+                status = self.runtime.status(projection)
+                runtime_phase.set(enabled=bool(status.get("enabled")), configured=bool(status.get("configured")))
             runtime_version = {key: status.get(key) for key in (
                 "enabled", "configured", "status", "generation", "signature", "version", "model", "embedding_dim")}
             values.append((scope, projection["signature"], runtime_version, self._identity_token(scope)))
-        return digest([self.baseline.revision(filters, engine), values, filters.get("_knowledge_mode", "baseline"),
+        with trace_span("knowledge.revision.baseline"):
+            baseline = self.baseline.revision(filters, engine)
+        return digest([baseline, values, filters.get("_knowledge_mode", "baseline"),
                        filters.get("_knowledge_target")])
 
     def search(self, query, filters, engine):
@@ -293,18 +312,21 @@ class KnowledgeService:
                             "matched_character_ids": matched, "identity_binding_ids": bindings, "evidence_ids": evidence,
                             "matched_character_scope_id": target["character_scope_id"],
                             "event_verified": False, "match_type": "partial", "retrieval_branches": ["concept"]})
-        return list({row["id"]: row for row in results}.values())[:50]
+        return list({row["id"]: row for row in results}.values())[:None if filters.get("_all_candidates") else 50]
 
     async def asearch(self, query, filters, engine) -> KnowledgeRecallResult:
         started = perf_counter()
+        all_candidates = bool(filters.get("_all_candidates"))
         scopes = await run_in_thread(self.scopes, filters, engine)
         snapshot = await run_in_thread(self._snapshot, filters, engine, scopes)
-        legacy_selected, _ = await run_in_thread(self.baseline.candidate_refs, query, snapshot)
+        legacy_selected, _ = await run_in_thread(self.baseline.candidate_refs, query, snapshot,
+                                                limit=None if all_candidates else 5)
         lexical, semantic, diagnostics = [], [], {"mode": filters.get("_knowledge_mode", "baseline"), "degraded": []}
         projections = {}
         for scope in scopes:
             projections[scope] = await run_in_thread(self.knowledge.projection, scope)
-            lexical.extend(await run_in_thread(self.knowledge.lexical_hits, scope, query))
+            lexical.extend(await run_in_thread(self.knowledge.lexical_hits, scope, query,
+                                               limit=None if all_candidates else 50))
         explicit = filters.get("_knowledge_target")
         if explicit:
             # An explicit navigation target must not depend on its display name
@@ -320,6 +342,9 @@ class KnowledgeService:
                 diagnostics["degraded"].append("请选择单一作品版本后使用 LightRAG；已回退词法知识")
             else:
                 from .knowledge_runtime import KnowledgeUnavailable
+                if all_candidates:
+                    diagnostics["degraded"].append(
+                        "LightRAG 仍受 top_k=20、chunk_top_k=20 限制，不能保证穷尽；本地知识与影片候选未作数量截断")
                 try:
                     response = await self.runtime.query(projections[scopes[0]], query)
                     current = await run_in_thread(self.knowledge.projection, scopes[0])
@@ -360,7 +385,7 @@ class KnowledgeService:
         allowed = set()
         for scope in scopes:
             allowed.update(key for key, _ in sorted(((key, score) for key, score in target_scores.items() if key[0] == scope),
-                                                   key=lambda item: (-item[1], item[0]))[:5])
+                                                   key=lambda item: (-item[1], item[0]))[:None if all_candidates else 5])
         hits = [{**by_card[key], "knowledge_score": scores[key]} for key in sorted(scores, key=lambda key: (-scores[key], key))]
         film_hits = [hit for hit in hits if (hit["work_scope_id"], target_key(hit["target_ref"])) in allowed]
         mapping_started = perf_counter()
@@ -371,12 +396,12 @@ class KnowledgeService:
         records = await run_in_thread(self._concept_records, film_hits, filters, engine, scopes, selected)
         records.extend(await run_in_thread(self._character_records, film_hits, query, filters, engine,
                                           filters.get("_knowledge_target")))
-        # Both paths share one target cap, one current projection and one outer
+        # Both paths share one target selection, one current projection and one outer
         # concept vote; legacy rows cannot overwrite the mapped evidence.
         unique = {}
         for record in records:
             unique.setdefault(record["id"], record)
-        records = list(unique.values())[:50]
+        records = list(unique.values())[:None if all_candidates else 50]
         for hit in hits:
             target = hit["target_ref"]
             hit["has_film_evidence"] = any(target.get("concept_id") in row.get("matched_concept_ids", [])

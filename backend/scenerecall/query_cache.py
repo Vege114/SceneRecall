@@ -50,7 +50,7 @@ class MatrixCache:
     fallback. A failed allocation is also a fallback, never a query failure.
     Cached blocks are immutable and never contain result dictionaries.
     """
-    def __init__(self, max_bytes=256 * 1024 * 1024):
+    def __init__(self, max_bytes=1024 * 1024 * 1024):
         self._lock = threading.RLock()
         self._build_lock = threading.Lock()
         self._entries = OrderedDict()
