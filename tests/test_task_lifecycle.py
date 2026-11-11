@@ -101,6 +101,26 @@ def test_waiting_pause_cancel_restart_and_retry_do_not_bypass_review(lifecycle):
     assert [kind for kind, _ in calls] == ["scan"]
 
 
+def test_empty_recognition_selection_releases_waiting_task_without_marking_roles_skipped(lifecycle):
+    app, client, queue, calls = lifecycle
+    app.state.characters.create("first", {"name": "未选角色"})
+    job = submit(client)
+    assert run(queue, job)["status"] == "waiting_input"
+    base = "/api/assets/first/identity/confirmation"
+    review = client.get(base).json()
+    saved = client.put(base + "/selection", json={"character_ids": [], "scope_id": review["scope_id"],
+                                                 "expected_revision": review["roster_revision"]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["summary"]["skipped"] == saved.json()["summary"]["pending"] == 0
+    resumed = client.post(f"/api/jobs/{job['id']}/continue")
+    assert resumed.status_code == 200, resumed.text
+    done = run(queue, job)
+    assert done["status"] == "completed"
+    assert done["workflow_progress"]["character_confirmation"]["total"] == 0
+    assert done["config"]["character_snapshot"]["revision"] == saved.json()["roster_revision"]
+    assert [kind for kind, _ in calls] == ["scan", "analyze"]
+
+
 def test_scene_dialogue_prefetch_cannot_run_before_role_gate(lifecycle, monkeypatch):
     app, client, queue, calls = lifecycle
     app.state.characters.create("first", {"name": "待核对角色"})

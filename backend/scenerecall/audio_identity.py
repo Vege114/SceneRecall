@@ -380,7 +380,15 @@ class AudioIdentityService:
             return result
         diarizer = self._diarizer or PyannoteDiarizer(config["diarization_model_path"], config["device"])
         embedder = self._embedder or ECAPAEmbedder(config["embedding_model_path"], config["device"])
-        calibration = self._calibration(config, embedder.version, self._catalog(asset_id)["scope_id"])
+        catalog = self._catalog(asset_id)
+        profiles = catalog["profiles"]
+        excluded = sorted(row["id"] for row in profiles if not row.get("recognition_enabled", True))
+        if excluded:
+            # Keep the matching scope with this run, independently of later
+            # edits to the roster or voice bank. Acoustic caches stay reusable.
+            config["recognition_excluded_ids"] = excluded
+        match_speakers = not excluded or len(excluded) < len(profiles)
+        calibration = self._calibration(config, embedder.version, catalog["scope_id"]) if match_speakers else None
         input_cues = self.library.subtitles(asset_id) if subtitles is None else subtitles
         stat = source.stat()
         # The imported asset fingerprint plus current stat prevents reuse after replacement.
@@ -465,7 +473,7 @@ class AudioIdentityService:
                 crop_pcm(extracted, clip, turn["start_ms"], turn["end_ms"])
             info = quality(clip)
             vector = None
-            if info["usable"] and not embedding_unavailable:
+            if match_speakers and info["usable"] and not embedding_unavailable:
                 try:
                     vector, hit = self._feature(clip, embedder, root / "features", checkpoint=checkpoint)
                     result["cache_hits"] += int(hit)
@@ -526,7 +534,8 @@ class AudioIdentityService:
             active["runs"].append({"run_id": run_key, "start_ms": start_ms, "end_ms": end_ms})
             atomic_json(root / "active.json", active)
         stamp = time.perf_counter()
-        result["records"] = self.records(asset_id, start_ms, end_ms, embedder=embedder, checkpoint=checkpoint)
+        result["records"] = self.records(asset_id, start_ms, end_ms, embedder=embedder, checkpoint=checkpoint,
+                                         for_recognition=True)
         # Historical matching receipts remain independently inspectable after a
         # sample revocation, correction or threshold change alters current projection.
         associations = [{key: row.get(key) for key in ("id", "character_id", "candidate_character_id",
@@ -565,7 +574,7 @@ class AudioIdentityService:
         return result
 
     def records(self, asset_id: str, start_ms: int | None = None, end_ms: int | None = None, *,
-                embedder=None, checkpoint=None, record_ids=None) -> list[dict]:
+                embedder=None, checkpoint=None, record_ids=None, for_recognition=False) -> list[dict]:
         root = self._directory(asset_id)
         raw = self._raw_records(asset_id)
         if record_ids is not None:
@@ -575,6 +584,8 @@ class AudioIdentityService:
         bank_path, catalog = self._bank(asset_id)
         profiles = {profile["id"]: profile for profile in catalog["profiles"]}
         overrides = read_json(root / "identity-overrides.json", {})
+        excluded_now = frozenset(identity for identity, profile in profiles.items()
+                                 if for_recognition and not profile.get("recognition_enabled", True))
         bank = self.samples(asset_id)
         result, prepared = [], {}
         for record in raw:
@@ -583,13 +594,16 @@ class AudioIdentityService:
             row = {key: value for key, value in record.items() if key != "embedding"}
             config = read_json(root / "runs" / safe_id(record["run_id"]) / "config.json")
             model_version = record["model_versions"]["embedding"]
-            key = (model_version, record["language"], record["dub_version"])
+            excluded = excluded_now.union(self._resolve(catalog, identity)
+                                          for identity in config.get("recognition_excluded_ids", []))
+            voice_edition = (record["language"], record["dub_version"])
+            key = (model_version, voice_edition, excluded)
             if key not in prepared:
                 samples = []
                 current_embedder = embedder
                 for sample in bank:
-                    if (sample["status"] != "confirmed" or not sample["quality"]["usable"]
-                            or (sample["language"], sample["dub_version"]) != key[1:]):
+                    if (sample["character_id"] in excluded or sample["status"] != "confirmed"
+                            or not sample["quality"]["usable"] or (sample["language"], sample["dub_version"]) != voice_edition):
                         continue
                     cache = bank_path.parent / "voice-features"
                     # Reading projections never starts a missing heavyweight model. The
@@ -617,7 +631,9 @@ class AudioIdentityService:
             override = overrides.get(record["id"]) or overrides.get(record.get("source_record_id"))
             if override:
                 resolved = self._resolve(catalog, override["character_id"])
-                character_id = resolved if resolved in profiles else None
+                # Historical human evidence remains readable. Analysis only
+                # receives a name when the operator selected that identity.
+                character_id = resolved if resolved in profiles and resolved not in excluded_now else None
                 row.update(character_id=character_id, candidate_character_id=None, association_source="human",
                            association_status="confirmed" if character_id else "unknown", review_status="human",
                            needs_identity_review=False, identity_revision=override["version"])
@@ -717,7 +733,15 @@ def validate_audio_artifacts(library) -> None:
         run_records = {}
         for records_path in (root / "runs").glob("*/records.jsonl"):
             run_id = safe_id(records_path.parent.name)
-            AudioSettings.model_validate(read_json(records_path.parent / "config.json", {}))
+            config = read_json(records_path.parent / "config.json", {})
+            if not isinstance(config, dict):
+                raise ValueError("备份音频运行配置无效")
+            excluded = config.pop("recognition_excluded_ids", [])
+            if not isinstance(excluded, list):
+                raise ValueError("备份音频识别名单格式无效")
+            for identity in excluded:
+                safe_id(identity)
+            AudioSettings.model_validate(config)
             records = read_jsonl(records_path)
             run_records[run_id] = records
             seen = set()

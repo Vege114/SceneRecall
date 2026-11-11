@@ -753,7 +753,8 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 context["dossier_detail_compacted"] = True
 
         def fits(value):
-            return encoded_size(canonical(value)) <= 18000
+            # The local exclusion snapshot is not part of the model prompt.
+            return encoded_size(canonical({k: v for k, v in value.items() if k != "recognition_excluded_ids"})) <= 18000
 
         if fits(context):
             return context
@@ -1414,7 +1415,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                     stored = registry["profiles"].get(identity)
                     if stored is None:
                         raise ValueError("已完成分批的人物档案已变化，请创建新任务")
-                    if not self.characters.profile_allowed(stored, policy):
+                    if not stored.get("recognition_enabled", True) or not self.characters.profile_allowed(stored, policy):
                         continue
                     entry = {**copy.deepcopy(existing.get(identity, {})),
                              **{key: copy.deepcopy(stored[key]) for key in fields}}

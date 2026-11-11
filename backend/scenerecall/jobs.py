@@ -247,8 +247,10 @@ class JobQueue(KnowledgeJobMixin, TaskLifecycleMixin, RetrievalJobMixin, Identit
                 from .scene_jobs import prompt_versions
                 config["scene_prompt_versions"] = prompt_versions()
                 config["identity_settings"] = self.identity_settings(request.asset_id)
+            # The unified review can narrow the roster before any model request.
+            # Its continuation validates the final selection against the budget.
             context = self.character_context(request.asset_id, scene=strategy == "scene-chunks-v1",
-                                             defer_limits=self._scene_visual_selection(config))
+                                             defer_limits=self.unified_task(config) or self._scene_visual_selection(config))
             config["character_snapshot"] = {key: context[key] for key in ("scope_id", "revision", "membership_revision")}
             config["sampling_strategy"] = strategy
             if request.model_fields_set & {"window_ms", "frames_per_window"}:

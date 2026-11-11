@@ -58,7 +58,7 @@ def _held_out(value):
 class BindingResolver:
     """Reuse one asset's registry/reference snapshot across a projection batch."""
 
-    def __init__(self, library, asset_id):
+    def __init__(self, library, asset_id, *, annotations=None):
         from .characters import CharacterStore, scope_id
         from .visual_identity import ReferenceGallery, VisualIdentityPipeline
 
@@ -82,6 +82,14 @@ class BindingResolver:
             self.matching = gallery.active_reference_ids(asset_id, include_candidates=True)
             self.frames = read_json(library.asset_dir(asset_id) / "frames" / "registry.json", {})
             self.regions, self.reference_hashes = {}, {}
+            self.window_corrections = {}
+            for annotation in annotations or ():
+                review = annotation.get("identity_review") or {}
+                if (review.get("status") == "confirmed" and review.get("source") == "human"
+                        and review.get("window_run_id") and "local_identity_id" in review):
+                    key = (review["window_run_id"], annotation["record_id"], review["local_identity_id"],
+                           annotation["entity_id"])
+                    self.window_corrections[key] = review
             phase.set(profile_count=len(self.profiles), reference_count=len(self.references),
                       frame_count=len(self.frames), decision_count=len(self.decisions))
 
@@ -235,6 +243,8 @@ class BindingResolver:
         if observation.get("asset_id", self.asset_id) != self.asset_id:
             raise ValueError("身份观察不属于当前视频")
         result = copy.deepcopy(observation)
+        excluded = {self.canonical(identity) for identity in result.get("recognition_excluded_ids", [])}
+        excluded.discard(None)
         claims = {}
         for entity in result.get("entities", []):
             if not character_entity(entity):
@@ -250,6 +260,15 @@ class BindingResolver:
                     entity.pop(key, None)
                 continue
             decision = self._decision(entity, result, claims)
+            if (decision.get("character_id") in excluded or decision.get("candidate_character_id") in excluded):
+                region_id = entity.get("identity_region_id")
+                review = self.window_corrections.get((result.get("run_id"), result.get("id"),
+                    result.get("local_identity", {}).get("id"), entity["id"]))
+                # A later correction belongs to this particular window/sidecar and live region decision.
+                if not (decision["status"] == "human_confirmed" and review and review["region_id"] == region_id
+                        and self.canonical(review["character_id"]) == decision["character_id"]
+                        and self.decisions.get(region_id, {}).get("version") == review["version"]):
+                    decision = {"status": "unknown", "source": "recognition_selection", "reason": "该角色未加入本次识别名单"}
             # Identity support may cover fewer frames than a model's general
             # entity description. Publish only validated region-to-frame links
             # so retrieval cannot transfer a name to another frame in a window.
@@ -308,12 +327,12 @@ def resolve_observation(library, asset_id, observation):
     return BindingResolver(library, asset_id).resolve(observation)
 
 
-def resolve_observations(library, asset_id, observations):
+def resolve_observations(library, asset_id, observations, *, annotations=None):
     with trace_span("identity.resolve_batch", record_count=len(observations)) as phase:
         if not any(uses_policy(row) for row in observations):
             phase.set(policy_present=False)
             with aggregate_operation("record_copy"):
                 return copy.deepcopy(observations)
         phase.set(policy_present=True)
-        resolver = BindingResolver(library, asset_id)
+        resolver = BindingResolver(library, asset_id, annotations=annotations)
         return [resolver.resolve(row) for row in observations]

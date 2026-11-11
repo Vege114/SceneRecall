@@ -165,7 +165,8 @@ class IdentityJobMixin:
         rows = [record for record in audio.get("records", [])
                 if record["start_ms"] < end and record["end_ms"] > start]
         if rows:
-            current = AudioIdentityService(self.library, self.characters).records(job["asset_id"], start, end)
+            current = AudioIdentityService(self.library, self.characters).records(
+                job["asset_id"], start, end, for_recognition=True)
             rows = project_audio_evidence(rows, current)
         context["speaker_dialogue"] = [{key: row.get(key) for key in (
             "id", "speaker_id", "start_ms", "end_ms", "character_id", "candidate_character_id",

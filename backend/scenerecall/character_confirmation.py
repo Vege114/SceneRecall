@@ -34,6 +34,12 @@ class ConfirmationSample(Contract):
     max_frames: int = Field(default=12, ge=1, le=24, strict=True)
 
 
+class RecognitionSelection(Contract):
+    character_ids: list[str]
+    expected_revision: int = Field(ge=0, strict=True)
+    scope_id: str
+
+
 class ConfirmationCandidate(Contract):
     source_asset_id: str = Field(min_length=1, max_length=180)
     region_id: str = Field(min_length=1, max_length=180)
@@ -157,6 +163,7 @@ class CharacterConfirmation:
             registry = CharacterStore(self.library)._read(scope)
             state = self._read(scope)
             profiles = {row["id"]: row for row in catalog["profiles"]}
+            enabled = {identity for identity, profile in profiles.items() if profile.get("recognition_enabled", True)}
             # Resolve merged identities when projecting historical exclusions.
             decisions = {}
             for row in state["decisions"].values():
@@ -178,7 +185,8 @@ class CharacterConfirmation:
                     identity = CharacterStore._resolve(registry, decision["character_id"])
                     pending_regions.setdefault((decision["source_asset_id"], decision["region_id"]), set()).add(identity)
             grouped = {identity: [] for identity in profiles}
-            for asset in catalog["assets"]:
+            source_assets = catalog["assets"] if enabled else []
+            for asset in source_assets:
                 if asset.get("source_changed"):
                     continue
                 directory = self.pipeline._directory(asset["id"])
@@ -193,8 +201,7 @@ class CharacterConfirmation:
                 crop_exists = self._crop_inventory(asset["id"])
                 frame_shots, shots = self._shots(asset)
                 policy = CharacterStore.cast_policy(registry, asset.get("anime_profile"))
-                allowed = {identity for identity, profile in profiles.items()
-                           if CharacterStore.profile_allowed(profile, policy)}
+                allowed = {identity for identity in enabled if CharacterStore.profile_allowed(profiles[identity], policy)}
                 for region in regions:
                     pending = pending_regions.get((asset["id"], region["id"]), set()) & allowed
                     if (not pending and region["match"].get("status") == "confirmed"
@@ -255,16 +262,22 @@ class CharacterConfirmation:
                     confined_path(self.pipeline._directory(candidate["asset_id"]), f"crops/{safe_id(candidate['region_id'])}.png")
                 status = "pending" if recovering else "confirmed" if count else "skipped" if role_decision.get("action") == "skip" else "pending"
                 roles.append({"character_id": identity, "profile": profile, "status": status,
+                              "recognition_enabled": identity in enabled,
                               "matching_reference_count": reference_counts.get(identity, 0),
                               "trusted_reference_count": count, "candidates": selected, "available_count": len(choices)})
             asset = self.library.get_asset(asset_id)
         # Keep lock ordering independent from the sampling worker's guard.
+        active = [row for row in roles if row["recognition_enabled"]]
+        sampling_reason = "" if asset.get("source_available") else "原片离线或已变化，请先重新定位原片"
+        if not enabled:
+            sampling_reason = "请先选择需要识别的角色"
         return {"asset_id": asset_id, "scope_id": scope, "roles": roles, "revision": state["revision"],
-                "summary": {"total": len(roles), **{key: sum(row["status"] == key for row in roles)
+                "roster_revision": catalog["revision"],
+                "summary": {"total": len(active), **{key: sum(row["status"] == key for row in active)
                             for key in ("confirmed", "skipped", "pending")},
-                            "candidates": sum(row["available_count"] for row in roles)},
-                "sampling": self.sampling(asset_id), "sampling_available": asset.get("source_available", False),
-                "sampling_unavailable_reason": "" if asset.get("source_available") else "原片离线或已变化，请先重新定位原片",
+                            "candidates": sum(row["available_count"] for row in active)},
+                "sampling": self.sampling(asset_id), "sampling_available": not sampling_reason,
+                "sampling_unavailable_reason": sampling_reason,
                 "guidance": "确认仅标记当前区域，并将单人正片裁剪加入本作品可信图库。其他镜头仍需独立匹配与验证；未出场角色可跳过。"}
 
     def decide(self, asset_id, character_id, *, action, source_asset_id=None, region_id=None,
@@ -279,6 +292,8 @@ class CharacterConfirmation:
             character_id = CharacterStore._resolve(registry, character_id, strict=True)
             if character_id not in {row["id"] for row in catalog["profiles"]}:
                 raise ValueError("角色不在当前作品名单中")
+            if not registry["profiles"][character_id].get("recognition_enabled", True):
+                raise ValueError("请先将该角色加入识别名单")
             state = self._read(scope)
             if action in {"skip", "resume"}:
                 self._save(scope, state, self._key(character_id), {
@@ -380,6 +395,8 @@ class CharacterConfirmation:
             character_id = CharacterStore._resolve(registry, character_id, strict=True)
             if character_id not in {row["id"] for row in catalog["profiles"]}:
                 raise ValueError("角色不在当前作品名单中")
+            if not registry["profiles"][character_id].get("recognition_enabled", True):
+                raise ValueError("请先将该角色加入识别名单")
             results, tickets, sources, started = [], {}, {}, set()
 
             def failed(index, exc):
@@ -442,14 +459,21 @@ class CharacterConfirmation:
         if type(max_frames) is not int or not 1 <= max_frames <= 24:
             raise ValueError("少量采样必须限制为 1–24 帧")
         asset = self.library.get_asset(asset_id)
+        catalog = CharacterStore(self.library).roster(asset_id)
+        excluded = sorted(row["id"] for row in catalog["profiles"] if not row.get("recognition_enabled", True))
+        if excluded and len(excluded) == len(catalog["profiles"]):
+            raise ValueError("请先选择需要识别的角色")
         source = self.library.require_source(asset_id)
-        scope = scope_id(asset)
-        if not self.gallery.matching(asset_id):
+        scope = catalog["scope_id"]
+        if not self.gallery.matching(asset_id, _catalog=catalog):
             raise ValueError("请先缓存 Bangumi 参考图或添加角色参考图，再开始少量采样")
         config = {**self.pipeline.settings(asset_id), "enabled": True, "calibration": None, "top_k": 20}
         from .identity_bindings import POLICY_VERSION
         config["identity_policy"] = POLICY_VERSION
-        base_id = digest(["role-confirmation-v1", asset_id, asset["fingerprint"], scope, max_frames, config["model"]])
+        inputs = ["role-confirmation-v1", asset_id, asset["fingerprint"], scope, max_frames, config["model"]]
+        if excluded:
+            inputs.append(excluded)
+        base_id = digest(inputs)
         with self._guard:
             thread = self._running.get(scope)
             if thread and thread.is_alive():
@@ -531,6 +555,12 @@ def register_character_confirmation_routes(app, library, search, pipeline):
 
     @app.get("/api/assets/{asset_id}/identity/confirmation")
     def confirmation_queue(asset_id: str):
+        return service.queue(asset_id)
+
+    @app.put("/api/assets/{asset_id}/identity/confirmation/selection")
+    def confirmation_selection(asset_id: str, payload: RecognitionSelection):
+        CharacterStore(library).set_recognition_selection(asset_id, payload.character_ids,
+            expected_revision=payload.expected_revision, expected_scope=payload.scope_id)
         return service.queue(asset_id)
 
     @app.get("/api/assets/{asset_id}/identity/confirmation/sampling")

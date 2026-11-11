@@ -62,3 +62,40 @@ def test_region_annotation_rejects_unknown_and_ambiguous_names_without_writing_d
                                            "character_name": requested})
     assert read_json(pipeline._directory("asset_one") / "decisions.json") is None
     assert library.annotations("asset_one") == []
+
+
+def test_manual_correction_can_identify_excluded_role_only_for_annotated_window_and_evidence(calibrated):  # noqa: F811
+    library, characters, _gallery, pipeline, _backend, identity, other, _refs, raw = calibrated
+    store = RetrievalStore(library)
+    source = current_window(library, raw)
+    windows = [store.publish("asset_one", "original_run", {**source, "id": name}) for name in ("window_a", "window_b")]
+    roster = characters.roster("asset_one")
+    characters.set_recognition_selection("asset_one", [other], expected_scope=roster["scope_id"],
+                                         expected_revision=roster["revision"])
+    evidence = {**pipeline.reviews("asset_one"), "recognition_excluded_ids": [identity]}
+    for window in windows:
+        store.publish_identity("asset_one", "local_run", observation(window, evidence, run_id="local_run", signature="one"))
+    assert all(person["binding_status"] == "unknown" for row in store.records("asset_one") for person in row["entities"])
+    person = store.records("asset_one")[0]["entities"][0]
+    region = person["identity_region_id"]
+    roster = characters.roster("asset_one")
+    characters.set_recognition_selection("asset_one", [other, identity], expected_scope=roster["scope_id"],
+                                         expected_revision=roster["revision"])
+    # A generic region decision alone cannot bypass either window's original selection.
+    pipeline.review("asset_one", region, status="confirmed", character_id=identity, reason="核对原帧")
+    assert all(row["entities"][0]["character_id"] is None for row in store.records("asset_one"))
+    payload = {"record_id": "window_a", "entity_id": person["id"], "character_name": "Aoi"}
+    library.annotate("asset_one", payload)
+    a, b = store.records("asset_one")
+    assert a["entities"][0]["binding_status"] == "human_confirmed"
+    assert a["entities"][0]["character_id"] == identity
+    assert b["entities"][0]["character_id"] is None
+    displayed = next(row for row in library.records("asset_one") if row["id"] == "window_a")
+    assert displayed["review_status"] == "user_confirmed" and displayed["character"] == "Aoi"
+
+    pipeline.review("asset_one", region, status="unknown", reason="撤回人工纠错")
+    assert store.records("asset_one")[0]["entities"][0]["binding_status"] == "unknown"
+    library.annotate("asset_one", payload)
+    # Re-matching the same window creates a new sidecar even if its window run ID is unchanged.
+    store.publish_identity("asset_one", "another_run", observation(windows[0], evidence, run_id="another_run", signature="two"))
+    assert store.records("asset_one")[0]["entities"][0]["binding_status"] == "unknown"

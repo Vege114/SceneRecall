@@ -82,6 +82,18 @@ def add_reference(gallery, identity, red=90):
     return gallery.add("asset_one", identity, picture(red), confirmed=True, single_character=True)
 
 
+def test_empty_recognition_selection_skips_optional_model(visual, monkeypatch):
+    library, characters, _gallery = visual
+    add_role(characters)
+    roster = characters.roster("asset_one")
+    characters.set_recognition_selection("asset_one", [], expected_revision=roster["revision"], expected_scope=roster["scope_id"])
+    monkeypatch.setattr("scenerecall.visual_identity._backend", lambda *_: pytest.fail("loaded a model for an empty selection"))
+    result = VisualIdentityPipeline(library).run("asset_one", [frame(library)], {"enabled": True})
+    assert result["status"] == "disabled"
+    assert result["regions"] == []
+    assert "名单为空" in result["degraded_reason"]
+
+
 def test_visual_frame_progress_counts_processed_frames_including_cached_empty_frames(visual):
     library, _characters, _gallery = visual
     frames = [frame(library, identifier=f"frame_{index}", at_ms=index * 40) for index in range(3)]

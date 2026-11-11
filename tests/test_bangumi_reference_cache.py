@@ -335,6 +335,17 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(again["existing"], 1)
         self.assertEqual(again["references"][0]["status"], "revoked")
 
+    def test_reference_downloads_and_coverage_follow_the_saved_selection(self):
+        roster = self.characters.roster("asset_one")
+        selected = next(row for row in roster["profiles"] if row["name"] == "Second")
+        self.characters.set_recognition_selection("asset_one", [selected["id"]], expected_scope=roster["scope_id"],
+                                                 expected_revision=roster["revision"])
+        result = self.service.run("asset_one")
+        self.assertEqual([call.args[0] for call in self.download.call_args_list], ["https://lain.bgm.tv/second.jpg"])
+        self.assertEqual(result["coverage"]["total"], 1)
+        self.assertEqual(result["coverage"]["remaining"], 0)
+        self.assertEqual([row["character_id"] for row in result["references"]], [selected["id"]])
+
     def test_changed_image_content_creates_new_candidate(self):
         self.service.run("asset_one", 1)
         self.download.return_value = picture(160)

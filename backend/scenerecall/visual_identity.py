@@ -123,9 +123,10 @@ class ReferenceGallery:
         return read_json(self._directory(scope) / "gallery.json", {"schema_version": "1.0", "revision": 0,
                                                                   "scope_id": scope, "references": [], "audit": []})
 
-    def list(self, asset_id, character_id=None, *, trusted_only=False, _catalog=None):
+    def list(self, asset_id, character_id=None, *, trusted_only=False, recognition_only=False, _catalog=None):
         with self.library.lock:
             catalog, allowed = _allowed(self.library, asset_id, catalog=_catalog)
+            excluded = {key for key, row in allowed.items() if recognition_only and not row.get("recognition_enabled", True)}
             scope = catalog["scope_id"]
             registry = CharacterStore(self.library)._read(scope)
             if character_id is not None:
@@ -137,7 +138,8 @@ class ReferenceGallery:
             rows = []
             for original in saved["references"]:
                 resolved = CharacterStore._resolve(registry, original["character_id"])
-                if resolved not in allowed or character_id is not None and resolved != character_id:
+                if (resolved not in allowed or character_id is not None and resolved != character_id
+                        or resolved in excluded):
                     continue
                 row = copy.deepcopy(original)
                 row["character_id"] = resolved
@@ -158,7 +160,10 @@ class ReferenceGallery:
                 row["image_url"] = f"/api/assets/{asset_id}/characters/{resolved}/references/{row['id']}/image"
                 row["reference_only"] = True
                 rows.append(row)
-            return {"scope_id": scope, "revision": saved["revision"], "references": rows}
+            result = {"scope_id": scope, "revision": saved["revision"], "references": rows}
+            if excluded:
+                result["recognition_excluded_ids"] = sorted(excluded)
+            return result
 
     def trusted(self, asset_id):
         return self.list(asset_id, trusted_only=True)["references"]
@@ -166,7 +171,8 @@ class ReferenceGallery:
     def matching(self, asset_id, *, _catalog=None):
         """Confirmed exemplars plus stored Bangumi images as candidates only."""
         active = self.active_reference_ids(asset_id, include_candidates=True, _catalog=_catalog)
-        return [row for row in self.list(asset_id, _catalog=_catalog)["references"] if row["id"] in active]
+        references = self.list(asset_id, recognition_only=True, _catalog=_catalog)["references"]
+        return [row for row in references if row["id"] in active]
 
     def active_reference_ids(self, asset_id, *, include_candidates=False, _catalog=None):
         """Nonrecursive trust projection usable while catalog reads scenes."""
@@ -565,13 +571,16 @@ class VisualIdentityPipeline:
         metrics = result["metrics"]
         try:
             checkpoint()
+            catalog, profiles = _allowed(self.library, asset_id)
+            if profiles and not any(profile.get("recognition_enabled", True) for profile in profiles.values()):
+                result["degraded_reason"] = "识别名单为空，已跳过本地人物匹配"
+                return result
             if progress is not None:
                 progress(0, len(frames))
             load_start = time.monotonic()
             backend = self.backend or _backend(config.get("model", DEFAULT_MODEL))
             version = backend.model_version
             metrics["model_load_ms"] = round((time.monotonic() - load_start) * 1000)
-            catalog, profiles = _allowed(self.library, asset_id)
             proposed_references = self.gallery.matching(asset_id, _catalog=catalog)
             references = []
             # Read every permitted character's exemplars; there is no recency or
@@ -729,7 +738,7 @@ class VisualIdentityPipeline:
                     progress(frame_number, len(frames))
             result.update(status="completed", model_version=version, scope_id=catalog["scope_id"],
                           gallery_revision=self.gallery.list(asset_id)["revision"])
-            result["regions"] = self._project(asset_id, result["regions"])
+            result["regions"] = self._project(asset_id, result["regions"], recognition_only=True)
             ids = list(dict.fromkeys(value for region in result["regions"]
                                     if region["match"].get("status") in {"candidate", "confirmed"}
                                     for value in [region["match"].get("character_id"),
@@ -748,9 +757,10 @@ class VisualIdentityPipeline:
         atomic_json(self._directory(asset_id) / "latest.json", result, compact=True)
         return result
 
-    def _project(self, asset_id, regions, *, _catalog=None, _crop_paths=True):
+    def _project(self, asset_id, regions, *, _catalog=None, _crop_paths=True, recognition_only=False):
         decisions = read_json(self._directory(asset_id) / "decisions.json", {"decisions": {}})["decisions"]
         catalog, profiles = _allowed(self.library, asset_id, catalog=_catalog)
+        excluded = {key for key, profile in profiles.items() if recognition_only and not profile.get("recognition_enabled", True)}
         registry = CharacterStore(self.library)._read(catalog["scope_id"])
         trusted = self.gallery.active_reference_ids(asset_id, _catalog=catalog)
         matching = self.gallery.active_reference_ids(asset_id, include_candidates=True, _catalog=catalog)
@@ -792,6 +802,9 @@ class VisualIdentityPipeline:
                                     reason="角色已删除或不再属于当前作品")
             if row["match"].get("character_id"):
                 row["match"]["character_name"] = profiles[row["match"]["character_id"]]["name"]
+            if excluded:
+                from .identity_scene import recognition_match
+                row["match"] = recognition_match(row["match"], excluded)
             row["crop_url"] = f"/api/assets/{asset_id}/identity/regions/{row['id']}/image"
         return result
 
@@ -804,7 +817,7 @@ class VisualIdentityPipeline:
         if projected.get("status") != "completed":
             return projected
         catalog, profiles = _allowed(self.library, asset_id)
-        projected["regions"] = self._project(asset_id, projected.get("regions", []), _catalog=catalog)
+        projected["regions"] = self._project(asset_id, projected.get("regions", []), _catalog=catalog, recognition_only=True)
         selected = list(dict.fromkeys(value for row in projected["regions"] for value in [
             row["match"].get("character_id"), row["match"].get("candidate_character_id"),
             *[candidate["character_id"] for candidate in row["match"].get("candidates", [])]]
@@ -871,7 +884,8 @@ def decorate_identity_records(library, asset_id, records, *, strict=False):
     from .identity_bindings import BindingResolver, uses_policy
     directory = library.asset_dir(asset_id) / "identity" / "visual"
     decisions = read_json(directory / "decisions.json", {"decisions": {}})["decisions"]
-    if not decisions and not (directory / "regions").is_dir() and not any(uses_policy(row) for row in records):
+    if not decisions and not (directory / "regions").is_dir() and not any(
+            uses_policy(row) or row.get("recognition_excluded_ids") for row in records):
         return records
     gallery = ReferenceGallery(library)
     trusted = gallery.active_reference_ids(asset_id)
@@ -883,6 +897,7 @@ def decorate_identity_records(library, asset_id, records, *, strict=False):
             resolver = resolver or BindingResolver(library, asset_id)
             result[index] = resolver.resolve(record)
             continue
+        excluded = set(record.get("recognition_excluded_ids", []))
         for entity in record.get("entities", []):
             identity = entity.get("identity_region_id", entity.get("id"))
             decision = decisions.get(identity)
@@ -909,6 +924,11 @@ def decorate_identity_records(library, asset_id, records, *, strict=False):
                               identity_source=decision.get("source", "human"), identity_reason=decision["reason"])
                 if not decision["character_id"]:
                     entity.update(name=None, character_name=None, aliases=[])
+            if excluded and (entity.get("character_id") in excluded or entity.get("candidate_character_id") in excluded):
+                entity.update(character_id=None, candidate_character_id=None, name=None, character_name=None,
+                              aliases=[], identity_status="unknown", association_status="unknown",
+                              association_source="recognition_selection")
+                entity.pop("identity_match", None)
     return result
 
 

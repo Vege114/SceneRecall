@@ -46,7 +46,7 @@ def test_dependency_walk_reuses_each_scene_and_refreshes_identity_next_read(monk
 
     monkeypatch.setattr(store, "_raw", raw)
     monkeypatch.setattr(store, "_annotations", lambda asset_id: [])
-    monkeypatch.setattr(store, "dependencies", lambda asset_id: {})
+    monkeypatch.setattr(store, "_dependency_state", lambda asset_id: ({}, 0))
     monkeypatch.setattr(store, "_project_semantics", semantics)
     monkeypatch.setattr("scenerecall.visual_identity.decorate_identity_records", decorate)
 

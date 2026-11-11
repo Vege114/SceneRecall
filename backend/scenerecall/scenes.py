@@ -50,13 +50,23 @@ class SceneStore:
         return row
 
     def dependencies(self, asset_id: str) -> dict:
+        dependencies, _ = self._dependency_state(asset_id)
+        return dependencies
+
+    def _dependency_state(self, asset_id: str) -> tuple[dict, int]:
         from .characters import CharacterStore, scope_id
         asset = self.library.get_asset(asset_id, include_deleted=True)
         registry = CharacterStore(self.library)._read(scope_id(asset))
-        return {"fingerprint": asset["fingerprint"], "subtitle_digest": self.subtitle_digest(asset_id),
+        dependencies = {"fingerprint": asset["fingerprint"], "subtitle_digest": self.subtitle_digest(asset_id),
                 "character_revision": registry["revision"],
                 "character_semantic_revision": registry.get("semantic_revision", registry["revision"]),
                 "membership_revision": asset.get("membership_revision", 0)}
+        span = registry.get("selection_only_revisions")
+        # Legacy scenes recorded a single revision. Revisions separated only
+        # by selection edits describe the same evidence. Any later edit to the
+        # cast ends that range, even if it did not affect semantic_revision.
+        oldest_equivalent = span[0] if span and span[1] == registry["revision"] else registry["revision"]
+        return dependencies, oldest_equivalent
 
     def _raw(self, asset_id: str, *, record_ids=None) -> list[dict]:
         result = []
@@ -108,8 +118,8 @@ class SceneStore:
             return ["连续上下文引用存在循环"]
         visiting = visiting | {identity}
         if (asset_id, "dependencies") not in cache:
-            cache[asset_id, "dependencies"] = self.dependencies(asset_id)
-        current = cache[asset_id, "dependencies"]
+            cache[asset_id, "dependencies"] = self._dependency_state(asset_id)
+        current, oldest_equivalent = cache[asset_id, "dependencies"]
         if (asset_id, "staleness") not in cache:
             cache[asset_id, "staleness"] = self.library.active(asset_id).get("scene_staleness", {})
         marked = cache[asset_id, "staleness"]
@@ -154,8 +164,11 @@ class SceneStore:
             if changed_identity:
                 reasons.append("关联身份已纠正，相关剧情推断待复核")
         for key, expected in row.get("dependencies", {}).items():
-            if key == "character_revision" and "character_semantic_revision" in row.get("dependencies", {}):
-                continue
+            if key == "character_revision":
+                if "character_semantic_revision" in row["dependencies"]:
+                    continue
+                if type(expected) is int and oldest_equivalent <= expected <= current[key]:
+                    continue
             if key in current and expected != current[key]:
                 reasons.append(labels[key])
         memory = row.get("memory_before", {})

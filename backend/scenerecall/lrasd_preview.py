@@ -46,7 +46,7 @@ def file_sha256(path):
     return value.hexdigest()
 
 
-def candidate_matches(pipeline, asset_id, tracks, directory):
+def candidate_matches(pipeline, asset_id, tracks, directory, references):
     """Use the existing learned CCIP distance and immutable feature cache.
 
     External cached/candidate references are permitted as proposals. Their
@@ -57,7 +57,6 @@ def candidate_matches(pipeline, asset_id, tracks, directory):
     metrics = {"feature_cache_hits": 0, "feature_ms": 0, "feature_extractions": 0}
     output = [{**row, "candidates": [], "character_id": None, "association_status": "candidate",
                "candidate_status": "unmatched"} for row in tracks]
-    references = [row for row in pipeline.gallery.list(asset_id)["references"] if row.get("status") != "revoked"]
     if not references or not output:
         return output, {"matching_ms": round((time.monotonic() - started) * 1000)}, "尚无本机角色参考图，保留匿名人物轨迹"
     try:
@@ -166,9 +165,10 @@ class LrasdPreviewService:
         bundle, _ = validate_lrasd_bundle(Path(config["sync_checkpoint_path"]).expanduser())
         from .visual_identity import VisualIdentityPipeline
         pipeline = VisualIdentityPipeline(self.library)
-        references = pipeline.gallery.list(asset_id)
+        references = [row for row in pipeline.gallery.list(asset_id, recognition_only=True)["references"]
+                      if row.get("status") != "revoked"]
         reference_identity = [(row["id"], row.get("version"), row["character_id"], row.get("sha256"), row.get("status"))
-                              for row in references["references"]]
+                              for row in references]
         identity = {"schema_version": SCHEMA, "preview_version": PREVIEW_VERSION,
                     "source_fingerprint": asset["fingerprint"],
                     "source_stat": [Path(source).stat().st_size, Path(source).stat().st_mtime_ns],
@@ -199,7 +199,8 @@ class LrasdPreviewService:
                      "reason": "正在解码原片、逐帧检测人物并计算 LR-ASD 概率", "cache_hit": False}
             atomic_json(root / "latest.json", value)
             thread = threading.Thread(target=self._background, args=(asset_id, directory, value, identity, config,
-                                                                     str(source), str(detector.resolve()), visual_python),
+                                                                     str(source), str(detector.resolve()), visual_python,
+                                                                     references),
                                       daemon=True, name=f"lrasd-preview-{asset_id}")
             self._running[asset_id] = (key, thread)
             thread.start()
@@ -304,7 +305,7 @@ class LrasdPreviewService:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _background(self, asset_id, directory, initial, identity, config, source, detector, visual_python):
+    def _background(self, asset_id, directory, initial, identity, config, source, detector, visual_python, references):
         started = time.monotonic()
         value = dict(initial)
         try:
@@ -346,7 +347,8 @@ class LrasdPreviewService:
                                              f"tracks/{row['id']}/thumbnail")
                     row["character_id"] = None
                 from .visual_identity import VisualIdentityPipeline
-                tracks, match_timings, match_reason = candidate_matches(VisualIdentityPipeline(self.library), asset_id, tracks, directory)
+                tracks, match_timings, match_reason = candidate_matches(
+                    VisualIdentityPipeline(self.library), asset_id, tracks, directory, references)
                 timings.update(match_timings)
                 # Boxes remain in private request/detection caches. The UI gets
                 # source-timed probabilities, a crop and reversible candidates.

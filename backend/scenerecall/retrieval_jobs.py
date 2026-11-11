@@ -319,9 +319,14 @@ class RetrievalJobMixin:
             visual = await self._local_work(job_id, work)
             if visual.get("status") not in {"completed", "disabled"}:
                 raise ValueError(visual.get("degraded_reason") or "本地人物匹配不可用；已发布画面索引保留")
+            if gallery_identity(pipeline, asset_id) != config["visual_identity_gallery"]:
+                raise ValueError("人物匹配期间识别名单或参考图已变化，请新建任务")
             saved = {"input_signature": signature, "visual": visual}
             atomic_json(path, saved, compact=True)
         visual = saved["visual"]
+        excluded = config["visual_identity_gallery"].get("recognition_excluded_ids", [])
+        if excluded:
+            visual = {**visual, "recognition_excluded_ids": excluded}
         pipeline.apply_crop_retention(asset_id, visual.get("regions", []), config["visual_identity_settings"])
         if visual.get("status") not in {"completed", "disabled"}:
             raise ValueError("本地人物成功回执状态无效")
@@ -452,6 +457,9 @@ class RetrievalJobMixin:
                 return
             local = [by_frame[fid] for u in batch for fid in u["local_frame_ids"]]
             context = await self._local_work(job_id, lambda check: (check(), self.characters.context(asset_id))[1])
+            if ("visual_identity_gallery" in config and context.get("recognition_excluded_ids", []) !=
+                    config["visual_identity_gallery"].get("recognition_excluded_ids", [])):
+                raise ValueError("识别名单已变化，请新建任务")
             context = identity_context(context, visual, local, top_k=3)
             # Candidate retrieval runs on the full allowed gallery before bounding
             # the language-model context; names and old prose do not establish presence.
@@ -505,6 +513,8 @@ class RetrievalJobMixin:
             for observation in data["observations"]:
                 observation.update(identity_policy="identity-binding-v2", provenance={"prompt_version": prompt_version,
                     "receipt_key": key, "model": model_identity(profile), "evidence_kind": "current_visual"})
+                if context.get("recognition_excluded_ids"):
+                    observation["recognition_excluded_ids"] = context["recognition_excluded_ids"]
                 store.publish_observation(asset_id, job["run_id"], observation)
             state["coverage"]["processed_units"] += len(batch)
             self.update(job_id, retrieval=state)

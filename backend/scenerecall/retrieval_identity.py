@@ -15,11 +15,14 @@ VERSION = "retrieval-local-identity-v1"
 
 
 def gallery_identity(pipeline, asset_id):
-    gallery = pipeline.gallery.list(asset_id)
-    return {"scope_id": gallery["scope_id"], "revision": gallery["revision"],
+    gallery = pipeline.gallery.list(asset_id, recognition_only=True)
+    result = {"scope_id": gallery["scope_id"], "revision": gallery["revision"],
             "references": [{key: reference.get(key) for key in
                 ("id", "character_id", "version", "sha256", "status", "quality")}
                 for reference in gallery["references"]]}
+    if gallery.get("recognition_excluded_ids"):
+        result["recognition_excluded_ids"] = gallery["recognition_excluded_ids"]
+    return result
 
 
 def observation(window, visual, *, run_id, signature):
@@ -38,6 +41,8 @@ def observation(window, visual, *, run_id, signature):
               "evidence_frame_ids": list(window["evidence_frame_ids"]),
               "provenance": {"run_id": run_id, "input_signature": signature,
                              "evidence_kind": "current_local_person_regions"}}
+    if visual.get("recognition_excluded_ids"):
+        result["recognition_excluded_ids"] = visual["recognition_excluded_ids"]
     result["id"] = "rio_" + digest(result)
     return result
 
@@ -53,4 +58,8 @@ def merge(record, identity):
     result.update(identity_policy=POLICY_VERSION, local_identity={
         "id": identity["id"], "version": VERSION, "status": identity["identity_status"],
         "input_signature": identity["provenance"]["input_signature"]})
+    # The newest independent identity run owns the roster for this projection.
+    result.pop("recognition_excluded_ids", None)
+    if identity.get("recognition_excluded_ids"):
+        result["recognition_excluded_ids"] = identity["recognition_excluded_ids"]
     return result

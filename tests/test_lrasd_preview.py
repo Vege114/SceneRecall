@@ -87,9 +87,9 @@ def test_external_candidate_matching_never_becomes_confirmed(tmp_path):
         calls.append(Path(path).name)
         return [1., 2.]
     pipeline = types.SimpleNamespace(backend=backend, library=types.SimpleNamespace(root=tmp_path), _feature=feature,
-                                    settings=lambda _: {"model": "ccip-caformer-5_fp32", "top_k": 5},
-                                    gallery=types.SimpleNamespace(list=lambda _: {"references": [reference]}))
-    tracks, metrics, reason = candidate_matches(pipeline, "asset", [{"id": "t", "thumbnail_file": "t.png"}], tmp_path)
+                                    settings=lambda _: {"model": "ccip-caformer-5_fp32", "top_k": 5})
+    tracks, metrics, reason = candidate_matches(pipeline, "asset", [{"id": "t", "thumbnail_file": "t.png"}],
+                                               tmp_path, [reference])
     row = tracks[0]
     assert row["character_id"] is None and row["association_status"] == "candidate"
     assert row["candidate_status"] == "unverified_reference_match"
@@ -107,9 +107,9 @@ def test_missing_ccip_keeps_anonymous_preview(tmp_path):
         @property
         def model_version(self):
             raise IdentityUnavailable("not installed")
-    pipeline = types.SimpleNamespace(backend=Backend(), settings=lambda _: {"model": "ccip-caformer-5_fp32"},
-                                    gallery=types.SimpleNamespace(list=lambda _: {"references": [{"status": "candidate"}]}))
-    tracks, metrics, reason = candidate_matches(pipeline, "asset", [{"id": "t", "thumbnail_file": "t.png"}], tmp_path)
+    pipeline = types.SimpleNamespace(backend=Backend(), settings=lambda _: {"model": "ccip-caformer-5_fp32"})
+    tracks, metrics, reason = candidate_matches(pipeline, "asset", [{"id": "t", "thumbnail_file": "t.png"}],
+                                               tmp_path, [{"status": "candidate"}])
     assert tracks[0]["character_id"] is None and tracks[0]["candidates"] == []
     assert "不可用" in reason
 
@@ -138,12 +138,12 @@ def test_background_result_is_timed_anonymous_and_persisted(tmp_path, monkeypatc
              "frame_probabilities": [{"at_ms": at, "probability": .75} for at in range(1400, 2040, 40)]}]}
     monkeypatch.setattr(service, "_worker", worker)
     monkeypatch.setattr("scenerecall.visual_identity.VisualIdentityPipeline", lambda _: object())
-    monkeypatch.setattr("scenerecall.lrasd_preview.candidate_matches", lambda pipeline, asset, rows, path: (
+    monkeypatch.setattr("scenerecall.lrasd_preview.candidate_matches", lambda pipeline, asset, rows, path, refs: (
         [{**row, "candidates": [], "association_status": "candidate"} for row in rows], {"matching_ms": 0}, "anonymous"))
     initial = {"job_id": "key", "start_ms": 1000, "end_ms": 3000, "status": "running", "cache_hit": False}
     config = {"sync_repository_path": str(tmp_path), "sync_checkpoint_path": str(tmp_path), "sync_python_path": "python", "device": "cpu"}
     service._background("asset", directory, initial, {"checkpoint_sha256": "a" * 64, "detector_sha256": "b" * 64},
-                        config, "source.mkv", "person.onnx", "visual-python")
+                        config, "source.mkv", "person.onnx", "visual-python", [])
     result = service.latest("asset")
     assert result["status"] == "review_required"
     row = result["tracks"][0]
@@ -215,7 +215,11 @@ def test_service_start_latest_cache_thumbnail_real_persistence_roundtrip(tmp_pat
     monkeypatch.setattr("scenerecall.lrasd_preview.sync_availability", lambda _: {"available": True})
     monkeypatch.setattr("scenerecall.lrasd_preview.validate_lrasd_bundle",
                         lambda path: ({"checkpoint_sha256": "a" * 64}, path / "model.pt"))
-    pipeline = types.SimpleNamespace(gallery=types.SimpleNamespace(list=lambda _: {"references": []}),
+    selected = [{"id": "ref1", "character_id": "char_a", "status": "confirmed"}]
+    def gallery_list(_, *, recognition_only):
+        assert recognition_only
+        return {"references": list(selected)}
+    pipeline = types.SimpleNamespace(gallery=types.SimpleNamespace(list=gallery_list),
                                     settings=lambda _: {"model": "fixture"})
     monkeypatch.setattr("scenerecall.visual_identity.VisualIdentityPipeline", lambda _: pipeline)
     calls = []
@@ -238,8 +242,11 @@ def test_service_start_latest_cache_thumbnail_real_persistence_roundtrip(tmp_pat
             {"track_id": track["id"], "active_speaker_probability": .75,
              "frame_probabilities": [{"at_ms": at, "probability": .75} for at in range(1000, 1640, 40)]}]}
     monkeypatch.setattr(service, "_worker", worker)
-    monkeypatch.setattr("scenerecall.lrasd_preview.candidate_matches", lambda pipeline, asset, rows, path: (
-        [{**row, "candidates": [], "association_status": "candidate"} for row in rows], {"matching_ms": 0}, "anonymous"))
+    def match_snapshot(pipeline, asset, rows, path, refs):
+        candidates = [{"character_id": ref["character_id"]} for ref in refs]
+        return ([{**row, "candidates": candidates, "association_status": "candidate"} for row in rows],
+                {"matching_ms": 0}, "fixture")
+    monkeypatch.setattr("scenerecall.lrasd_preview.candidate_matches", match_snapshot)
     first = service.start("asset", 1000, 3000)
     thread = service._running["asset"][1]
     assert first["schema_version"] == SCHEMA and first["preview_version"] == PREVIEW_VERSION
@@ -250,6 +257,7 @@ def test_service_start_latest_cache_thumbnail_real_persistence_roundtrip(tmp_pat
     old_identity = {**identity, "schema_version": "scenerecall-lrasd-preview-v1"}
     old_identity.pop("preview_version")
     assert digest(old_identity) != first["job_id"]
+    selected.clear()
     release.set()
     thread.join(timeout=3)
     assert not thread.is_alive()
@@ -257,19 +265,28 @@ def test_service_start_latest_cache_thumbnail_real_persistence_roundtrip(tmp_pat
     assert latest["status"] == "review_required" and latest["schema_version"] == SCHEMA
     assert read_json(directory / "result.json") == latest
     track = latest["tracks"][0]
+    assert track["candidates"] == [{"character_id": "char_a"}]
     assert service.thumbnail("asset", first["job_id"], track["id"]).read_bytes() == b"fixture-png-content"
     assert service.clip("asset", first["job_id"]).read_bytes() == b"fixture-mp4"
     with pytest.raises(FileNotFoundError):
         service.thumbnail("asset", first["job_id"], "not-a-track")
+    selected.append({"id": "ref1", "character_id": "char_a", "status": "confirmed"})
     cached = service.start("asset", 1000, 3000)
     assert cached["cache_hit"] is True and cached["job_id"] == first["job_id"]
     assert service.latest("asset")["cache_hit"] is True and len(calls) == 1
-    detector.write_bytes(b"detector-v2")
+    selected.clear()
     second = service.start("asset", 1000, 3000)
     thread = service._running.get("asset")
     if thread:
         thread[1].join(timeout=3)
     assert second["job_id"] != first["job_id"] and len(calls) == 2
+    assert not service.latest("asset")["tracks"][0]["candidates"]
+    detector.write_bytes(b"detector-v2")
+    third = service.start("asset", 1000, 3000)
+    thread = service._running.get("asset")
+    if thread:
+        thread[1].join(timeout=3)
+    assert third["job_id"] != second["job_id"] and len(calls) == 3
 
 
 def test_clip_encoding_uses_exact_aligned_inference_inputs(tmp_path, monkeypatch):

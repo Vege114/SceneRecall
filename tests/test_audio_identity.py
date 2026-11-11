@@ -158,6 +158,27 @@ def test_manual_correction_and_rename_are_projection_only(service):
     assert len(read_jsonl(service._directory("asset") / "identity-audit.jsonl")) == 3
 
 
+def test_recognition_uses_selected_voice_samples_and_preserves_human_evidence(service, monkeypatch):
+    add_external(service, character="char_a")
+    add_external(service, character="char_b")
+    first = service.run("asset")["records"][0]
+    service.confirm("asset", first["id"], "char_b")
+    catalog = service.characters.catalog("asset")
+    catalog["profiles"][1]["recognition_enabled"] = False
+    monkeypatch.setattr(service.characters, "catalog", lambda _: catalog)
+    assert {row["character_id"] for row in service.records("asset")[1]["candidates"]} == {"char_a", "char_b"}
+
+    known, unknown = service.run("asset")["records"]
+    assert known["character_id"] is None and known["association_status"] == "unknown"
+    assert unknown["candidate_character_id"] == "char_a"
+    assert all(candidate["character_id"] == "char_a" for row in (known, unknown) for candidate in row["candidates"])
+    assert service.record("asset", first["id"])["character_id"] == "char_b"
+    assert len(service.samples("asset", "char_b")) == 1
+    catalog["profiles"][0]["recognition_enabled"] = False
+    monkeypatch.setattr(service, "_feature", lambda *args, **kwargs: pytest.fail("empty selection ran voice matching"))
+    assert all(not row["candidates"] for row in service.run("asset")["records"])
+
+
 def test_resume_does_not_repeat_diarization_or_feature_calls(service):
     first = service.run("asset")
     counts = service._diarizer.calls, service._embedder.calls

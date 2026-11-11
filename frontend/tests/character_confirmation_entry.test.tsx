@@ -13,10 +13,10 @@ const waitingJob = (asset: Asset): Job => ({ id: `job-${asset.id}`, asset_id: as
   input_required: { kind: 'character_confirmation', asset_id: asset.id },
   workflow_progress: { keyframes: { status: 'completed', completed: 4, total: 4 },
     character_confirmation: { status: 'waiting_input', completed: 0, total: 1 }, analysis: { status: 'pending' } } });
-const queue = (asset = first): CharacterConfirmationResult => ({ asset_id: asset.id, scope_id: 'work',
+const queue = (asset = first): CharacterConfirmationResult => ({ asset_id: asset.id, scope_id: 'work', roster_revision: 2,
   summary: { total: 1, pending: 1, confirmed: 0, skipped: 0, candidates: 0 }, sampling: null,
   roles: [{ character_id: 'character', profile: { id: 'character', name: '小夏', aliases: [], description: '', notes: '' },
-    status: 'pending', trusted_reference_count: 0, candidates: [], available_count: 0 }] });
+    status: 'pending', recognition_enabled: true, trusted_reference_count: 0, candidates: [], available_count: 0 }] });
 
 function setup(jobs = [waitingJob(first)]) {
   const context: AppContextValue = { bootstrap: { library_path: '/tmp', settings: { defaults: DEFAULTS, bindings: {} },
@@ -35,6 +35,30 @@ function mockApi(handler: (url: string, init?: RequestInit) => unknown) {
   return fetch;
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+
+it('lets a waiting job continue with an explicitly empty recognition list', async () => {
+  const state = queue();
+  const fetch = mockApi((url, init) => {
+    if (url.endsWith('/selection')) {
+      expect(init?.method).toBe('PUT');
+      expect(JSON.parse(init!.body as string)).toEqual({ character_ids: [], expected_revision: 2, scope_id: 'work' });
+      state.roster_revision++;
+      state.summary.pending = 0; state.summary.total = 0; state.roles[0].recognition_enabled = false;
+    }
+    return url.endsWith('/continue') ? { id: 'job-first', status: 'queued' } : state;
+  });
+  setup();
+  fireEvent.click(screen.getByRole('button', { name: '确认角色并继续' }));
+  fireEvent.click(await screen.findByRole('button', { name: '选择识别角色' }));
+  fireEvent.click(screen.getByRole('button', { name: '清空名单' }));
+  expect(screen.queryByRole('button', { name: '继续任务' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '保存识别名单' }));
+  await screen.findByText('本作品未选择识别角色');
+  expect(screen.queryByRole('button', { name: '暂时跳过这个角色' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '继续任务' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(fetch.mock.calls.filter(([, init]) => init?.method === 'POST').map(([url]) => url)).toEqual(['/api/jobs/job-first/continue']);
+});
 
 it('keeps keyframes and role decisions in the created task and requires a saved decision before continuing', async () => {
   const state = queue();

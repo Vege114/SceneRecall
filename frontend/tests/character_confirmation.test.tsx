@@ -8,7 +8,7 @@ import type { CharacterConfirmationBatchResult, CharacterConfirmationCandidate, 
 const asset: Asset = { id: 'ep-one', title: '第一集', kind: 'animation', series: '星海', duration_ms: 120000, width: 1280, height: 720, subtitle_mode: 'external', source_available: true, source_changed: false, created_at: '2026-10-22', status: 'ready' };
 const profile: CharacterProfile = { id: 'c1', name: '小夏', name_ja: 'ナツ', aliases: ['夏同学'], description: '短发，绿色围巾。', notes: '', appearance_count: 0, appearances: [], external_source: { source: 'bangumi', subject_id: 1, character_id: 2, url: 'https://bgm.tv/character/2', image_url: 'https://lain.bgm.tv/character/2.jpg' } };
 const candidate = (index: number): CharacterConfirmationCandidate => ({ region_id: `r${index}`, asset_id: index === 2 ? 'ep-two' : asset.id, asset_title: index === 2 ? '第二集' : asset.title, frame_id: `f${index}`, at_ms: index * 5000, box: [0, 0, 0.4, 0.8], crop_url: `/api/crops/r${index}`, shot_id: `shot${index}`, distance: 0.1, quality: { accepted: true }, source_available: true });
-const initial = (): CharacterConfirmationResult => ({ scope_id: 'work-one', asset_id: asset.id, summary: { total: 1, pending: 1, skipped: 0, confirmed: 0, candidates: 3 }, roles: [{ character_id: profile.id, profile, status: 'pending', trusted_reference_count: 0, candidates: [candidate(1), candidate(2), candidate(3)], available_count: 3 }], sampling: null, sampling_available: true });
+const initial = (): CharacterConfirmationResult => ({ scope_id: 'work-one', roster_revision: 4, asset_id: asset.id, summary: { total: 1, pending: 1, skipped: 0, confirmed: 0, candidates: 3 }, roles: [{ character_id: profile.id, recognition_enabled: true, profile, status: 'pending', trusted_reference_count: 0, candidates: [candidate(1), candidate(2), candidate(3)], available_count: 3 }], sampling: null, sampling_available: true });
 const twoRoles = (): CharacterConfirmationResult => {
   const state = initial();
   state.roles.push({ ...state.roles[0], character_id: 'c2', profile: { ...profile, id: 'c2', name: '小春' }, candidates: [candidate(4), candidate(5), candidate(6)] });
@@ -41,6 +41,61 @@ function deferred<T>() {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Pre-analysis character confirmation', () => {
+  it('saves the chosen cast and keeps only its checked crops available for confirmation', async () => {
+    const state = twoRoles();
+    const fetch = mockApi((url, options) => {
+      if (url.endsWith('/selection')) {
+        expect(options?.method).toBe('PUT');
+        expect(JSON.parse(options!.body as string)).toEqual({ character_ids: ['c1'], expected_revision: 4, scope_id: 'work-one' });
+        state.roles[1].recognition_enabled = false;
+        state.summary = { ...state.summary, total: 1, pending: 1, candidates: 3 };
+        state.roster_revision++;
+      }
+      return state;
+    });
+    const { user, onSaved } = setup();
+    await screen.findByText('正片里，哪个是小夏？');
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '小春 待确认' }));
+    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getByRole('button', { name: '选择识别角色' }));
+    await user.type(screen.getByRole('searchbox'), '小春');
+    await user.click(screen.getByRole('checkbox', { name: /小春/ }));
+    await user.click(screen.getByRole('button', { name: '保存识别名单' }));
+    await screen.findByText('已保存本作品的识别名单。');
+    expect(screen.queryByRole('button', { name: /小春 待确认/ })).toBeNull();
+    expect(screen.getByText('正片里，哪个是小夏？')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '提交全部已核对 1 张' })).toBeTruthy();
+    expect(onSaved).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('button', { name: '选择识别角色' }));
+    expect((screen.getByRole('checkbox', { name: /小春/ }) as HTMLInputElement).checked).toBe(false);
+    await user.click(screen.getByRole('button', { name: '全选角色' }));
+    await user.click(screen.getByRole('button', { name: '取消修改' }));
+    expect(screen.queryByRole('button', { name: /小春 待确认/ })).toBeNull();
+    expect(fetch.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(1);
+  });
+
+  it('reloads a changed recognition list after a revision conflict', async () => {
+    const state = twoRoles();
+    mockApi((url) => {
+      if (url.endsWith('/selection')) {
+        state.roles[0].recognition_enabled = false;
+        state.roster_revision++;
+        return new Response(JSON.stringify({ detail: '识别名单已更新，请重新读取' }), { status: 409 });
+      }
+      return state;
+    });
+    const { user, onSaved } = setup();
+    await user.click(await screen.findByRole('button', { name: '选择识别角色' }));
+    await user.click(screen.getByRole('button', { name: '清空名单' }));
+    await user.click(screen.getByRole('button', { name: '保存识别名单' }));
+    await screen.findByText('识别名单已更新，请重新读取');
+    expect(onSaved).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: '重新读取确认进度' }));
+    await waitFor(() => expect((screen.getByRole('checkbox', { name: /小春/ }) as HTMLInputElement).checked).toBe(true));
+    expect((screen.getByRole('checkbox', { name: /小夏/ }) as HTMLInputElement).checked).toBe(false);
+  });
+
   it('explains shared suggestions, saved rank and a role with no local matching reference', async () => {
     const state = initial();
     state.roles[0].matching_reference_count = 1;

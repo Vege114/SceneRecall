@@ -94,6 +94,9 @@ def test_restore_audio_graph_rejects_escape_and_preserves_merged_historical_samp
     monkeypatch.setattr("scenerecall.audio_identity.extract_audio",
                         lambda source_, out, stream, start, end, metadata, checkpoint=None: crop_pcm(source, out, start, end))
     service.configure("asset", {"enabled": True, "language": "ja", "dub_version": "jp"})
+    roster = app.state.characters.roster("asset")
+    app.state.characters.set_recognition_selection("asset", [first], expected_scope=roster["scope_id"],
+                                                   expected_revision=roster["revision"])
     result = service.run("asset")
     record = result["records"][0]
     service.confirm("asset", record["id"], first)

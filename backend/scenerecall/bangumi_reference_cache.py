@@ -279,6 +279,10 @@ def _reference_priority(profile):
     return ({"主角": 0, "配角": 1}.get(role, 2), profile["id"])
 
 
+def _recognition_profiles(catalog):
+    return sorted((row for row in catalog["profiles"] if row.get("recognition_enabled", True)), key=_reference_priority)
+
+
 def _complete_reference(reference, directory):
     try:
         path = confined_path(directory, f"{safe_id(reference['id'])}.png")
@@ -335,7 +339,7 @@ class BangumiReferenceCache:
     def _run(self, asset_id, max_images, *, cursor=None, refresh=False):
         deadline = time.monotonic() + BATCH_TIMEOUT_SECONDS
         catalog = self.characters.roster(asset_id)
-        profiles = sorted(catalog["profiles"], key=_reference_priority)
+        profiles = _recognition_profiles(catalog)
         signature = _page_signature(catalog, profiles, refresh)
         cursors = {digest([signature, index]): index for index in range(-1, len(profiles))}
         if cursor is not None and (not isinstance(cursor, str) or cursor not in cursors):
@@ -377,7 +381,8 @@ class BangumiReferenceCache:
                 with self.library.lock:
                     current = self.characters.roster(asset_id)
                     latest = next((row for row in current["profiles"] if row["id"] == identity), None)
-                    if current["scope_id"] != catalog["scope_id"] or not latest or _stored_url(latest) != url:
+                    if (current["scope_id"] != catalog["scope_id"] or not latest or not latest.get("recognition_enabled", True)
+                            or _stored_url(latest) != url):
                         raise CacheError("角色所属作品或 Bangumi 图片资料已变更，请重试")
                     existing = next((row for row in sorted(self.gallery.list(asset_id, identity, _catalog=current)["references"],
                                                           key=lambda row: row["status"] == "revoked")
@@ -403,7 +408,7 @@ class BangumiReferenceCache:
                 result["errors"].append({"character_id": identity, "reason": reason})
         with self.library.lock:
             current = self.characters.roster(asset_id)
-            current_profiles = sorted(current["profiles"], key=_reference_priority)
+            current_profiles = _recognition_profiles(current)
             if _page_signature(current, current_profiles, refresh) != signature:
                 raise CacheError("角色所属作品或 Bangumi 图片资料已变更，请从第一批重新缓存")
             references = self.gallery.list(asset_id, _catalog=current)["references"]

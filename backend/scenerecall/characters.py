@@ -165,6 +165,11 @@ class CharacterStore:
         if (type(registry.get("semantic_revision", registry["revision"])) is not int
                 or not 0 <= registry.get("semantic_revision", registry["revision"]) <= registry["revision"]):
             raise ValueError("角色语义修订版本无效")
+        if "selection_only_revisions" in registry:
+            span = registry["selection_only_revisions"]
+            if (not isinstance(span, list) or len(span) != 2 or any(type(value) is not int for value in span)
+                    or not 0 <= span[0] < span[1] <= registry["revision"]):
+                raise ValueError("角色识别名单修订范围无效")
         policy = registry.get("cast_policy")
         if policy is not None:
             if (not isinstance(policy, dict) or policy.get("mode") != "bangumi"
@@ -179,6 +184,8 @@ class CharacterStore:
             checked_id(character_id)
             if not isinstance(profile, dict) or profile.get("id") != character_id:
                 raise ValueError("角色档案 ID 不一致")
+            if type(profile.get("recognition_enabled", True)) is not bool:
+                raise ValueError("角色识别选择无效")
             for field in ("name", "description", "notes", "created_at", "updated_at"):
                 if not isinstance(profile.get(field), str):
                     raise ValueError("角色档案文字字段无效")
@@ -471,6 +478,32 @@ class CharacterStore:
                     "assets": self._assets(scope, catalog=organization), "cast_policy": policy,
                     "membership_revision": asset.get("membership_revision", 0)}
 
+    def set_recognition_selection(self, asset_id, character_ids, *, expected_revision, expected_scope):
+        """Update only the profiles visible through this asset's roster."""
+        with self.library.lock:
+            catalog = self.roster(asset_id)
+            scope = catalog["scope_id"]
+            if scope != expected_scope:
+                raise StaleCharacterRevision("视频所属角色库已变化，请刷新名单后重试")
+            registry = self._read(scope)
+            self._check_revision(registry, expected_revision)
+            members = {profile["id"] for profile in catalog["profiles"]}
+            selected = set(character_ids)
+            if len(selected) != len(character_ids) or not selected.issubset(members):
+                raise ValueError("识别名单中包含重复角色或不属于当前作品的角色")
+            if selected == {profile["id"] for profile in catalog["profiles"] if profile.get("recognition_enabled", True)}:
+                return
+            for identity in members:
+                registry["profiles"][identity]["recognition_enabled"] = identity in selected
+            # Selection affects subsequent tasks, not the evidence used by completed scenes.
+            registry.setdefault("semantic_revision", registry["revision"])
+            revision = registry["revision"]
+            previous_span = registry.get("selection_only_revisions")
+            first = previous_span[0] if previous_span and previous_span[1] == revision else revision
+            registry["revision"] = revision + 1
+            registry["selection_only_revisions"] = [first, revision + 1]
+            atomic_json(self._path(scope), registry)
+
     @staticmethod
     def _file_signature(path):
         try:
@@ -642,9 +675,20 @@ class CharacterStore:
                         for key in ("name_cn", "name_ja", "name_en", "name_variants")},
                      "reference_policy": BANGUMI_REFERENCE_POLICY}
                     if external_sources(profile) else {})}
-                for profile in catalog["profiles"] if (profile["appearance_count"] > 0 or external_sources(profile)
-                                                       or profile.get("user_edited"))
+                for profile in catalog["profiles"] if profile.get("recognition_enabled", True)
+                and (profile["appearance_count"] > 0 or external_sources(profile) or profile.get("user_edited"))
             ]}
+            excluded = sorted(profile["id"] for profile in catalog["profiles"] if not profile.get("recognition_enabled", True))
+            if excluded:
+                context["recognition_excluded_ids"] = excluded
+                policy = context["cast_policy"]
+                policy.update(allow_new_profiles=False, instruction=(
+                    "Recognize only the selected supplied characters. Leave all other people as unnamed observations."))
+                if policy["mode"] == "bangumi":
+                    selected_sources = {bangumi_id(source["character_id"])
+                        for profile in catalog["profiles"] if profile.get("recognition_enabled", True)
+                        for source in external_sources(profile) if bangumi_id(source["subject_id"]) == policy["subject_id"]}
+                    policy["character_ids"] = sorted(selected_sources.intersection(policy["character_ids"]))
             anime_profile = self.library.get_asset(asset_id).get("anime_profile") or {}
             if anime_profile.get("mode") == "bangumi":
                 dossier = anime_profile.get("dossier") or {}
@@ -697,8 +741,14 @@ class CharacterStore:
             self._check_revision(registry, expected_revision)
             policy = self.cast_policy(registry, asset.get("anime_profile"))
             from .visual_identity import decorate_identity_records
+            record = copy.deepcopy(record)
+            excluded = {identity for identity, profile in registry["profiles"].items()
+                        if not profile.get("recognition_enabled", True) and self.profile_allowed(profile, policy)}
+            record.pop("recognition_excluded_ids", None)
+            if excluded:
+                record["recognition_excluded_ids"] = sorted(excluded)
             result = Observation.model_validate(decorate_identity_records(
-                self.library, asset_id, [copy.deepcopy(record)], strict=True)[0]).model_dump()
+                self.library, asset_id, [record], strict=True)[0]).model_dump()
             if result["asset_id"] != asset_id or result["end_ms"] > asset["duration_ms"]:
                 raise ValueError("角色证据不属于当前视频时间轴")
             if result["evidence_frame_ids"]:
@@ -745,6 +795,10 @@ class CharacterStore:
                     continue
                 explicit = entity.get("character_id")
                 character_id = self._resolve(registry, explicit, strict=True) if explicit else None
+                if excluded and (not character_id or character_id in excluded):
+                    # A restricted roster accepts only an existing, selected dossier ID.
+                    entity.update(character_id=None, name=None, character_name=None, aliases=[])
+                    continue
                 if character_id and not self.profile_allowed(registry["profiles"][character_id], policy):
                     entity["character_id"] = None
                     continue

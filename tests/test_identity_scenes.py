@@ -130,8 +130,10 @@ def test_resumed_prompts_refresh_identity_without_recomputing(scene_worker, monk
         seen.append(asset_id)
         return {**original, "regions": [region(status="unknown", character=None)]}
     monkeypatch.setattr(VisualIdentityPipeline, "project_result", project)
-    monkeypatch.setattr(AudioIdentityService, "records", lambda *a: [{"id": "voice1", "character_id": None,
-        "association_status": "unknown", "association_source": "human"}])
+    def current_audio(*args, for_recognition):
+        assert for_recognition
+        return [{"id": "voice1", "character_id": None, "association_status": "unknown", "association_source": "human"}]
+    monkeypatch.setattr(AudioIdentityService, "records", current_audio)
     visual = worker.queue.scene_identity_context(job["id"], {}, [{"id": "f1"}])
     audio = worker.queue.scene_audio_context(job["id"], {}, 0, 1000)
     assert seen == [worker.asset["id"]]

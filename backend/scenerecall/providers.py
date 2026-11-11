@@ -356,6 +356,11 @@ def _preparation_output_schema(frame_ids: set[str], cue_ids: set[str], character
     return schema
 
 
+def _allow_named_identities(context):
+    policy = (context or {}).get("cast_policy", {})
+    return policy.get("allow_new_profiles", policy.get("mode") != "bangumi")
+
+
 def _validate_character_entities(entities, supplied_entities, character_context, subtitle_context, story_context):
     character_ids = {profile["id"] for profile in (character_context or {}).get("profiles", [])}
     for entity, supplied in zip(entities, supplied_entities, strict=True):
@@ -379,8 +384,8 @@ def _validate_character_entities(entities, supplied_entities, character_context,
         if character_context is not None and eligible and not entity.match_reason.strip():
             raise ValueError("character decisions must explain visible matching evidence or uncertainty")
         if entity.name is not None:
-            if (character_context or {}).get("cast_policy", {}).get("mode") == "bangumi":
-                raise ValueError("Bangumi observations use only supplied dossier IDs; name must be null")
+            if not _allow_named_identities(character_context):
+                raise ValueError("Roster-limited observations use only supplied dossier IDs; name must be null")
             from .characters import named_identity, normalized
             if not eligible or named_identity(entity.name) is None:
                 raise ValueError("character names must be supported proper identities, not anonymous labels")
@@ -1157,7 +1162,7 @@ class ProviderManager:
                 {row["id"] for row in (character_context or {}).get("profiles", [])},
                 bounds.get("start_ms", frames[0]["at_ms"]),
                 bounds.get("end_ms", max([frames[-1]["at_ms"] + 1, *(cue["end_ms"] for cue in cues)])),
-                named_identities=(character_context or {}).get("cast_policy", {}).get("mode") != "bangumi")
+                named_identities=_allow_named_identities(character_context))
         return await self._chat(id, "preparation", prompt, content,
                                 validate,
                                 max_output_tokens=MAX_PREPARATION_OUTPUT_TOKENS,
@@ -1325,7 +1330,7 @@ class ProviderManager:
             content.append({"type": "text", "text": "Current chronological evidence frames follow:"})
         content.extend(self._images(frames))
         schema = (_vision_output_schema(valid_ids, character_ids, start_ms, end_ms,
-                                       named_identities=(character_context or {}).get("cast_policy", {}).get("mode") != "bangumi")
+                                       named_identities=_allow_named_identities(character_context))
                   if self._profile(id, "vision")["provider_type"] == "codex_cli" else None)
         return await self._chat(id, "vision", prompt, content, validate, output_schema=schema)
 

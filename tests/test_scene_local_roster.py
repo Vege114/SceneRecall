@@ -83,6 +83,28 @@ def test_disabled_local_matching_rejects_oversized_full_roster_without_inference
     assert worker.queue.list() == [] and worker.provider.calls == []
 
 
+@pytest.mark.asyncio
+async def test_large_cast_can_reach_review_to_select_smaller_roster(scene_worker, monkeypatch):  # noqa: F811
+    worker = scene_worker(1)
+    context = large_roster(worker, monkeypatch, enabled=False)
+    summary = {"total": 80, "pending": 80, "confirmed": 0, "skipped": 0}
+    monkeypatch.setattr(worker.queue._confirmation_service(), "queue", lambda _: {
+        "scope_id": context["scope_id"], "revision": context["revision"], "summary": summary})
+    job = enqueue(worker, task_pipeline="unified-v1")
+    await worker.queue.execute(job["id"])
+    assert worker.queue.get(job["id"])["status"] == "waiting_input"
+
+    summary.update(pending=0, skipped=80)
+    with pytest.raises(ValueError, match="角色未被静默截断"):
+        worker.queue.continue_task_workflow(job["id"])
+    context["profiles"] = context["profiles"][-1:]
+    context["revision"] += 1
+    summary.update(total=1, skipped=1)
+    continued = worker.queue.continue_task_workflow(job["id"])
+    assert continued["config"]["character_snapshot"]["revision"] == context["revision"]
+    assert continued["status"] == "queued" and worker.provider.calls == []
+
+
 @pytest.mark.parametrize("parallel", [False, True])
 @pytest.mark.asyncio
 async def test_selected_late_roster_roles_are_bounded_in_preparation_and_deep_requests(

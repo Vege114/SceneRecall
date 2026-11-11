@@ -15,11 +15,11 @@ export interface CharacterConfirmationCandidate {
 }
 export interface CharacterConfirmationRole {
   character_id: string; profile: Omit<CharacterProfile, 'appearances' | 'appearance_count' | 'representative'>; status: 'pending' | 'confirmed' | 'skipped';
-  trusted_reference_count: number; candidates: CharacterConfirmationCandidate[]; available_count: number;
+  recognition_enabled: boolean; trusted_reference_count: number; candidates: CharacterConfirmationCandidate[]; available_count: number;
   matching_reference_count?: number;
 }
 export interface CharacterConfirmationResult {
-  scope_id: string; asset_id: string; roles: CharacterConfirmationRole[];
+  scope_id: string; asset_id: string; roster_revision: number; roles: CharacterConfirmationRole[];
   summary: { total: number; confirmed: number; skipped: number; pending: number; candidates: number };
   sampling: null | { status: 'running' | 'completed' | 'failed' | 'unavailable' | 'interrupted'; completed: number; total: number; error?: string; asset_id: string };
   guidance?: string; sampling_available?: boolean; sampling_unavailable_reason?: string;

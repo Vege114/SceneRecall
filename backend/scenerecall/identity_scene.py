@@ -26,12 +26,24 @@ def project_audio_evidence(evidence, current_records):
     return result
 
 
+def recognition_match(match, excluded):
+    """Apply the run's roster to a cached or manually reviewed region."""
+    if match.get("character_id") in excluded or match.get("candidate_character_id") in excluded:
+        return {"status": "unknown", "source": "recognition_selection", "character_id": None,
+                "candidate_character_id": None, "candidates": [], "reason": "该角色未加入本次识别名单"}
+    return {**match, **{key: [row for row in match[key] if row.get("character_id") not in excluded]
+                        for key in ("candidates", "reference_evidence") if key in match}}
+
+
 def identity_context(context, result, frames, *, top_k=5):
     context = copy.deepcopy(context)
     if not result or result.get("status") != "completed":
         return context
     current = {frame["id"] for frame in frames}
     regions = [row for row in result.get("regions", []) if row["frame_id"] in current]
+    excluded = set(context.get("recognition_excluded_ids", []))
+    if excluded:
+        regions = [{**row, "match": recognition_match(row.get("match", {}), excluded)} for row in regions]
     ranked = {}
     for region in regions:
         match = region.get("match", {})

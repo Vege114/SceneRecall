@@ -2,6 +2,14 @@
 
 Internal records and REST use snake_case. Time is integer milliseconds relative to asset start. Source data are versioned JSON; all indexes disposable. Engineering tests use generated fixtures and provider doubles. Real media/model validation is recorded separately in `VALIDATION.md` and is not inferred from synthetic tests.
 
+## Character recognition selection (2026-11-11)
+
+`GET /api/assets/{asset_id}/identity/confirmation` returns the complete permitted cast. Each role has a boolean `recognition_enabled` flag. Summary counts and annotation candidates cover the selected roles. `roster_revision` identifies the character registry version and `revision` identifies the annotation decisions version.
+
+`PUT /api/assets/{asset_id}/identity/confirmation/selection` accepts `{scope_id, expected_revision, character_ids}` and returns the updated confirmation queue. Send the scope and **roster_revision** from the queue and the complete set of selected local character IDs. An empty list selects nobody. Foreign or duplicate IDs fail the whole write. A stale registry or changed scope returns HTTP 409. Episodes sharing a character registry share each character's selection. Older profiles and newly imported roles default to enabled.
+
+The registry revision advances when the selection changes. Unified tasks validate the selected profiles at continuation, before inference. Previously saved human annotations and references remain available for inspection and reuse. The operator workflow is described in the [character confirmation guide](CHARACTER_CONFIRMATION_QUEUE.md).
+
 ## Sampled images and offline archives (2026-11-11)
 
 `GET /api/assets/{id}/frames/{frame_id}` returns registered evidence image bytes. Source-backed JPEGs carry a source fingerprint and reconstruction parameters. Migrated samples also carry the original JPEG hash. The resolver verifies the decoded image before publication and can share bounded, temporary images between readers. Legacy archived images and explicit user evidence are supported. `GET /api/assets/{id}/preview?at_ms=…` provides a timeline illustration for results without a registered picture. Search and episode views request their visible images automatically.

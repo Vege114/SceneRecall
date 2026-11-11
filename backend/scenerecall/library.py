@@ -823,10 +823,14 @@ class Library:
         except (KeyError, TypeError, ZeroDivisionError, OverflowError) as exc:
             raise ValueError("关键帧计划格式无效") from exc
 
+    def _raw_annotations(self, asset_id: str) -> list[dict]:
+        return sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")],
+                      key=lambda row: row["updated_at"])
+
     def annotations(self, asset_id: str, *, record_ids=None) -> list[dict]:
         from .scenes import SceneStore
         from .retrieval_store import RetrievalStore
-        annotations = sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")], key=lambda a: a["updated_at"])
+        annotations = self._raw_annotations(asset_id)
         if record_ids is not None:
             annotations = [row for row in annotations if row["record_id"] in record_ids]
         if not annotations:
@@ -836,7 +840,7 @@ class Library:
         annotated_ids = {row["record_id"] for row in annotations}
         records = {r["id"]: r for r in self.observations(asset_id, record_ids=annotated_ids) + self.subtitles(asset_id)
                    + SceneStore(self)._raw(asset_id, record_ids=annotated_ids)
-                   + RetrievalStore(self).records(asset_id, record_ids=annotated_ids)}
+                   + RetrievalStore(self).records(asset_id, record_ids=annotated_ids, _annotations=annotations)}
         for annotation in annotations:
             record = records.get(annotation["record_id"])
             annotation["needs_reassociation"] = record is None or bool(annotation.get("character_name") and annotation.get("base_run_id") != record.get("run_id"))
@@ -889,6 +893,10 @@ class Library:
                     decision = reviewed["match"]
                     annotation["identity_review"] = {"region_id": region_id, "character_id": matches[0]["id"],
                         "version": decision["version"], "status": "confirmed", "source": "human"}
+                    if record.get("evidence_type") == "retrieval_window" and record.get("recognition_excluded_ids"):
+                        # Independent matching can replace a window's identity evidence without changing its run ID.
+                        annotation["identity_review"]["window_run_id"] = record["run_id"]
+                        annotation["identity_review"]["local_identity_id"] = record.get("local_identity", {}).get("id")
             if payload.get("favorite") or payload.get("character_name"):
                 from .record_previews import preserve_record
                 annotation.update(preserve_record(self, asset_id, record, preview_frame or previous.get("preview_frame_id")))
@@ -960,7 +968,7 @@ class Library:
                     audio = [row for row in audio if row["id"] in record_ids]
                 phase.set(record_count=len(audio))
             with trace_span("records.retrieval") as phase:
-                retrieval = RetrievalStore(self).records(asset["id"], record_ids=record_ids)
+                retrieval = RetrievalStore(self).records(asset["id"], record_ids=record_ids, _annotations=annotations)
                 phase.set(record_count=len(retrieval))
             with trace_span("records.assemble", input_count=len(observations) + len(scenes) + len(retrieval)
                             + len(subtitles) + len(audio)) as phase:

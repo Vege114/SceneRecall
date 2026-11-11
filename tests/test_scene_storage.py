@@ -149,6 +149,35 @@ def test_subtitle_correction_changes_dependency_but_note_does_not(store):
     assert store.get("asset_one", row["id"])["context_stale"]
 
 
+def test_legacy_scene_revisions_ignore_only_consecutive_recognition_selection_changes(store):
+    characters = CharacterStore(store.library)
+
+    def publish(start, end):
+        revision = characters.roster("asset_one")["revision"]
+        item = chunk(start, end, dependencies={"character_revision": revision})
+        saved = store.publish("asset_one", f"run_{start}", [item], start, end)[0]
+        assert "character_semantic_revision" not in saved["dependencies"]
+        assert "selection_only_revisions" not in saved["dependencies"]
+
+    def select(ids):
+        roster = characters.roster("asset_one")
+        characters.set_recognition_selection("asset_one", ids, expected_scope=roster["scope_id"],
+                                             expected_revision=roster["revision"])
+
+    publish(0, 4000)
+    role = characters.create("asset_one", {"name": "合成角色"})
+    publish(4000, 8000)
+    select([])
+    publish(8000, 10000)
+    select([role["id"]])
+    reopened = SceneStore(Library(store.library.root))
+    assert [row["context_stale"] for row in reopened.list("asset_one")] == [True, False, False]
+
+    characters.update("asset_one", role["id"], {"description": "人工更新的角色特征"})
+    select([])
+    assert all(row["context_stale"] for row in reopened.list("asset_one"))
+
+
 def test_dynamic_subtitle_human_and_membership_staleness_without_mutating_results(store):
     library = store.library
     row = store.publish("asset_one", "run_first", [chunk()], 0, 10000)[0]

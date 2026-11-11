@@ -66,7 +66,7 @@ class RetrievalStore:
             atomic_json(active_path, active)
         return record
 
-    def records(self, asset_id, *, record_ids=None):
+    def records(self, asset_id, *, record_ids=None, _annotations=None):
         with trace_span("retrieval.load_validate") as phase:
             active = read_json(self.directory(asset_id) / "active.json", {"units": {}})
             result = []
@@ -85,7 +85,8 @@ class RetrievalStore:
                     if observation is None or digest(observation) != observed["digest"] or observation["unit_id"] != identity:
                         raise ValueError("局部观察激活引用无效")
                     record = {**record, **{key: observation[key] for key in ("summary", "entities", "events",
-                        "spatial_observations", "uncertainties", "identity_policy", "provenance") if key in observation}}
+                        "spatial_observations", "uncertainties", "identity_policy", "recognition_excluded_ids",
+                        "provenance") if key in observation}}
                 if entry.get("identity"):
                     timing_count("identity_sidecar_count")
                     from .retrieval_identity import merge
@@ -101,7 +102,10 @@ class RetrievalStore:
                     result.append(copy.deepcopy(record))
             phase.set(record_count=len(result))
         from .identity_bindings import resolve_observations
-        return resolve_observations(self.library, asset_id, sorted(result, key=lambda row: (row["start_ms"], row["id"])))
+        if _annotations is None and any(row.get("recognition_excluded_ids") for row in result):
+            _annotations = self.library._raw_annotations(asset_id)
+        return resolve_observations(self.library, asset_id, sorted(result, key=lambda row: (row["start_ms"], row["id"])),
+                                    annotations=_annotations)
 
     def windows(self, asset_id):
         """Read immutable source windows without applying any derived identity state."""
