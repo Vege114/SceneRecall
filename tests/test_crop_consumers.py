@@ -88,7 +88,10 @@ def test_confirmation_without_crop_keeps_queue_and_promotes_independent_referenc
     assert crop_files(service) == []
     monkeypatch.setattr(service.pipeline.backend, "detect", lambda *args: pytest.fail("queue ran detection"))
     monkeypatch.setattr(service.pipeline.backend, "feature", lambda *args: pytest.fail("queue ran CCIP"))
-    candidate = service.queue("asset_one")["roles"][0]["candidates"][0]
+    queue = service.queue("asset_one")
+    assert queue["roles"][0]["candidates"] == []
+    candidate = queue["review_pool"][0]
+    assert candidate["confidence_state"] == "uncalibrated"
     assert candidate["region_id"] == result["regions"][0]["id"]
     service.decide("asset_one", character_id, action="confirm", source_asset_id="asset_one",
                    region_id=candidate["region_id"], single_character=True, use_as_reference=True)

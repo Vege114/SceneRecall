@@ -49,10 +49,9 @@ it('lets a waiting job continue with an explicitly empty recognition list', asyn
   });
   setup();
   fireEvent.click(screen.getByRole('button', { name: '确认角色并继续' }));
-  fireEvent.click(await screen.findByRole('button', { name: '选择识别角色' }));
-  fireEvent.click(screen.getByRole('button', { name: '清空名单' }));
-  expect(screen.queryByRole('button', { name: '继续任务' })).toBeNull();
-  fireEvent.click(screen.getByRole('button', { name: '保存识别名单' }));
+  fireEvent.click(await screen.findByRole('button', { name: '取消当前显示' }));
+  expect((screen.getByRole('button', { name: '继续任务' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: '保存名单并生成候选' }));
   await screen.findByText('本作品未选择识别角色');
   expect(screen.queryByRole('button', { name: '暂时跳过这个角色' })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: '继续任务' }));

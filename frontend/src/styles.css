@@ -237,3 +237,22 @@ fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.7}.o
 .recognition-selection-list .check-line:has(input:checked) { border-color: #a7b99c; background: #edf3e7; }
 .recognition-selection-list small { display: block; margin-top: 2px; color: #748469; }
 .recognition-selection > .button-row { justify-content: flex-end; }
+.recognition-selection-list { grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 10px; max-height: 42vh; }
+.recognition-role-card { display: flex; gap: 11px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--paper); min-width: 0; }
+.recognition-role-card.target-selected { border-color: #a7b99c; background: #edf3e7; }
+.recognition-role-card.reviewing { box-shadow: inset 0 0 0 1px #6c8b5b; }
+.recognition-role-card > img, .recognition-avatar-placeholder { width: 64px; height: 80px; flex: 0 0 64px; object-fit: contain; border-radius: 5px; background: #e8eddf; }
+.recognition-avatar-placeholder { display: grid; place-items: center; color: #859279; }
+.recognition-role-content { display: flex; flex-direction: column; align-items: start; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.recognition-selection-list .recognition-role-content .check-line { padding: 0; border: 0; background: transparent; }
+.recognition-role-content .helper { font-size: 11px; }
+.recognition-selection > .button-row { margin-top: 14px; flex-wrap: wrap; }
+.confirmation-review-pool { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+.confirmation-review-pool > .section-row { margin-bottom: 14px; gap: 12px; flex-wrap: wrap; }
+.confirmation-review-pool > .confirmation-candidate-grid { grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); }
+.confirmation-pool-item { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: #f7f9f2; min-width: 0; }
+.confirmation-pool-item > .field { display: flex; flex-direction: column; gap: 5px; margin: 9px 0 12px; font-size: 12px; }
+.confirmation-pool-item > .button { margin-top: 12px; width: 100%; }
+.confirmation-pool-profile { display: flex; gap: 9px; align-items: start; margin-bottom: 12px; font-size: 12px; }
+.confirmation-pool-profile > img { width: 60px; height: 75px; object-fit: contain; border-radius: 4px; background: #e8eddf; }
+.confirmation-pool-profile .helper { font-size: 11px; margin-top: 4px; }

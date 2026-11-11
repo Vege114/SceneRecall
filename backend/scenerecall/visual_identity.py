@@ -560,7 +560,7 @@ class VisualIdentityPipeline:
         started = time.monotonic()
         asset = self.library.get_asset(asset_id)
         result = {"asset_id": asset_id, "status": "disabled", "regions": [], "selected_profiles": [], "references": [],
-                  "crop_retention": retention,
+                  "model": config.get("model", DEFAULT_MODEL), "crop_retention": retention,
                   "metrics": {"model_load_ms": 0, "detection_ms": 0, "feature_ms": 0, "matching_ms": 0,
                               "feature_extractions": 0, "feature_cache_hits": 0, "detection_calls": 0,
                               "detection_cache_hits": 0, "rejected_references": 0, "total_ms": 0,
@@ -580,6 +580,7 @@ class VisualIdentityPipeline:
             load_start = time.monotonic()
             backend = self.backend or _backend(config.get("model", DEFAULT_MODEL))
             version = backend.model_version
+            result["model_version"] = version
             metrics["model_load_ms"] = round((time.monotonic() - load_start) * 1000)
             proposed_references = self.gallery.matching(asset_id, _catalog=catalog)
             references = []
@@ -604,7 +605,9 @@ class VisualIdentityPipeline:
                 detected = read_json(detection_path)
                 if detected is None:
                     step_start = time.monotonic()
-                    detected = {"detections": backend.detect(reference["path"])}
+                    detected = {"detections": backend.detect(reference["path"]),
+                                "reference_sha256": reference["sha256"], "model": config.get("model", DEFAULT_MODEL),
+                                "model_version": version, "preprocessing": PREPROCESS_VERSION}
                     metrics["detection_calls"] += 1
                     metrics["detection_ms"] += round((time.monotonic() - step_start) * 1000)
                     atomic_json(detection_path, detected)

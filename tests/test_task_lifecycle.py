@@ -166,13 +166,14 @@ def test_legacy_tasks_keep_previous_execution_without_new_human_gate(lifecycle):
     assert [kind for kind, _ in calls] == ["analyze"]
 
 
-def test_review_continuation_rejects_changed_source_and_active_sampling(lifecycle, monkeypatch):
+@pytest.mark.parametrize("sampling_status", ["running", "cancelling"])
+def test_review_continuation_rejects_changed_source_and_active_sampling(lifecycle, monkeypatch, sampling_status):
     app, client, queue, _calls = lifecycle
     role = app.state.characters.create("first", {"name": "合成角色"})
     job = submit(client)
     run(queue, job)
     app.state.character_confirmation.decide("first", role["id"], action="skip")
-    monkeypatch.setattr(app.state.character_confirmation, "sampling", lambda _: {"status": "running"})
+    monkeypatch.setattr(app.state.character_confirmation, "sampling", lambda _: {"status": sampling_status})
     result = client.post(f"/api/jobs/{job['id']}/continue")
     assert result.status_code == 400 and "采样" in result.json()["detail"]
     assert queue.get(job["id"])["status"] == "waiting_input"
@@ -181,7 +182,8 @@ def test_review_continuation_rejects_changed_source_and_active_sampling(lifecycl
     assert client.post(f"/api/jobs/{job['id']}/continue").status_code == 400
 
 
-def test_automatic_gate_waits_for_running_sampler_and_same_work_continue(lifecycle, monkeypatch):
+@pytest.mark.parametrize("sampling_status", ["running", "cancelling"])
+def test_automatic_gate_waits_for_running_sampler_and_same_work_continue(lifecycle, monkeypatch, sampling_status):
     app, client, queue, calls = lifecycle
     role = app.state.characters.create("first", {"name": "同作品角色"})
     first = submit(client)
@@ -191,7 +193,7 @@ def test_automatic_gate_waits_for_running_sampler_and_same_work_continue(lifecyc
     assert run(queue, second)["status"] == "waiting_input"
     assert [kind for kind, _ in calls] == ["scan", "scan"]
     queue.control(first["id"], "cancel")
-    monkeypatch.setattr(app.state.character_confirmation, "sampling", lambda _: {"status": "running"})
+    monkeypatch.setattr(app.state.character_confirmation, "sampling", lambda _: {"status": sampling_status})
     queue.control(second["id"], "pause")
     queue.control(second["id"], "resume")
     assert run(queue, second)["status"] == "waiting_input"

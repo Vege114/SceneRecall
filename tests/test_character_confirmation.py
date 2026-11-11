@@ -24,6 +24,13 @@ def prepared(visual, times=(200, 6000, 12000, 18000)):
     return service, identity
 
 
+def choices(queue, identity=None):
+    """Explicitly reviewable crops include unassigned candidates in the pool."""
+    identity = identity or queue["roles"][0]["character_id"]
+    role = next(row for row in queue["roles"] if row["character_id"] == identity)
+    return [*role["candidates"], *(row for row in queue["review_pool"] if identity in row["eligible_character_ids"])]
+
+
 def candidate_args(candidate):
     return {"source_asset_id": candidate["asset_id"], "region_id": candidate["region_id"]}
 
@@ -33,7 +40,7 @@ def confirm(service, identity, candidate):
                    **candidate_args(candidate))
 
 
-def test_queue_reuses_work_regions_diversifies_stored_shots_without_inference(visual, monkeypatch):
+def test_queue_reuses_work_regions_in_uncalibrated_pool_without_inference(visual, monkeypatch):
     service, identity = prepared(visual)
     library = service.library
     asset = library.get_asset("asset_one")
@@ -51,13 +58,14 @@ def test_queue_reuses_work_regions_diversifies_stored_shots_without_inference(vi
     queue = service.queue("asset_one")
     role = queue["roles"][0]
     assert role["character_id"] == identity
-    assert role["available_count"] == 5
-    assert len(role["candidates"]) == 2
-    assert {row["asset_id"] for row in role["candidates"]} == {"asset_one", "asset_two"}
-    assert all("crop_path" not in row for row in role["candidates"])
+    assert role["available_count"] == 0
+    assert queue["review_pool_count"] == 5
+    assert {row["asset_id"] for row in queue["review_pool"]} == {"asset_one", "asset_two"}
+    assert all("crop_path" not in row for row in queue["review_pool"])
+    assert all(row["confidence_state"] == "uncalibrated" for row in queue["review_pool"])
 
 
-def test_queue_exposes_shared_crop_rank_and_missing_reference_without_inference(visual, monkeypatch):
+def test_queue_exposes_one_unassigned_crop_raw_topk_and_missing_reference_without_inference(visual, monkeypatch):
     service, first = prepared(visual, times=(200,))
     second = add_role(visual[1], "Second")
     add_reference(visual[2], second)
@@ -66,18 +74,19 @@ def test_queue_exposes_shared_crop_rank_and_missing_reference_without_inference(
     monkeypatch.setattr(service.pipeline.backend, "detect", lambda *args: pytest.fail("queue must not run detection"))
     monkeypatch.setattr(service.pipeline.backend, "feature", lambda *args: pytest.fail("queue must not run CCIP"))
     roles = {row["character_id"]: row for row in service.queue("asset_one")["roles"]}
-    choices = [roles[identity]["candidates"][0] for identity in (first, second)]
-    assert choices[0]["region_id"] == choices[1]["region_id"]
-    assert {row["candidate_rank"] for row in choices} == {1, 2}
-    assert all(row["candidate_total"] == 2 for row in choices)
+    queue = service.queue("asset_one")
+    assert len(queue["review_pool"]) == 1
+    crop = queue["review_pool"][0]
+    assert len(crop["raw_candidates"]) == crop["candidate_total"] == 2
+    assert set(crop["eligible_character_ids"]) == {first, second, missing}
+    assert all(role["candidates"] == [] for role in roles.values())
     assert roles[first]["matching_reference_count"] == roles[second]["matching_reference_count"] == 1
-    assert roles[missing]["matching_reference_count"] == 0
-    assert roles[missing]["candidates"] == []
+    assert roles[missing]["coverage"]["status"] == "missing_reference"
 
 
 def test_confirm_is_explicit_idempotent_and_does_not_propagate(visual):
     service, identity = prepared(visual)
-    original = service.queue("asset_one")["roles"][0]["candidates"]
+    original = choices(service.queue("asset_one"))
     chosen = original[0]
     with pytest.raises(ValueError, match="同意"):
         service.decide("asset_one", identity, action="confirm", **candidate_args(chosen))
@@ -104,16 +113,16 @@ def test_confirm_is_explicit_idempotent_and_does_not_propagate(visual):
 
 def test_reject_unclear_skip_survive_restart_without_altering_identity(visual):
     service, identity = prepared(visual)
-    original = service.queue("asset_one")["roles"][0]["candidates"]
+    original = choices(service.queue("asset_one"))
     service.decide("asset_one", identity, action="reject", **candidate_args(original[0]))
     service.decide("asset_one", identity, action="unclear", **candidate_args(original[1]))
     service.decide("asset_one", identity, action="skip")
     fresh = CharacterConfirmation(service.library)
     queue = fresh.queue("asset_one")
     assert queue["summary"]["skipped"] == 1
-    assert queue["roles"][0]["available_count"] == 2
+    assert queue["roles"][0]["coverage"]["review_pool_count"] == 2
     assert all(row["region_id"] not in {original[0]["region_id"], original[1]["region_id"]}
-               for row in queue["roles"][0]["candidates"])
+               for row in choices(queue))
     assert not (service.pipeline._directory("asset_one") / "decisions.json").exists()
     fresh.decide("asset_one", identity, action="resume")
     assert fresh.queue("asset_one")["summary"]["pending"] == 1
@@ -121,7 +130,7 @@ def test_reject_unclear_skip_survive_restart_without_altering_identity(visual):
 
 def test_confirmation_rejects_scope_conflicts_and_changed_pixels(visual):
     service, identity = prepared(visual)
-    chosen = service.queue("asset_one")["roles"][0]["candidates"][0]
+    chosen = choices(service.queue("asset_one"))[0]
     other_role = add_role(visual[1], "Other")
     service.pipeline.review("asset_one", chosen["region_id"], status="confirmed", character_id=other_role, reason="human")
     with pytest.raises(ValueError, match="另一角色"):
@@ -140,7 +149,7 @@ def test_confirmation_rejects_scope_conflicts_and_changed_pixels(visual):
 
 def test_failed_search_projection_retains_recoverable_candidate_and_reuses_reference(visual):
     service, identity = prepared(visual)
-    chosen = service.queue("asset_one")["roles"][0]["candidates"][0]
+    chosen = choices(service.queue("asset_one"))[0]
     class BrokenSearch:
         def sync_asset(self, *args):
             raise RuntimeError("search interrupted")
@@ -149,7 +158,7 @@ def test_failed_search_projection_retains_recoverable_candidate_and_reuses_refer
         confirm(service, identity, chosen)
     queue = service.queue("asset_one")
     assert queue["roles"][0]["status"] == "pending"
-    assert any(row["recovery_required"] for row in queue["roles"][0]["candidates"])
+    assert any(row["recovery_required"] for row in choices(queue))
     assert len(service.gallery.trusted("asset_one")) == 2
     service.search = None
     confirm(service, identity, chosen)
@@ -159,7 +168,7 @@ def test_failed_search_projection_retains_recoverable_candidate_and_reuses_refer
 
 def test_retry_never_overwrites_later_manual_correction(visual):
     service, identity = prepared(visual)
-    chosen = service.queue("asset_one")["roles"][0]["candidates"][0]
+    chosen = choices(service.queue("asset_one"))[0]
     confirm(service, identity, chosen)
     service.pipeline.review("asset_one", chosen["region_id"], status="unknown", reason="later human correction")
     with pytest.raises(ValueError, match="人工修改"):
@@ -169,12 +178,13 @@ def test_retry_never_overwrites_later_manual_correction(visual):
 
 def test_normal_review_unknown_and_revoked_reference_do_not_reappear(visual):
     service, identity = prepared(visual, times=(200, 6000))
-    chosen = service.queue("asset_one")["roles"][0]["candidates"][0]
+    chosen = choices(service.queue("asset_one"))[0]
     service.pipeline.review("asset_one", chosen["region_id"], status="unknown", reason="not identifiable")
-    assert service.queue("asset_one")["roles"][0]["available_count"] == 1
+    assert service.queue("asset_one")["roles"][0]["coverage"]["review_pool_count"] == 1
     reference = service.gallery.trusted("asset_one")[0]
     service.gallery.update("asset_one", identity, reference["id"], status="revoked", reason="wrong character")
     assert service.queue("asset_one")["roles"][0]["available_count"] == 0
+    assert service.queue("asset_one")["roles"][0]["coverage"]["status"] == "missing_reference"
 
 
 def test_sampling_is_bounded_local_candidate_only_and_reuses_existing_frame(visual, monkeypatch):
@@ -252,13 +262,13 @@ def test_sampling_reuses_pixels_without_downgrading_calibrated_canonical_region(
     assert len(sampled) == 1 and sampled[0]["match"]["status"] == "candidate"
 
 
-def test_retrieval_plan_shots_prevent_repeated_same_shot_candidates(visual):
+def test_retrieval_plan_shots_remain_available_for_review_pool_audit(visual):
     service, _identity = prepared(visual)
     atomic_json(service.library.asset_dir("asset_one") / "retrieval" / "plans" / "plan.json", {
         "source_fingerprint": "synthetic-video", "frames": [],
         "shots": [{"id": "long_shot", "start_ms": 0, "end_ms": 19000}]})
-    candidates = service.queue("asset_one")["roles"][0]["candidates"]
-    assert len(candidates) == 1 and candidates[0]["shot_id"] == "long_shot"
+    candidates = choices(service.queue("asset_one"))
+    assert len(candidates) == 4 and all(row["shot_id"] == "long_shot" for row in candidates)
 
 
 @pytest.mark.asyncio
@@ -271,7 +281,7 @@ async def test_confirmation_api_contract_and_limits(visual):
         queue = (await client.get(base)).json()
         assert queue["summary"]["total"] == 1
         assert (await client.get(base + "/sampling")).json() == {"sampling": None}
-        chosen = queue["roles"][0]["candidates"][0]
+        chosen = choices(queue)[0]
         response = await client.post(base + f"/characters/{identity}/decision", json={
             "action": "confirm", "single_character": True, "use_as_reference": True, **candidate_args(chosen)})
         assert response.status_code == 200 and response.json()["summary"]["confirmed"] == 1
@@ -281,7 +291,7 @@ async def test_confirmation_api_contract_and_limits(visual):
 
 def test_confirm_rechecks_quality_and_does_not_upgrade_group_crop(visual):
     service, identity = prepared(visual)
-    chosen = service.queue("asset_one")["roles"][0]["candidates"][0]
+    chosen = choices(service.queue("asset_one"))[0]
     path = service.pipeline._directory("asset_one") / "regions" / f"{chosen['region_id']}.json"
     row = deepcopy(read_json(path))
     row["quality"].update(accepted=False, single_character=False, person_count=2)

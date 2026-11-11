@@ -61,7 +61,7 @@ class TaskLifecycleMixin:
                            total=review["summary"]["total"], revision=review["revision"], completed_at=now())
 
     def _review_requires_input(self, job, review):
-        if review["summary"]["pending"] or (review.get("sampling") or {}).get("status") == "running":
+        if review["summary"]["pending"] or (review.get("sampling") or {}).get("status") in {"running", "cancelling"}:
             return True
         # A later episode must not bypass a work's explicit continuation just
         # because its last role decision was saved while the earlier episode
@@ -126,7 +126,7 @@ class TaskLifecycleMixin:
             review = self._confirmation_service().queue(job["asset_id"])
             if review["summary"]["pending"]:
                 raise ValueError("请先确认或明确跳过所有待核对角色，再继续任务")
-            if (review.get("sampling") or {}).get("status") == "running":
+            if (review.get("sampling") or {}).get("status") in {"running", "cancelling"}:
                 raise ValueError("本地角色采样尚未完成，请完成后继续任务")
             self._finish_character_confirmation(job_id, review)
             result = self.update(job_id, status="queued", message="角色核对完成，等待继续分析")

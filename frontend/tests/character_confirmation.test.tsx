@@ -55,21 +55,19 @@ describe('Pre-analysis character confirmation', () => {
     });
     const { user, onSaved } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
-    await user.click(screen.getAllByRole('checkbox')[0]);
-    await user.click(screen.getByRole('button', { name: '选择识别角色' }));
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.type(screen.getByRole('searchbox'), '小春');
-    await user.click(screen.getByRole('checkbox', { name: /小春/ }));
-    await user.click(screen.getByRole('button', { name: '保存识别名单' }));
-    await screen.findByText('已保存本作品的识别名单。');
+    await user.click(screen.getByRole('checkbox', { name: '识别小春' }));
+    await user.click(screen.getByRole('button', { name: '保存名单并生成候选' }));
+    await screen.findByText(/已保存本作品的识别名单/);
     expect(screen.queryByRole('button', { name: /小春 待确认/ })).toBeNull();
     expect(screen.getByText('正片里，哪个是小夏？')).toBeTruthy();
     expect(screen.getByRole('button', { name: '提交全部已核对 1 张' })).toBeTruthy();
     expect(onSaved).toHaveBeenCalledOnce();
-    await user.click(screen.getByRole('button', { name: '选择识别角色' }));
-    expect((screen.getByRole('checkbox', { name: /小春/ }) as HTMLInputElement).checked).toBe(false);
-    await user.click(screen.getByRole('button', { name: '全选角色' }));
+    expect((screen.getByRole('checkbox', { name: '识别小春' }) as HTMLInputElement).checked).toBe(false);
+    await user.click(screen.getByRole('button', { name: '全选当前显示' }));
     await user.click(screen.getByRole('button', { name: '取消修改' }));
     expect(screen.queryByRole('button', { name: /小春 待确认/ })).toBeNull();
     expect(fetch.mock.calls.filter(([, options]) => options?.method === 'PUT')).toHaveLength(1);
@@ -86,17 +84,17 @@ describe('Pre-analysis character confirmation', () => {
       return state;
     });
     const { user, onSaved } = setup();
-    await user.click(await screen.findByRole('button', { name: '选择识别角色' }));
-    await user.click(screen.getByRole('button', { name: '清空名单' }));
-    await user.click(screen.getByRole('button', { name: '保存识别名单' }));
-    await screen.findByText('识别名单已更新，请重新读取');
+    await screen.findByRole('checkbox', { name: '识别小夏' });
+    await user.click(screen.getByRole('button', { name: '取消当前显示' }));
+    await user.click(screen.getByRole('button', { name: '保存名单并生成候选' }));
+    await screen.findByText(/识别名单已更新，请重新读取/);
     expect(onSaved).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: '重新读取确认进度' }));
-    await waitFor(() => expect((screen.getByRole('checkbox', { name: /小春/ }) as HTMLInputElement).checked).toBe(true));
-    expect((screen.getByRole('checkbox', { name: /小夏/ }) as HTMLInputElement).checked).toBe(false);
+    await waitFor(() => expect((screen.getByRole('checkbox', { name: '识别小春' }) as HTMLInputElement).checked).toBe(true));
+    expect((screen.getByRole('checkbox', { name: '识别小夏' }) as HTMLInputElement).checked).toBe(false);
   });
 
-  it('explains shared suggestions, saved rank and a role with no local matching reference', async () => {
+  it('explains unique assignments, saved rank and a role with no local matching reference', async () => {
     const state = initial();
     state.roles[0].matching_reference_count = 1;
     state.roles[0].candidates = [{ ...candidate(1), candidate_rank: 6, candidate_total: 12, distance: 0.321513 }];
@@ -104,7 +102,7 @@ describe('Pre-analysis character confirmation', () => {
     mockApi(() => state);
     const { user } = setup();
     await screen.findByText(/第 6 \/ 12 名/);
-    expect(screen.getByText(/同一裁剪可出现在多个角色列表/)).toBeTruthy();
+    expect(screen.getByText(/每张裁剪只归属一个最佳匹配角色/)).toBeTruthy();
     expect(screen.getByText(/匹配距离 0.3215/)).toBeTruthy();
     expect(screen.getByText(/另有排名更前的角色/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
@@ -125,7 +123,7 @@ describe('Pre-analysis character confirmation', () => {
     const calls = fetch.mock.calls.filter((call) => call[0].endsWith('/cache-bangumi'));
     expect(JSON.parse(calls[0][1]!.body as string)).toEqual({ max_images: 20 });
     expect(JSON.parse(calls[1][1]!.body as string)).toEqual({ max_images: 20, cursor: 'a'.repeat(24) });
-    expect(screen.getAllByRole('checkbox').every((element) => !(element as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getAllByRole('checkbox', { name: /已核对/ }).every((element) => !(element as HTMLInputElement).checked)).toBe(true);
   });
 
   it('submits all three checked crops once and leaves replacement candidates unchecked', async () => {
@@ -133,11 +131,11 @@ describe('Pre-analysis character confirmation', () => {
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? pending.promise : initial());
     const { user, onSaved } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    for (const checkbox of screen.getAllByRole('checkbox')) await user.click(checkbox);
+    for (const checkbox of screen.getAllByRole('checkbox', { name: /已核对/ })) await user.click(checkbox);
     await user.click(screen.getByRole('button', { name: '确认所选 3 张并用作参考' }));
     expect(within(screen.getByRole('list', { name: '逐项保存结果' })).getAllByText(/保存中/)).toHaveLength(3);
     expect(onSaved).not.toHaveBeenCalled();
-    expect(screen.getAllByRole('checkbox').every((element) => (element as HTMLInputElement).disabled)).toBe(true);
+    expect(screen.getAllByRole('checkbox', { name: /已核对/ }).every((element) => (element as HTMLInputElement).disabled)).toBe(true);
     expect((screen.getByRole('button', { name: '保存进度并返回' }) as HTMLButtonElement).disabled).toBe(true);
     const calls = fetch.mock.calls.filter((call) => call[1]?.method === 'POST');
     expect(calls).toHaveLength(1); expect(calls[0][0]).toBe(`${endpoint}/characters/c1/confirm-batch`);
@@ -148,7 +146,7 @@ describe('Pre-analysis character confirmation', () => {
     await act(async () => { pending.resolve(batchSuccess(queue, calls[0][1])); });
     expect(screen.getByText(/已确认「小夏」的 3 \/ 3 张所选裁剪/)).toBeTruthy();
     expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getAllByRole('checkbox').every((element) => !(element as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getAllByRole('checkbox', { name: /已核对/ }).every((element) => !(element as HTMLInputElement).checked)).toBe(true);
     expect(onSaved).toHaveBeenCalledOnce();
   });
 
@@ -166,11 +164,11 @@ describe('Pre-analysis character confirmation', () => {
     });
     const { user, onSaved } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    for (const checkbox of screen.getAllByRole('checkbox')) await user.click(checkbox);
+    for (const checkbox of screen.getAllByRole('checkbox', { name: /已核对/ })) await user.click(checkbox);
     await user.click(screen.getByRole('button', { name: '确认所选 3 张并用作参考' }));
     expect(await screen.findByText(/已确认「小夏」的 2 \/ 3 张所选裁剪/)).toBeTruthy();
     expect(screen.getByText('确认失败：索引暂不可用')).toBeTruthy();
-    const cards = screen.getAllByRole('article');
+    const cards = screen.getAllByRole('article', { name: /的候选$/ });
     expect(within(cards[0]).getByText('第二集')).toBeTruthy();
     expect((within(cards[0]).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
     expect(cards.slice(1).every((card) => !(within(card).getByRole('checkbox') as HTMLInputElement).checked)).toBe(true);
@@ -193,18 +191,18 @@ describe('Pre-analysis character confirmation', () => {
       return state;
     });
     const { user } = setup(); await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
     expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole('button', { name: /^小夏 待确认/ }));
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).checked).toBe(true);
     await user.click(screen.getByRole('button', { name: '看不清／换一组' }));
     await screen.findByText('已换过这组候选，新的候选会优先展示。');
     expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/未能取得本次确认结果/);
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).checked).toBe(true);
     await user.click(screen.getByRole('button', { name: '重新读取确认进度' }));
     await waitFor(() => expect(fetch.mock.calls.filter((call) => call[0] === endpoint)).toHaveLength(2));
     expect((screen.getByRole('button', { name: '确认所选 1 张并用作参考' }) as HTMLButtonElement).disabled).toBe(false);
@@ -214,14 +212,14 @@ describe('Pre-analysis character confirmation', () => {
     const pending = deferred<CharacterConfirmationBatchResult>();
     mockApi((_url, options) => options?.method === 'POST' ? pending.promise : initial());
     const { user, onSaved } = setup(); await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     fireEvent.error(screen.getByAltText('小夏的待确认正片裁剪 00:00:05'));
     await act(async () => { pending.resolve({ queue: initial(), summary: { requested: 1, confirmed: 0, failed: 1 }, results: [
       { source_asset_id: 'ep-one', region_id: 'r1', status: 'failed', error: '索引同步失败', recovery_required: true },
     ] }); });
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(false);
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).checked).toBe(false);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
     expect(onSaved).toHaveBeenCalledOnce();
     expect(screen.queryByText(/已确认「小夏」的/)).toBeNull();
@@ -230,10 +228,10 @@ describe('Pre-analysis character confirmation', () => {
   it('keeps selections and invalidates outer data when a response is lost without claiming success', async () => {
     mockApi((_url, options) => { if (options?.method === 'POST') throw new Error('connection closed'); return initial(); });
     const { user, onSaved } = setup(); await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/未能取得本次确认结果/);
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).checked).toBe(true);
     expect(onSaved).toHaveBeenCalledOnce();
     expect(screen.queryByText(/已确认「小夏」的/)).toBeNull();
   });
@@ -253,7 +251,7 @@ describe('Pre-analysis character confirmation', () => {
     const { user, onClose } = setup(asset, refresh);
     await screen.findByText('正片里，哪个是小夏？');
     for (let i = 0; i < 2; i += 1) {
-      const card = within(screen.getAllByRole('article')[0]);
+      const card = within(screen.getAllByRole('article', { name: /的候选$/ })[0]);
       await user.click(card.getByRole('checkbox'));
       await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
       await screen.findByText(`可信参考 ${i + 1} 张`);
@@ -274,7 +272,7 @@ describe('Pre-analysis character confirmation', () => {
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? batchSuccess(initial(), options) : initial());
     const { user } = setup(asset, refresh);
     await screen.findByText('正片里，哪个是小夏？');
-    const card = within(screen.getAllByRole('article')[0]);
+    const card = within(screen.getAllByRole('article', { name: /的候选$/ })[0]);
     await user.click(card.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText('外层列表刷新失败：作品列表暂不可用');
@@ -292,7 +290,7 @@ describe('Pre-analysis character confirmation', () => {
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? batchSuccess(initial(), options) : initial());
     const { user, onClose, view } = setup(asset, refresh);
     await screen.findByText('正片里，哪个是小夏？');
-    const card = within(screen.getAllByRole('article')[0]);
+    const card = within(screen.getAllByRole('article', { name: /的候选$/ })[0]);
     await user.click(card.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/已确认「小夏」的 1 \/ 1 张所选裁剪/);
@@ -316,7 +314,7 @@ describe('Pre-analysis character confirmation', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe(endpoint);
     expect(screen.getByAltText('小夏的 Bangumi 档案参考图').getAttribute('src')).toBe(profile.external_source!.image_url);
-    const cards = screen.getAllByRole('article'); expect(cards).toHaveLength(3);
+    const cards = screen.getAllByRole('article', { name: /的候选$/ }); expect(cards).toHaveLength(3);
     const card = within(cards[1]);
     expect((screen.getByRole('button', { name: '确认所选 0 张并用作参考' }) as HTMLButtonElement).disabled).toBe(true);
     expect(card.queryByRole('button', { name: /确认.*参考/ })).toBeNull();
@@ -328,7 +326,7 @@ describe('Pre-analysis character confirmation', () => {
     expect(JSON.parse(mutation[1]!.body as string)).toEqual({ candidates: [{ source_asset_id: 'ep-two', region_id: 'r2' }], single_character: true, use_as_reference: true });
     expect(onSaved).toHaveBeenCalledOnce();
     expect(screen.getByText('已确认 1 / 1 个角色')).toBeTruthy();
-    expect(screen.getAllByRole('checkbox').every((element) => !(element as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getAllByRole('checkbox', { name: /已核对/ }).every((element) => !(element as HTMLInputElement).checked)).toBe(true);
   });
 
   it('persists a rejection and each unclear candidate when changing the group', async () => {
@@ -344,7 +342,7 @@ describe('Pre-analysis character confirmation', () => {
     await screen.findByText('正片里，哪个是小夏？');
     await user.click(screen.getAllByRole('button', { name: '不是这个角色' })[0]);
     await screen.findByText('已记住这个否定结果，不会再为该角色推荐这张候选。');
-    expect(screen.getAllByRole('article')).toHaveLength(2);
+    expect(screen.getAllByRole('article', { name: /的候选$/ })).toHaveLength(2);
     await user.click(screen.getByRole('button', { name: '看不清／换一组' }));
     await screen.findByText('暂时没有合适候选');
     expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST').map((call) => JSON.parse(call[1]!.body as string))).toEqual([
@@ -448,7 +446,7 @@ describe('Pre-analysis character confirmation', () => {
     expect((screen.getByRole('button', { name: '播放前后片段' }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: '补充少量本地采样' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('link', { name: '原始画面' }).getAttribute('href')).toBe('/api/assets/ep-one/frames/f1');
-    expect((screen.getByRole('checkbox') as HTMLInputElement).disabled).toBe(false);
+    expect((screen.getByRole('checkbox', { name: /已核对/ }) as HTMLInputElement).disabled).toBe(false);
   });
 
   it('recovers read errors and keeps failed decisions visible without claiming success', async () => {
@@ -458,12 +456,12 @@ describe('Pre-analysis character confirmation', () => {
     await screen.findByText('确认进度暂不可用');
     await user.click(screen.getByRole('button', { name: '重新读取确认进度' }));
     await screen.findByText('正片里，哪个是小夏？');
-    const card = within(screen.getAllByRole('article')[0]);
+    const card = within(screen.getAllByRole('article', { name: /的候选$/ })[0]);
     await user.click(card.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/未能取得本次确认结果：候选已更新，请重新核对/);
     expect(onSaved).not.toHaveBeenCalled();
-    expect(screen.getAllByRole('article')).toHaveLength(3);
+    expect(screen.getAllByRole('article', { name: /的候选$/ })).toHaveLength(3);
     await waitFor(() => expect((screen.getByRole('button', { name: '确认所选 1 张并用作参考' }) as HTMLButtonElement).disabled).toBe(false));
   });
 });
@@ -476,21 +474,21 @@ describe('Queued character confirmation saves', () => {
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? pending[writes++].promise : state);
     const { user, onSaved, onClose } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '提交全部已核对 2 张' }));
     const results = within(screen.getByRole('list', { name: '逐项保存结果' }));
     expect(results.getByText(/小夏.*保存中/)).toBeTruthy();
     expect(results.getByText(/小春.*排队中/)).toBeTruthy();
     expect(onSaved).not.toHaveBeenCalled();
     expect(writes).toBe(1);
-    await user.click(screen.getAllByRole('checkbox')[1]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[1]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     expect(writes).toBe(1);
     await user.click(screen.getByRole('button', { name: /^小夏 等待保存/ }));
     await user.click(screen.getByRole('button', { name: /^小春 等待保存/ }));
-    expect((screen.getAllByRole('checkbox')[1] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[1] as HTMLInputElement).checked).toBe(true);
     await user.click(screen.getByRole('button', { name: '关闭', exact: true }));
     expect(onClose).not.toHaveBeenCalled();
     const firstCall = fetch.mock.calls.find((call) => call[1]?.method === 'POST')!;
@@ -499,8 +497,8 @@ describe('Queued character confirmation saves', () => {
     await act(async () => { pending[0].resolve(batchSuccess(replacement, firstCall[1])); });
     expect(writes).toBe(2);
     expect(screen.getByText('正片里，哪个是小春？')).toBeTruthy();
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
-    expect((screen.getAllByRole('checkbox')[1] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[1] as HTMLInputElement).checked).toBe(true);
     const secondCall = fetch.mock.calls.filter((call) => call[1]?.method === 'POST')[1];
     await act(async () => { pending[1].resolve(batchSuccess(replacement, secondCall[1])); });
     expect(writes).toBe(3);
@@ -520,18 +518,18 @@ describe('Queued character confirmation saves', () => {
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? new Response(JSON.stringify({ detail: '裁剪需重新核对' }), { status: 409 }) : state);
     const { user } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/未能取得本次确认结果/);
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '重新读取确认进度' }));
     await waitFor(() => expect(fetch.mock.calls.filter((call) => call[0] === endpoint)).toHaveLength(2));
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole('button', { name: '提交全部已核对 2 张' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '暂不重试并核对进度' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: '暂不重试并核对进度' })).toBeNull());
-    expect((screen.getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true);
+    expect((screen.getAllByRole('checkbox', { name: /已核对/ })[0] as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole('button', { name: '提交全部已核对 1 张' })).toBeTruthy();
     expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
   });
@@ -541,15 +539,15 @@ describe('Queued character confirmation saves', () => {
     const fetch = mockApi((_url, options) => options?.method === 'POST' ? new Response(JSON.stringify({ detail: '暂未保存' }), { status: 409 }) : state);
     const { user } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/未能取得本次确认结果/);
     await user.click(screen.getByRole('button', { name: '取消未提交勾选' }));
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
-    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('checkbox', { name: /已核对/ }));
     await user.click(screen.getByRole('button', { name: '重试这项' }));
     expect(screen.getByText(/避免给同一裁剪提交冲突身份/)).toBeTruthy();
-    expect((screen.getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByRole('checkbox', { name: /已核对/ }) as HTMLInputElement).checked).toBe(true);
     expect(fetch.mock.calls.filter((call) => call[1]?.method === 'POST')).toHaveLength(1);
   });
 
@@ -562,7 +560,7 @@ describe('Queued character confirmation saves', () => {
     });
     const { user, onSaved } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/未能取得本次确认结果/);
     const results = within(screen.getByRole('list', { name: '逐项保存结果' }));
@@ -590,7 +588,7 @@ describe('Queued character confirmation saves', () => {
     const user = userEvent.setup();
     render(<CharacterConfirmation asset={asset} onSaved={vi.fn<() => Promise<void>>().mockResolvedValue(undefined)} onClose={vi.fn()} onContinue={onContinue} />);
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     await screen.findByText(/未能取得本次确认结果/);
     await user.click(screen.getByRole('button', { name: '取消未提交勾选' }));
@@ -608,7 +606,7 @@ describe('Queued character confirmation saves', () => {
     mockApi(() => initial());
     const { user, onClose } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     const draftUnload = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(draftUnload); expect(draftUnload.defaultPrevented).toBe(true);
     await user.click(screen.getByRole('button', { name: '关闭', exact: true }));
@@ -630,13 +628,13 @@ describe('Queued character confirmation saves', () => {
     const fetch = mockApi((url, options) => options?.method === 'POST' ? pending[writes++].promise : url.includes('ep-other') ? other : state);
     const { user, onSaved, onClose, view } = setup();
     await screen.findByText('正片里，哪个是小夏？');
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '小春 待确认' }));
-    await user.click(screen.getAllByRole('checkbox')[0]);
+    await user.click(screen.getAllByRole('checkbox', { name: /已核对/ })[0]);
     await user.click(screen.getByRole('button', { name: '提交全部已核对 2 张' }));
     view.rerender(<CharacterConfirmation asset={otherAsset} onSaved={onSaved} onClose={onClose} />);
     await screen.findByText('正片里，哪个是小秋？');
-    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('checkbox', { name: /已核对/ }));
     await user.click(screen.getByRole('button', { name: '确认所选 1 张并用作参考' }));
     expect(writes).toBe(1);
     let call = fetch.mock.calls.filter((value) => value[1]?.method === 'POST')[0];

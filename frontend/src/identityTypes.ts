@@ -12,17 +12,41 @@ export interface CharacterConfirmationCandidate {
   box: number[]; crop_url: string; shot_id: string; distance?: number | null;
   quality: ReferenceQuality; source_available?: boolean; recovery_required?: boolean;
   candidate_rank?: number | null; candidate_total?: number | null;
+  assignment_state?: 'assigned' | 'pending';
+  confidence_state?: 'calibrated' | 'uncalibrated' | 'ambiguous' | 'low_confidence' | 'no_reference' | 'human';
+  suggested_character_id?: string | null; eligible_character_ids?: string[]; excluded_character_ids?: string[];
+  raw_candidates?: { character_id: string; distance: number; reference_ids?: string[] }[];
 }
 export interface CharacterConfirmationRole {
   character_id: string; profile: Omit<CharacterProfile, 'appearances' | 'appearance_count' | 'representative'>; status: 'pending' | 'confirmed' | 'skipped';
   recognition_enabled: boolean; trusted_reference_count: number; candidates: CharacterConfirmationCandidate[]; available_count: number;
   matching_reference_count?: number;
+  usable_matching_reference_count?: number;
+  reference_detection_status?: 'missing' | 'usable' | 'not_checked' | 'failed' | 'model_unavailable';
+  reference_model?: string; reference_model_version?: string | null;
+  reference_issues?: { reference_id: string; status: 'not_checked' | 'no_person' | 'multiple_people' | 'model_unavailable';
+    person_count: number | null; reason: string; action: string; model_version: string | null }[];
+  reference_preview_url?: string | null;
+  coverage?: { status: 'disabled' | 'confirmed' | 'ready' | 'pending_review' | 'missing_reference' | 'detection_invalid' | 'needs_sampling' | 'budget_exhausted' | 'skipped' | 'reference_unchecked' | 'reference_invalid' | 'model_unavailable';
+    reason?: string; candidate_count: number; review_pool_count?: number; sampled_frames?: number; sampled_assets?: number };
 }
 export interface CharacterConfirmationResult {
   scope_id: string; asset_id: string; roster_revision: number; roles: CharacterConfirmationRole[];
   summary: { total: number; confirmed: number; skipped: number; pending: number; candidates: number };
-  sampling: null | { status: 'running' | 'completed' | 'failed' | 'unavailable' | 'interrupted'; completed: number; total: number; error?: string; asset_id: string };
+  review_pool?: CharacterConfirmationCandidate[]; review_pool_count?: number;
+  review_pool_next_cursor?: string | null; review_pool_previous_cursor?: string | null;
+  review_pool_offset?: number; review_pool_limit?: number;
+  sampling: null | CharacterConfirmationSampling;
+  generation?: null | CharacterConfirmationSampling;
   guidance?: string; sampling_available?: boolean; sampling_unavailable_reason?: string;
+}
+export interface CharacterConfirmationSampling {
+  status: 'running' | 'cancelling' | 'cancelled' | 'completed' | 'partial' | 'failed' | 'unavailable' | 'interrupted' | 'invalidated';
+  completed: number; total: number; error?: string; asset_id: string; id?: string;
+  request_scope?: 'work' | 'asset'; selected_character_ids?: string[];
+  assets?: { asset_id: string; status: string; completed: number; total: number; error?: string }[];
+  budget?: { max_frames: number; max_assets: number; frames_per_asset: number };
+  reused_frames?: number; failed_frames?: number; detected_regions?: number; accepted_regions?: number;
 }
 export interface CharacterConfirmationBatchResult {
   results: { source_asset_id: string; region_id: string; status: 'confirmed' | 'failed'; error?: string; recovery_required?: boolean }[];

@@ -19,6 +19,7 @@ Desktop.ini
 .venv-retrieval-windows/
 .venv-knowledge/
 .cache/
+/.tmp/
 __pycache__/
 *.pyc
 .pytest_cache/

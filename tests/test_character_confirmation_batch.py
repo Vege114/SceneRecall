@@ -8,13 +8,13 @@ import pytest
 
 from scenerecall.library import atomic_json, read_json
 from scenerecall.visual_identity_api import register_visual_identity_routes
-from test_character_confirmation import candidate_args, prepared
+from test_character_confirmation import candidate_args, choices, prepared
 from test_organization import bangumi_archive
 from test_visual_identity import visual as visual
 
 
 def selection(service):
-    return [candidate_args(row) for row in service.queue("asset_one")["roles"][0]["candidates"]]
+    return [candidate_args(row) for row in choices(service.queue("asset_one"))[:3]]
 
 
 def batch(service, identity, candidates):

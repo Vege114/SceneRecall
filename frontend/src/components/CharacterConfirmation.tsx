@@ -1,15 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Check, ExternalLink, Play, RefreshCw, ScanLine, UserRound } from 'lucide-react';
 import { api, ApiError, assetLink, formatTime, message, post } from '../api';
 import type { Asset } from '../types';
+import { AppContext } from '../context';
 import type { BangumiReferenceCacheResult, CharacterConfirmationBatchResult, CharacterConfirmationCandidate, CharacterConfirmationResult, CharacterConfirmationRole } from '../identityTypes';
 import { Alert, Empty, Modal, Spinner } from './ui';
 import RecognitionSelection from './RecognitionSelection';
+import ReferenceDiagnostics from './ReferenceDiagnostics';
 
 const roleStatus = { pending: '待确认', confirmed: '已确认', skipped: '已跳过' };
 const candidateKey = (candidate: CharacterConfirmationCandidate) => `${candidate.asset_id}:${candidate.region_id}`;
 const selectionKey = (characterId: string, candidate: CharacterConfirmationCandidate) => `${characterId}:${candidateKey(candidate)}`;
 const originalFrame = (candidate: CharacterConfirmationCandidate) => `/api/assets/${encodeURIComponent(candidate.asset_id)}/frames/${encodeURIComponent(candidate.frame_id)}`;
+const samplingActive = (status?: string) => status === 'running' || status === 'cancelling';
+const poolReason = (state?: string) => ({ uncalibrated: '未校准，需人工指定角色', ambiguous: '角色匹配接近，待人工判定', low_confidence: '匹配未通过阈值', no_reference: '缺少匹配参考', human: '人工选择，尚未确认' }[state || ''] || '身份待判定');
+const candidateForRole = (candidate: CharacterConfirmationCandidate, characterId: string): CharacterConfirmationCandidate => {
+  const proposals = candidate.raw_candidates || [];
+  const rank = proposals.findIndex((item) => item.character_id === characterId);
+  const distance = rank >= 0 ? proposals[rank].distance : null;
+  // Pool-level scores belong to the best suggestion. A manual role choice
+  // must display only that role's own saved proposal, if one exists.
+  return { ...candidate, distance: distance != null && Number.isFinite(distance) && distance >= 0 ? distance : null,
+    candidate_rank: rank >= 0 ? rank + 1 : null, candidate_total: rank >= 0 ? proposals.length : null };
+};
 
 type SaveAction = 'confirm' | 'reject' | 'unclear' | 'skip' | 'resume';
 type SaveStatus = 'queued' | 'saving' | 'confirmed' | 'failed' | 'unknown';
@@ -59,6 +72,7 @@ function CandidateCard({ candidate, role, busy, checked, error, status, onChecke
 }
 
 export default function CharacterConfirmation({ asset, onClose, onSaved, onContinue }: { asset: Asset; onClose: () => void; onSaved: () => Promise<void>; onContinue?: () => Promise<void> }) {
+  const app = useContext(AppContext);
   const endpoint = `/assets/${encodeURIComponent(asset.id)}/identity/confirmation`;
   const [data, setData] = useState<CharacterConfirmationResult | null>(null);
   const [selectedId, setSelectedId] = useState('');
@@ -71,7 +85,11 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   const [notice, setNotice] = useState('');
   const [preview, setPreview] = useState<CharacterConfirmationCandidate | null>(null);
   const [cached, setCached] = useState<BangumiReferenceCacheResult | null>(null);
-  const [editingTargets, setEditingTargets] = useState(false);
+  const [targetsDirty, setTargetsDirty] = useState(false);
+  const [targetReadVersion, setTargetReadVersion] = useState(0);
+  const [poolRoles, setPoolRoles] = useState<Record<string, string>>({});
+  const [cacheProgress, setCacheProgress] = useState(0);
+  const [generationUnknown, setGenerationUnknown] = useState(false);
   const alive = useRef(true);
   const sequence = useRef(0);
   const mutation = useRef(false);
@@ -108,18 +126,28 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
     // local checks or candidates already waiting in the serial outbox.
     const protectedCandidates = [...Object.values(session.selections), ...Object.values(session.items)
       .filter((item) => activeSave(item) || unresolvedSave(item)).map((item) => item.selection)];
+    const protectedOwners = new Map(protectedCandidates.filter((item) => item.candidate).map((item) => [candidateKey(item.candidate!), item]));
     const confirmedRegions = new Set(Object.values(session.items)
       .filter((item) => item.action === 'confirm' && item.status === 'confirmed' && item.selection.candidate)
       .map((item) => candidateKey(item.selection.candidate!)));
-    const merged = { ...result, roles: result.roles.map((item) => {
+    // Pool pagination changes only the visible page. Draft reservations remain
+    // in the outbox and must never be duplicated as role suggestions.
+    const poolCandidates = new Map<string, CharacterConfirmationCandidate>();
+    for (const candidate of result.review_pool || []) {
+      const owner = protectedOwners.get(candidateKey(candidate));
+      if ((!owner || owner.candidate?.assignment_state === 'pending') && !confirmedRegions.has(candidateKey(candidate))) poolCandidates.set(candidateKey(candidate), { ...candidate, assignment_state: 'pending' });
+    }
+    const merged = { ...result, review_pool: [...poolCandidates.values()], roles: result.roles.map((item) => {
       const candidates = new Map<string, CharacterConfirmationCandidate>();
       for (const selection of protectedCandidates) {
-        if (selection.characterId === item.character_id && selection.candidate && !confirmedRegions.has(candidateKey(selection.candidate))) {
+        if (selection.characterId === item.character_id && selection.candidate && selection.candidate.assignment_state !== 'pending' && !poolCandidates.has(candidateKey(selection.candidate)) && !confirmedRegions.has(candidateKey(selection.candidate))) {
           candidates.set(candidateKey(selection.candidate), selection.candidate);
         }
       }
       for (const candidate of item.candidates) {
-        if (!confirmedRegions.has(candidateKey(candidate)) && !candidates.has(candidateKey(candidate))) candidates.set(candidateKey(candidate), candidate);
+        const owner = protectedOwners.get(candidateKey(candidate));
+        if (owner && (owner.candidate?.assignment_state === 'pending' || owner.characterId !== item.character_id)) continue;
+        if (!poolCandidates.has(candidateKey(candidate)) && !confirmedRegions.has(candidateKey(candidate)) && !candidates.has(candidateKey(candidate))) candidates.set(candidateKey(candidate), candidate);
       }
       return { ...item, candidates: [...candidates.values()].slice(0, 3) };
     }) };
@@ -127,13 +155,21 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
     const enabledRoles = merged.roles.filter((item) => enabledIds.has(item.character_id));
     setSelectedId((id) => enabledIds.has(id) ? id : (enabledRoles.find((item) => item.status === 'pending') || enabledRoles[0])?.character_id || '');
   }, []);
-  const load = useCallback(async () => {
+  const load = useCallback(async (resetTargets = false) => {
     const session = sessionRef.current;
     if (session.running || session.jobs.length) return;
     const request = ++sequence.current;
     try {
       const result = await api<CharacterConfirmationResult>(endpoint);
-      if (request === sequence.current) apply(result, session);
+      if (request === sequence.current) {
+        apply(result, session);
+        if (current(session)) {
+          setGenerationUnknown(false);
+          // An explicit reconciliation replaces the target draft even if a
+          // lost write never reached the server and its revision is unchanged.
+          if (resetTargets) { setTargetsDirty(false); setTargetReadVersion((value) => value + 1); }
+        }
+      }
     }
     catch (caught) { if (alive.current && sessionRef.current === session && request === sequence.current) setError(message(caught)); }
     finally { if (alive.current && sessionRef.current === session && request === sequence.current) setLoading(false); }
@@ -142,7 +178,7 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
     alive.current = true;
     mutation.current = false;
     unavailableCandidates.current.clear();
-    setLoading(true); setData(null); setCached(null); setSaveItems({}); setSelections({}); setEditingTargets(false);
+    setLoading(true); setData(null); setCached(null); setSaveItems({}); setSelections({}); setTargetsDirty(false); setPoolRoles({}); setCacheProgress(0); setGenerationUnknown(false);
     setError(''); setNotice(''); setRefreshError(''); setBusy(''); setPreview(null);
     void load();
     return () => { alive.current = false; sequence.current += 1; };
@@ -150,16 +186,22 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   useEffect(() => {
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
       const session = sessionRef.current;
-      if (!session.running && !session.jobs.length && !Object.keys(session.selections).length) return;
+      if (!session.running && !session.jobs.length && !Object.keys(session.selections).length && !targetsDirty && !mutation.current) return;
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', warnBeforeUnload);
     return () => window.removeEventListener('beforeunload', warnBeforeUnload);
-  }, []);
-  const sampling = data?.sampling;
+  }, [targetsDirty]);
+  const sampling = data?.generation ?? data?.sampling;
+  const assetTitles = new Map<string, string>();
+  for (const candidate of [...(data?.roles.flatMap((item) => item.candidates) || []), ...(data?.review_pool || [])]) {
+    if (candidate.asset_title?.trim()) assetTitles.set(candidate.asset_id, candidate.asset_title);
+  }
+  if (asset.title.trim()) assetTitles.set(asset.id, asset.title);
+  for (const item of app?.assets || []) if (item.title.trim()) assetTitles.set(item.id, item.title);
   useEffect(() => {
-    if (sampling?.status !== 'running') return;
+    if (!samplingActive(sampling?.status)) return;
     const session = sessionRef.current;
     let polling = false;
     const timer = window.setInterval(async () => {
@@ -168,8 +210,8 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
       try {
         const result = await api<Pick<CharacterConfirmationResult, 'sampling'>>(`${endpoint}/sampling`);
         if (!alive.current || sessionRef.current !== session || mutation.current || session.running) return;
-        setData((value) => value ? { ...value, sampling: result.sampling } : value);
-        if (result.sampling?.status !== 'running') void load();
+        setData((value) => value ? { ...value, sampling: result.sampling, generation: result.sampling } : value);
+        if (!samplingActive(result.sampling?.status)) void load();
       } catch (caught) { if (alive.current && sessionRef.current === session) setError(`采样进度读取失败：${message(caught)}`); }
       finally { polling = false; }
     }, 2000);
@@ -183,6 +225,20 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   const failedCount = Object.values(saveItems).filter(unresolvedSave).length;
   const roleSaving = (characterId: string) => Object.values(saveItems).some((item) => item.selection.characterId === characterId && activeSave(item));
   const navigate = (id: string) => { setSelectedId(id); setPreview(null); setNotice(''); };
+  const checkCandidate = (reviewRole: CharacterConfirmationRole, candidate: CharacterConfirmationCandidate, checked: boolean) => {
+    const session = sessionRef.current;
+    if (candidateBlocked(reviewRole.character_id, candidate)) return;
+    const key = selectionKey(reviewRole.character_id, candidate);
+    if (checked) session.selections[key] = { characterId: reviewRole.character_id, characterName: reviewRole.profile.name, candidate };
+    else delete session.selections[key];
+    publish(session);
+  };
+  const candidateAvailability = (characterId: string, candidate: CharacterConfirmationCandidate, available: boolean) => {
+    const key = selectionKey(characterId, candidate);
+    if (available) unavailableCandidates.current.delete(key);
+    else { unavailableCandidates.current.add(key); delete sessionRef.current.selections[key]; }
+    publish(sessionRef.current);
+  };
   const nextRole = (result: CharacterConfirmationResult, from: string) => {
     const index = result.roles.findIndex((item) => item.character_id === from);
     const ordered = [...result.roles.slice(index + 1), ...result.roles.slice(0, index)];
@@ -192,7 +248,7 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   const candidateBlocked = (characterId: string, candidate: CharacterConfirmationCandidate) => {
     const session = sessionRef.current;
     const key = selectionKey(characterId, candidate);
-    return !!busy || Object.values(session.items).some((item) =>
+    return mutation.current || !!busy || targetsDirty || generationUnknown || Object.values(session.items).some((item) =>
       (activeSave(item) || item.status === 'unknown' || item.action === 'confirm' && item.status === 'confirmed') &&
       (item.selection.candidate ? candidateKey(item.selection.candidate) === candidateKey(candidate) : item.selection.characterId === characterId)) ||
       Object.entries(session.selections).some(([other, selection]) => other !== key && candidateKey(selection.candidate) === candidateKey(candidate));
@@ -282,7 +338,7 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   };
   const enqueueConfirmations = (entries: [string, Selection][]) => {
     const session = sessionRef.current;
-    if (mutation.current) return;
+    if (mutation.current || targetsDirty || generationUnknown) return;
     const groups = new Map<string, [string, Selection][]>();
     for (const [key, selection] of entries) {
       if (activeSave(session.items[key]) || session.items[key]?.status === 'confirmed' || unavailableCandidates.current.has(key)) continue;
@@ -305,27 +361,27 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
     if (!groups.size) return;
     setError(''); setNotice(''); publish(session); void drain(session);
   };
-  const decide = (action: Exclude<SaveAction, 'confirm'>, candidates: CharacterConfirmationCandidate[] = []) => {
+  const decide = (action: Exclude<SaveAction, 'confirm'>, candidates: CharacterConfirmationCandidate[] = [], decisionRole = role) => {
     const session = sessionRef.current;
-    if (!role || mutation.current || roleSaving(role.character_id)) return;
-    if (candidates.some((candidate) => candidateBlocked(role.character_id, candidate))) return;
+    if (!decisionRole || mutation.current || targetsDirty || generationUnknown || roleSaving(decisionRole.character_id)) return;
+    if (candidates.some((candidate) => candidateBlocked(decisionRole.character_id, candidate))) return;
     const choices = candidates.length ? candidates : [undefined];
     for (const candidate of choices) {
-      const key = candidate ? selectionKey(role.character_id, candidate) : `role:${role.character_id}`;
+      const key = candidate ? selectionKey(decisionRole.character_id, candidate) : `role:${decisionRole.character_id}`;
       if (activeSave(session.items[key]) || session.items[key]?.status === 'unknown') continue;
-      const selection = { characterId: role.character_id, characterName: role.profile.name, candidate };
+      const selection = { characterId: decisionRole.character_id, characterName: decisionRole.profile.name, candidate };
       delete session.selections[key];
       session.items[key] = { key, action, selection, status: 'queued' };
-      session.jobs.push({ action, characterId: role.character_id, characterName: role.profile.name, keys: [key] });
+      session.jobs.push({ action, characterId: decisionRole.character_id, characterName: decisionRole.profile.name, keys: [key] });
     }
     if (action === 'skip' || action === 'resume') {
-      for (const [key, selection] of Object.entries(session.selections)) if (selection.characterId === role.character_id) delete session.selections[key];
+      for (const [key, selection] of Object.entries(session.selections)) if (selection.characterId === decisionRole.character_id) delete session.selections[key];
     }
     setError(''); setNotice(''); setPreview(null); publish(session); void drain(session);
   };
   const retry = (item: SaveItem) => {
     const session = sessionRef.current;
-    if (mutation.current || !unresolvedSave(session.items[item.key]) || unavailableCandidates.current.has(item.key)) return;
+    if (mutation.current || targetsDirty || generationUnknown || !unresolvedSave(session.items[item.key]) || unavailableCandidates.current.has(item.key)) return;
     if (!enabledRoles.some((entry) => entry.character_id === item.selection.characterId)) {
       setError('这个角色已移出识别名单，请核对进度后再操作。'); return;
     }
@@ -357,16 +413,32 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   };
   const sample = async () => {
     const session = sessionRef.current;
-    if (mutation.current || session.running || Object.keys(session.selections).length || sampling?.status === 'running') return;
+    if (mutation.current || targetsDirty || generationUnknown || session.running || Object.keys(session.selections).length || samplingActive(sampling?.status)) return;
     mutation.current = true; sequence.current += 1; setBusy('sample'); setError(''); setNotice('');
     session.selections = {}; publish(session);
     try { apply(await post<CharacterConfirmationResult>(`${endpoint}/sample`, { max_frames: 12 }), session); }
-    catch (caught) { if (current(session)) setError(message(caught)); }
+    catch (caught) { if (current(session)) { setError(message(caught)); if (!(caught instanceof ApiError) || caught.status === 0 || caught.status >= 500) setGenerationUnknown(true); } }
+    finally { if (current(session)) { mutation.current = false; setBusy(''); } }
+  };
+  const cancelSampling = async () => {
+    const session = sessionRef.current;
+    if (mutation.current || !samplingActive(sampling?.status)) return;
+    mutation.current = true; sequence.current += 1; setBusy('cancel'); setError('');
+    try { apply(await post<CharacterConfirmationResult>(`${endpoint}/sampling/cancel`), session); }
+    catch (caught) { if (current(session)) setError(`停止请求未确认，请重新读取进度：${message(caught)}`); }
+    finally { if (current(session)) { mutation.current = false; setBusy(''); } }
+  };
+  const loadPoolPage = async (cursor: string) => {
+    const session = sessionRef.current;
+    if (mutation.current || session.running) return;
+    mutation.current = true; sequence.current += 1; setBusy('pool'); setError(''); setPreview(null);
+    try { apply(await api<CharacterConfirmationResult>(`${endpoint}?review_pool_cursor=${encodeURIComponent(cursor)}&review_pool_limit=20`), session); }
+    catch (caught) { if (current(session)) setError(`待判定页读取失败，请重新读取最新进度：${message(caught)}`); }
     finally { if (current(session)) { mutation.current = false; setBusy(''); } }
   };
   const cacheReferences = async () => {
     const session = sessionRef.current;
-    if (mutation.current || session.running || Object.keys(session.selections).length || sampling?.status === 'running') return;
+    if (mutation.current || targetsDirty || generationUnknown || session.running || Object.keys(session.selections).length || samplingActive(sampling?.status)) return;
     mutation.current = true; sequence.current += 1; setBusy('cache'); setError(''); setNotice('');
     try {
       const result = await post<BangumiReferenceCacheResult>(`/assets/${encodeURIComponent(asset.id)}/references/cache-bangumi`, { max_images: 20, ...(cached?.next_cursor ? { cursor: cached.next_cursor } : {}) });
@@ -376,25 +448,63 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
     } catch (caught) { if (current(session)) { setError(message(caught)); setCached(null); } }
     finally { if (current(session)) { mutation.current = false; setBusy(''); } }
   };
+  const generateCandidates = async (result: CharacterConfirmationResult, session: ConfirmationSession) => {
+    const targets = result.roles.filter((item) => item.recognition_enabled !== false);
+    if (!targets.length) return;
+    // Cache selected external references before sampling. Both the number of
+    // batches and the server's per-batch image/time budget remain bounded.
+    if (targets.some((item) => item.profile.external_source?.image_url)) {
+      setBusy('cache'); setCacheProgress(0);
+      let cursor: string | undefined;
+      const cursors = new Set<string>();
+      let imported = 0; let existing = 0; let skipped = 0;
+      const errors: BangumiReferenceCacheResult['errors'] = [];
+      for (let batch = 0; batch < 12; batch += 1) {
+        const page = await post<BangumiReferenceCacheResult>(`/assets/${encodeURIComponent(asset.id)}/references/cache-bangumi`, { max_images: 20, ...(cursor ? { cursor } : {}) });
+        if (!current(session)) return;
+        imported += page.imported; existing += page.existing; skipped += page.skipped; errors.push(...(page.errors || []));
+        setCached({ ...page, imported, existing, skipped, errors: [...errors] }); setCacheProgress(batch + 1);
+        if (!page.next_cursor) break;
+        if (cursors.has(page.next_cursor)) throw new Error('参考图缓存游标重复，已停止生成。请重新读取进度后重试。');
+        cursors.add(page.next_cursor); cursor = page.next_cursor;
+        if (batch === 11) throw new Error('本次参考图缓存已达到 240 张预算，名单已保存。请再次生成以继续缓存剩余参考图。');
+      }
+    }
+    if (!current(session)) return;
+    setBusy('sample');
+    try {
+      apply(await post<CharacterConfirmationResult>(`${endpoint}/sample`, { scope: 'work', max_frames: 120, max_assets: 24, frames_per_asset: 12 }), session);
+      setNotice('已保存本作品的识别名单。参考图缓存后已请求跨集有界生成，所有候选仍需人工核对。');
+    } catch (caught) {
+      if (current(session) && (!(caught instanceof ApiError) || caught.status === 0 || caught.status >= 500)) setGenerationUnknown(true);
+      throw caught;
+    }
+  };
   const saveTargets = async (characterIds: string[]) => {
     const session = sessionRef.current;
-    if (!data || mutation.current || session.running) return;
+    if (!data || mutation.current || session.running || failedCount > 0 || samplingActive(sampling?.status) || generationUnknown) return;
     mutation.current = true; sequence.current += 1; setBusy('targets'); setError(''); setNotice('');
+    let saved = false;
     try {
       const result = await api<CharacterConfirmationResult>(`${endpoint}/selection`, {
         method: 'PUT',
         body: JSON.stringify({ character_ids: characterIds, expected_revision: data.roster_revision, scope_id: data.scope_id }),
       });
       if (!current(session)) return;
-      apply(result, session); refreshAfterSave(session); setEditingTargets(false); setPreview(null); setCached(null);
+      saved = true;
+      apply(result, session); refreshAfterSave(session); setTargetsDirty(false); setPreview(null); setCached(null);
       setNotice('已保存本作品的识别名单。');
+      await generateCandidates(result, session);
     } catch (caught) {
-      if (current(session)) setError(message(caught));
+      if (current(session)) {
+        if (!saved && (!(caught instanceof ApiError) || caught.status === 0 || caught.status >= 500)) setGenerationUnknown(true);
+        setError(`${saved ? '名单已保存，候选生成尚未完成。' : ''}${message(caught)}${!saved ? '；未启动候选生成。' : ''}`);
+      }
     } finally { if (current(session)) { mutation.current = false; setBusy(''); } }
   };
   const continueTask = async () => {
     const session = sessionRef.current;
-    if (!onContinue || !data || editingTargets || data.summary.pending > 0 || mutation.current || session.running || session.jobs.length || Object.keys(session.selections).length || Object.values(session.items).some(unresolvedSave) || sampling?.status === 'running') return;
+    if (!onContinue || !data || targetsDirty || generationUnknown || data.summary.pending > 0 || mutation.current || session.running || session.jobs.length || Object.keys(session.selections).length || Object.values(session.items).some(unresolvedSave) || samplingActive(sampling?.status)) return;
     mutation.current = true; setBusy('continue'); setError('');
     try { await onContinue(); }
     catch (caught) { if (current(session)) setError(message(caught)); }
@@ -403,7 +513,7 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   const close = () => {
     const session = sessionRef.current;
     if (mutation.current) return;
-    if (editingTargets) { setEditingTargets(false); setError(''); return; }
+    if (targetsDirty) { setError('识别名单有尚未保存的修改，请保存或取消修改后返回。'); return; }
     if (session.running || session.jobs.length) { setError('仍有排队或保存中的操作，请等逐项结果返回后关闭。刷新或离开页面可能中断未发送的操作。'); return; }
     if (Object.keys(session.selections).length) { setError('还有已核对但未保存的裁剪，请先提交，或取消未提交勾选后返回。'); return; }
     onClose();
@@ -411,19 +521,24 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
   return <Modal title={onContinue ? '任务中的角色确认' : '确认角色'} subtitle={`${asset.title} · 将角色档案与正片中的实际形象对应起来 · 提交后按顺序保存`} onClose={close} wide>
     <div className="modal-body character-confirmation">
       {onContinue && <Alert tone="info">任务正在等待角色确认。核对名单里的角色后即可继续分析。若本集暂时认不出某个角色，可在标注时跳过。</Alert>}
-      {error && <Alert tone="error">{error}<button type="button" className="text-button" disabled={!!busy || pendingCount > 0} onClick={() => { setError(''); void load(); }}>重新读取确认进度</button></Alert>}
+      {error && <Alert tone="error">{error}<button type="button" className="text-button" disabled={!!busy || pendingCount > 0} onClick={() => { setError(''); void load(true); }}>重新读取确认进度</button></Alert>}
       {refreshError && <Alert>{refreshError}<button type="button" className="text-button" onClick={() => refreshAfterSave()}>重试刷新外层列表</button></Alert>}
       {notice && <Alert tone="success">{notice}</Alert>}
       {loading && <Spinner label="正在读取已有角色候选" />}
-      {data && data.roles.length > 0 && (editingTargets ? <RecognitionSelection key={`${data.scope_id}:${data.roster_revision}`} roles={data.roles} hasDraftCrops={readySelections.length > 0} busy={!!busy} onCancel={() => { setEditingTargets(false); setError(''); }} onSave={(ids) => void saveTargets(ids)} /> : <section className="recognition-selection" aria-label="本作品的识别名单">
-          <div className="section-row"><div><h3>本作品的识别名单</h3><p className="helper">已选 {enabledRoles.length} / {data.roles.length} 个角色。仅需标注所选角色，同一作品的各集共用此名单。</p></div>
-            <button type="button" className="button secondary small" disabled={!!busy || pendingCount > 0 || failedCount > 0 || sampling?.status === 'running'} onClick={() => { sequence.current += 1; setNotice(''); setError(''); setEditingTargets(true); }}>选择识别角色</button></div>
-        </section>)}
-      {data && !editingTargets && <>
+      {data && data.roles.length > 0 && <RecognitionSelection key={`${data.scope_id}:${data.roster_revision}:${targetReadVersion}`} roles={data.roles} selectedId={selectedId} onReview={navigate} hasDraftCrops={readySelections.length > 0} busy={!!busy || pendingCount > 0 || failedCount > 0 || samplingActive(sampling?.status) || generationUnknown} onDraftChange={setTargetsDirty} onCancel={() => { setTargetsDirty(false); setError(''); }} onSave={(ids) => void saveTargets(ids)} />}
+      {generationUnknown && <Alert>名单或生成请求的结果未确认。请先重新读取确认进度，核对服务端状态后再操作；不会自动重发生成请求。</Alert>}
+      {busy === 'cache' && <p className="helper" role="status">先缓存所选角色参考图：已处理 {cacheProgress} 批，每批最多 20 张。缓存完成后才开始跨集补候选。</p>}
+      {data && <>
         {enabledRoles.length > 0 && <div className="confirmation-progress"><div><strong>已确认 {data.summary.confirmed} / {data.summary.total} 个角色</strong><span>已跳过 {data.summary.skipped} · 待确认 {data.summary.pending}</span></div><progress aria-label="角色确认进度" value={data.summary.confirmed + data.summary.skipped} max={Math.max(1, data.summary.total)} /></div>}
-        {sampling?.status === 'running' && <div className="confirmation-sampling-progress"><Spinner label={`本地采样中 · ${sampling.completed} / ${sampling.total} 帧`} /><progress aria-label="本地采样进度" value={sampling.completed} max={Math.max(1, sampling.total)} /><p className="helper">可以关闭窗口，稍后回来继续核对。</p></div>}
+        {sampling && <section className="confirmation-sampling-progress" aria-label="候选生成进度">
+          {samplingActive(sampling.status) ? <Spinner label={`${sampling.status === 'cancelling' ? '正在停止' : sampling.request_scope === 'work' ? '跨集生成中' : '本地采样中'} · ${sampling.completed} / ${sampling.total} 帧`} /> : <strong>{({ completed: '候选生成已完成', partial: '候选生成部分完成', cancelled: '候选生成已停止', failed: '候选生成失败', unavailable: '候选生成暂不可用', interrupted: '候选生成已中断', invalidated: '名单变化，旧生成已失效' } as Record<string, string>)[sampling.status]}</strong>}
+          <progress aria-label="本地采样进度" value={sampling.completed} max={Math.max(1, sampling.total)} />
+          {sampling.budget && <p className="helper">本次预算：最多 {sampling.budget.max_assets} 集、{sampling.budget.max_frames} 帧，每集最多 {sampling.budget.frames_per_asset} 帧。复用 {sampling.reused_frames ?? 0} 帧 · 失败 {sampling.failed_frames ?? 0} 帧。不会为角色凑足候选。</p>}
+          {sampling.assets && <ul className="helper">{sampling.assets.map((item) => <li key={item.asset_id}>{assetTitles.get(item.asset_id) || item.asset_id}：{item.completed} / {item.total} 帧 · {item.status}{item.error ? ` · ${item.error}` : ''}</li>)}</ul>}
+          {samplingActive(sampling.status) && <><p className="helper">可以关闭窗口，稍后回来继续核对。生成不会自动确认角色身份。</p><button type="button" className="text-button" disabled={!!busy || sampling.status === 'cancelling'} onClick={() => void cancelSampling()}>停止补充候选</button></>}
+        </section>}
         {(enabledRoles.length > 0 || Object.keys(saveItems).length > 0) && <section className="confirmation-save-queue" aria-label="待保存与逐项结果">
-          <div className="confirmation-batch-actions"><p className="helper">已核对的勾选会跨角色保留；只有提交并收到保存结果后才计为完成。</p><button type="button" className="button primary" disabled={!!busy || !readySelections.length} onClick={() => enqueueConfirmations(readySelections)}><Check size={14} />提交全部已核对 {readySelections.length} 张</button>{readySelections.length > 0 && <button type="button" className="text-button" disabled={!!busy} onClick={() => {
+          <div className="confirmation-batch-actions"><p className="helper">已核对的勾选会跨角色保留；只有提交并收到保存结果后才计为完成。</p><button type="button" className="button primary" disabled={!!busy || targetsDirty || generationUnknown || !readySelections.length} onClick={() => enqueueConfirmations(readySelections)}><Check size={14} />提交全部已核对 {readySelections.length} 张</button>{readySelections.length > 0 && <button type="button" className="text-button" disabled={!!busy} onClick={() => {
             const session = sessionRef.current;
             for (const [key] of readySelections) delete session.selections[key];
             publish(session);
@@ -434,11 +549,11 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
             {unresolvedSave(item) && <><span className="warning-text">{item.error}</span><button type="button" className="text-button" disabled={!!busy || unavailableCandidates.current.has(item.key)} onClick={() => retry(item)}>重试这项</button><button type="button" className="text-button" disabled={!!busy || pendingCount > 0} onClick={() => dismissFailure(item)}>暂不重试并核对进度</button></>}
           </li>)}</ul>}
         </section>}
-        {enabledRoles.length > 0 && <details className="confirmation-options"><summary>候选不足？补充参考图与少量采样</summary>
-        <div className="confirmation-sampling"><div><strong>候选不足时，少量补充采样</strong><p className="helper">只在「{asset.title}」采样最多 12 帧，使用本地人物检测与图像匹配，不调用 VLM。已有候选可直接核对。</p></div><button type="button" className="button small secondary" disabled={!!busy || pendingCount > 0 || readySelections.length > 0 || sampling?.status === 'running' || !asset.source_available || data.sampling_available === false} onClick={() => void sample()}><ScanLine size={14} />{sampling?.status === 'failed' || sampling?.status === 'interrupted' ? '重试少量采样' : sampling?.status === 'completed' ? '继续少量本地采样' : '补充少量本地采样'}</button></div>
-        {enabledRoles.some((item) => item.profile.external_source?.image_url) && <div className="confirmation-cache"><p className="helper">只补齐识别名单内的 Bangumi 参考图，每批最多下载 20 张。缓存后仍需在正片中核对身份。</p><button type="button" className="text-button" disabled={!!busy || pendingCount > 0 || readySelections.length > 0 || sampling?.status === 'running'} onClick={() => void cacheReferences()}>{cached?.next_cursor ? '继续缓存 Bangumi 参考图' : '缓存 Bangumi 参考图'}</button></div>}
         {cached && <Alert tone="info">Bangumi 参考图：新增 {cached.imported} 张 · 已有 {cached.existing} 张 · 跳过 {cached.skipped} 张。仍需在正片中人工核对身份。{cached.errors?.length > 0 && <ul>{cached.errors.map((item, index) => <li key={`${item.character_id}:${index}`}>{data.roles.find((entry) => entry.character_id === item.character_id)?.profile.name || '角色'}：{item.reason}</li>)}</ul>}</Alert>}
         {cached?.coverage && <p className="helper">来源有图 {cached.coverage.with_image} / {cached.coverage.total} 个角色 · 本地已缓存 {cached.coverage.cached} 个 · 主角已缓存 {cached.coverage.main_cached} / {cached.coverage.main_total} 个 · 剩余待缓存 {cached.coverage.remaining} 个。{cached.time_limited ? '本批已到时间限制，可继续下一批。' : cached.next_cursor ? '本批已到下载数量限制，可继续下一批。' : cached.coverage.remaining ? '本轮已结束，未成功项可再次缓存重试。' : '当前有来源图的角色已处理完成。'}{cached.coverage.revoked > 0 && `另有 ${cached.coverage.revoked} 个角色的来源图已撤销，保留撤销决定。`}</p>}
+        {enabledRoles.length > 0 && <details className="confirmation-options"><summary>候选不足？补充参考图与少量采样</summary>
+        <div className="confirmation-sampling"><div><strong>候选不足时，少量补充采样</strong><p className="helper">只在「{asset.title}」采样最多 12 帧，使用本地人物检测与图像匹配，不调用 VLM。已有候选可直接核对。</p></div><button type="button" className="button small secondary" disabled={!!busy || targetsDirty || generationUnknown || pendingCount > 0 || readySelections.length > 0 || samplingActive(sampling?.status) || !asset.source_available || data.sampling_available === false} onClick={() => void sample()}><ScanLine size={14} />{sampling?.status === 'failed' || sampling?.status === 'interrupted' ? '重试少量采样' : sampling?.status === 'completed' ? '继续少量本地采样' : '补充少量本地采样'}</button></div>
+        {enabledRoles.some((item) => item.profile.external_source?.image_url) && <div className="confirmation-cache"><p className="helper">只补齐识别名单内的 Bangumi 参考图，每批最多下载 20 张。缓存后仍需在正片中核对身份。</p><button type="button" className="text-button" disabled={!!busy || targetsDirty || generationUnknown || pendingCount > 0 || readySelections.length > 0 || samplingActive(sampling?.status)} onClick={() => void cacheReferences()}>{cached?.next_cursor ? '继续缓存 Bangumi 参考图' : '缓存 Bangumi 参考图'}</button></div>}
         {!asset.source_available && <Alert>当前视频原文件暂不可用，恢复原文件后可补充采样。已保存候选仍可核对。</Alert>}
         {data.sampling_available === false && asset.source_available && <Alert>{data.sampling_unavailable_reason || '本地人物检测或图像匹配模型尚未就绪。'}<a href="#/settings" target="_blank" rel="noreferrer">检查本地模型设置</a></Alert>}
         {sampling?.status === 'completed' && <p className="helper">本地采样已完成：{sampling.completed} / {sampling.total} 帧。没有匹配候选不代表角色一定未出场。</p>}
@@ -447,11 +562,13 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
         {!data.roles.length ? <Empty icon={<UserRound size={28} />} title="先建立角色档案">请先初始化 Bangumi 角色档案，或新建角色，再回来核对正片形象。</Empty> : !enabledRoles.length ? <Empty icon={<UserRound size={28} />} title="本作品未选择识别角色">{onContinue ? '无需标注角色，可以继续任务。' : '可随时从「选择识别角色」添加需要标注的角色。'}</Empty> : <>
           <div className="confirmation-role-list" aria-label="选择待核对角色">{enabledRoles.map((item) => <button type="button" key={item.character_id} className={item.character_id === selectedId ? 'selected' : ''} aria-pressed={item.character_id === selectedId} disabled={!!busy} onClick={() => navigate(item.character_id)}><span>{item.profile.name}</span><small>{roleSaving(item.character_id) ? '等待保存' : roleStatus[item.status]}{Object.values(selections).some((selection) => selection.characterId === item.character_id) ? ' · 已勾选' : ''}</small></button>)}</div>
           {role && <section className="confirmation-review" aria-label={`${role.profile.name}的角色确认`}>
-            <aside className="confirmation-profile"><span className="eyebrow">角色档案</span>{role.profile.external_source?.image_url ? <img src={role.profile.external_source.image_url} referrerPolicy="no-referrer" alt={`${role.profile.name}的 Bangumi 档案参考图`} /> : <div className="confirmation-profile-placeholder"><UserRound size={38} /></div>}<h3>{role.profile.name}</h3>{role.profile.name_ja && <p>{role.profile.name_ja}</p>}{role.profile.aliases.length > 0 && <p className="helper">又名 {role.profile.aliases.join('、')}</p>}{role.profile.external_source && <a className="text-button" href={role.profile.external_source.url} target="_blank" rel="noreferrer">Bangumi 角色资料 <ExternalLink size={12} /></a>}<p className="confirmation-description">{role.profile.description || '暂无角色简介，请结合原片核对。'}</p><span className="tag">可信参考 {role.trusted_reference_count} 张</span><p className="helper">身份标签与参考来源会一并保存。同一作品后续集数可复用。</p></aside>
-            <div className="confirmation-candidates-area"><div className="confirmation-role-heading"><div><h3>正片里，哪个是{role.profile.name}？</h3><p className="helper">这些是相似度排序的宽泛待核对建议，同一裁剪可出现在多个角色列表。排名不代表身份已确认，请逐张对照原片。</p></div><span className="tag">{roleStatus[role.status]}</span></div>
-              {role.matching_reference_count !== undefined && <p className="helper">本地匹配参考 {role.matching_reference_count} 张，仍需通过人物检测。{role.matching_reference_count === 0 && '该角色缺少本地匹配参考，请先缓存或添加正确参考图；增加采样不会补齐参考图。'}</p>}
-              {role.status === 'skipped' ? <Empty title="这个角色已暂时跳过" action={<button type="button" className="button secondary" disabled={!!busy || roleSaving(role.character_id)} onClick={() => decide('resume')}>继续确认这个角色</button>}>进度已保留，不要求在当前集数中找到所有角色。</Empty> : <>
-                {role.candidates.length ? <><div className="confirmation-batch-actions"><p className="helper">每个角色展示最多 3 张按镜头或时间去重的已保存匹配候选；候选数量不代表整集覆盖。</p><button type="button" className="button primary" disabled={!!busy || !selected.length} onClick={() => enqueueConfirmations(selected)}><Check size={14} />确认所选 {selected.length} 张并用作参考</button></div><div className="confirmation-candidate-grid">{role.candidates.map((candidate) => <CandidateCard key={selectionKey(role.character_id, candidate)} candidate={candidate} role={role} busy={candidateBlocked(role.character_id, candidate)} checked={!!selections[selectionKey(role.character_id, candidate)]} error={saveItems[selectionKey(role.character_id, candidate)]?.error} status={saveItems[selectionKey(role.character_id, candidate)] ? saveStatus(saveItems[selectionKey(role.character_id, candidate)]) : undefined} onCheckedChange={(checked) => {
+            <aside className="confirmation-profile"><span className="eyebrow">角色档案</span>{(role.reference_preview_url || role.profile.external_source?.image_url) ? <img src={role.reference_preview_url || role.profile.external_source!.image_url} referrerPolicy="no-referrer" alt={`${role.profile.name}的${role.reference_preview_url ? "本地匹配" : " Bangumi 档案"}参考图`} /> : <div className="confirmation-profile-placeholder"><UserRound size={38} /></div>}<h3>{role.profile.name}</h3>{role.profile.name_ja && <p>{role.profile.name_ja}</p>}{role.profile.aliases.length > 0 && <p className="helper">又名 {role.profile.aliases.join('、')}</p>}{role.profile.external_source && <a className="text-button" href={role.profile.external_source.url} target="_blank" rel="noreferrer">Bangumi 角色资料 <ExternalLink size={12} /></a>}<p className="confirmation-description">{role.profile.description || '暂无角色简介，请结合原片核对。'}</p><span className="tag">可信参考 {role.trusted_reference_count} 张</span><p className="helper">身份标签与参考来源会一并保存。同一作品后续集数可复用。</p></aside>
+            <div className="confirmation-candidates-area"><div className="confirmation-role-heading"><div><h3>正片里，哪个是{role.profile.name}？</h3><p className="helper">每张裁剪只归属一个最佳匹配角色，未通过校准或区分度检查的裁剪进入待判定池。这里的候选仍需核对原片后明确确认。</p></div><span className="tag">{roleStatus[role.status]}</span></div>
+              {role.coverage && <p className="helper" role="status">候选生成情况：{role.coverage.reason || role.coverage.status} · 角色匹配候选 {role.coverage.candidate_count} 张 · 可供人工核对的待判定 {role.coverage.review_pool_count ?? 0} 张（不代表该角色已被找到） · 本作品已采样 {role.coverage.sampled_assets ?? 0} 集 / {role.coverage.sampled_frames ?? 0} 帧。没有候选不代表未出场。</p>}
+              <ReferenceDiagnostics role={role} />
+              {!role.reference_detection_status && role.matching_reference_count !== undefined && <p className="helper">本地匹配参考 {role.matching_reference_count} 张，仍需通过人物检测。{role.matching_reference_count === 0 && '该角色缺少本地匹配参考，请先缓存或添加正确参考图；增加采样不会补齐参考图。'}</p>}
+              {role.status === 'skipped' ? <Empty title="这个角色已暂时跳过" action={<button type="button" className="button secondary" disabled={!!busy || targetsDirty || generationUnknown || roleSaving(role.character_id)} onClick={() => decide('resume')}>继续确认这个角色</button>}>进度已保留，不要求在当前集数中找到所有角色。</Empty> : <>
+                {role.candidates.length ? <><div className="confirmation-batch-actions"><p className="helper">每个角色展示最多 3 张按镜头或时间去重的已保存匹配候选；候选数量不代表整集覆盖。</p><button type="button" className="button primary" disabled={!!busy || targetsDirty || generationUnknown || !selected.length} onClick={() => enqueueConfirmations(selected)}><Check size={14} />确认所选 {selected.length} 张并用作参考</button></div><div className="confirmation-candidate-grid">{role.candidates.map((candidate) => <CandidateCard key={selectionKey(role.character_id, candidate)} candidate={candidate} role={role} busy={candidateBlocked(role.character_id, candidate)} checked={!!selections[selectionKey(role.character_id, candidate)]} error={saveItems[selectionKey(role.character_id, candidate)]?.error} status={saveItems[selectionKey(role.character_id, candidate)] ? saveStatus(saveItems[selectionKey(role.character_id, candidate)]) : undefined} onCheckedChange={(checked) => {
                   const session = sessionRef.current;
                   if (candidateBlocked(role.character_id, candidate)) return;
                   const key = selectionKey(role.character_id, candidate);
@@ -464,15 +581,42 @@ export default function CharacterConfirmation({ asset, onClose, onSaved, onConti
                   else { unavailableCandidates.current.add(key); delete sessionRef.current.selections[key]; }
                   publish(sessionRef.current);
                 }} onDecision={(action, value) => { void decide(action, [value]); }} onPreview={setPreview} />)}</div></> : <Empty title="暂时没有合适候选">{role.matching_reference_count === 0 ? "请先补齐该角色的本地参考图，再匹配已保存帧或补充少量采样。没有候选不代表未出场。" : "已有参考时可匹配已保存帧或补充少量本地采样。没有候选不代表未出场。"}</Empty>}
-                <div className="button-row">{role.candidates.length > 0 && <button type="button" className="button secondary" disabled={!!busy || roleSaving(role.character_id) || role.candidates.some((candidate) => candidateBlocked(role.character_id, candidate))} onClick={() => decide('unclear', role.candidates)}><RefreshCw size={14} />看不清／换一组</button>}{role.status !== 'confirmed' && <button type="button" className="button ghost" disabled={!!busy || roleSaving(role.character_id)} onClick={() => decide('skip')}>暂时跳过这个角色</button>}{data.summary.pending > (role.status === 'pending' ? 1 : 0) && <button type="button" className="button ghost" disabled={!!busy} onClick={() => nextRole(data, role.character_id)}>下一个待确认角色 <ArrowRight size={14} /></button>}</div>
+                <div className="button-row">{role.candidates.length > 0 && <button type="button" className="button secondary" disabled={!!busy || targetsDirty || generationUnknown || roleSaving(role.character_id) || role.candidates.some((candidate) => candidateBlocked(role.character_id, candidate))} onClick={() => decide('unclear', role.candidates)}><RefreshCw size={14} />看不清／换一组</button>}{role.status !== 'confirmed' && <button type="button" className="button ghost" disabled={!!busy || targetsDirty || generationUnknown || roleSaving(role.character_id)} onClick={() => decide('skip')}>暂时跳过这个角色</button>}{data.summary.pending > (role.status === 'pending' ? 1 : 0) && <button type="button" className="button ghost" disabled={!!busy} onClick={() => nextRole(data, role.character_id)}>下一个待确认角色 <ArrowRight size={14} /></button>}</div>
               </>}
-              {preview && <ClipPreview key={candidateKey(preview)} candidate={preview} onClose={() => setPreview(null)} />}
+              {preview && !data.review_pool?.some((item) => candidateKey(item) === candidateKey(preview)) && <ClipPreview key={candidateKey(preview)} candidate={preview} onClose={() => setPreview(null)} />}
             </div>
           </section>}
         </>}
+        {(data.review_pool_count || data.review_pool?.length || 0) > 0 && <section className="confirmation-review-pool" aria-label="待判定候选池">
+          <div className="section-row"><div><h3>待判定候选池</h3><p className="helper">未校准、匹配接近或缺少参考的裁剪不会自动归到角色。每张裁剪只显示一次；先明确选择角色，再对照参考与原片，勾选后提交。</p></div><span className="tag">共 {data.review_pool_count ?? data.review_pool?.length ?? 0} 张待判定</span></div>
+          <div className="confirmation-batch-actions"><p className="helper">当前显示第 {(data.review_pool_offset ?? 0) + (data.review_pool?.length ? 1 : 0)} — {(data.review_pool_offset ?? 0) + (data.review_pool?.length ?? 0)} 张。换页保留已核对草稿，可从上方提交全部。</p><div className="button-row"><button type="button" className="button secondary small" disabled={!!busy || pendingCount > 0 || !data.review_pool_previous_cursor} onClick={() => void loadPoolPage(data.review_pool_previous_cursor!)}>上一页待判定</button><button type="button" className="button secondary small" disabled={!!busy || pendingCount > 0 || !data.review_pool_next_cursor} onClick={() => void loadPoolPage(data.review_pool_next_cursor!)}>下一页待判定</button></div></div>
+          <div className="confirmation-candidate-grid">{(data.review_pool || []).map((candidate) => {
+            const region = candidateKey(candidate);
+            const selectedRole = enabledRoles.find((item) => item.character_id === poolRoles[region]);
+            const options = enabledRoles.filter((item) => (!candidate.eligible_character_ids || candidate.eligible_character_ids.includes(item.character_id)) && !candidate.excluded_character_ids?.includes(item.character_id));
+            const reviewRole = selectedRole && options.some((item) => item.character_id === selectedRole.character_id) ? selectedRole : undefined;
+            const displayCandidate = reviewRole ? candidateForRole(candidate, reviewRole.character_id) : candidate;
+            const reserved = Object.values(selections).some((item) => candidateKey(item.candidate) === region) || Object.values(saveItems).some((item) => item.selection.candidate && candidateKey(item.selection.candidate) === region && (activeSave(item) || unresolvedSave(item)));
+            const key = reviewRole ? selectionKey(reviewRole.character_id, candidate) : '';
+            const checked = !!selections[key];
+            return <article className="confirmation-pool-item" key={region} aria-label={`待判定候选 ${candidate.asset_title} ${formatTime(candidate.at_ms)}`}>
+              <p className="warning-text">{poolReason(candidate.confidence_state)}</p>
+              <label className="field"><span>选择要核对的角色</span><select aria-label={`为${candidate.asset_title} ${formatTime(candidate.at_ms)}选择核对角色`} value={reviewRole?.character_id || ''} disabled={!!busy || targetsDirty || generationUnknown || reserved} onChange={(event) => setPoolRoles((value) => ({ ...value, [region]: event.target.value }))}>
+                <option value="">请选择角色（尚未确认）</option>{options.map((item) => <option key={item.character_id} value={item.character_id}>{item.profile.name}</option>)}
+              </select></label>
+              {reviewRole ? <>
+                <div className="confirmation-pool-profile">{(reviewRole.reference_preview_url || reviewRole.profile.external_source?.image_url) ? <img src={reviewRole.reference_preview_url || reviewRole.profile.external_source!.image_url} referrerPolicy="no-referrer" alt={`${reviewRole.profile.name}的角色头像`} /> : <UserRound size={26} />}<div><strong>{reviewRole.profile.name}</strong><p className="helper">本地参考 {reviewRole.matching_reference_count ?? reviewRole.trusted_reference_count} 张 · 人工选择，尚未确认</p><p className="helper">{reviewRole.profile.description}</p></div></div>
+                <ReferenceDiagnostics role={reviewRole} />
+                <CandidateCard candidate={displayCandidate} role={reviewRole} busy={candidateBlocked(reviewRole.character_id, candidate)} checked={checked} error={saveItems[key]?.error} status={saveItems[key] ? saveStatus(saveItems[key]) : undefined} onCheckedChange={(value) => checkCandidate(reviewRole, displayCandidate, value)} onAvailabilityChange={(value) => candidateAvailability(reviewRole.character_id, candidate, value)} onDecision={(action, value) => decide(action, [value], reviewRole)} onPreview={setPreview} />
+                <button type="button" className="button primary small" disabled={!!busy || targetsDirty || generationUnknown || !checked || activeSave(saveItems[key]) || saveItems[key]?.status === 'unknown' || unavailableCandidates.current.has(key)} onClick={() => enqueueConfirmations([[key, selections[key]]])}>确认所选 {checked ? 1 : 0} 张并用作参考</button>
+              </> : <><div className="confirmation-crop"><img src={candidate.crop_url} alt={`${candidate.asset_title}待判定裁剪 ${formatTime(candidate.at_ms)}`} /></div><p className="helper">{candidate.asset_title} · {formatTime(candidate.at_ms)}</p><div className="button-row"><button type="button" className="text-button" disabled={candidate.source_available === false} onClick={() => setPreview(candidate)}>播放前后片段</button><a className="text-button" href={originalFrame(candidate)} target="_blank" rel="noreferrer">原始画面</a></div>{!options.length && <p className="helper">当前名单没有可核对角色。请检查名单或已保存的否定记录。</p>}</>}
+            </article>;
+          })}</div>
+          {preview && data.review_pool?.some((item) => candidateKey(item) === candidateKey(preview)) && <ClipPreview key={candidateKey(preview)} candidate={preview} onClose={() => setPreview(null)} />}
+        </section>}
       </>}
-      {busy && <Spinner label={busy === 'continue' ? '正在继续任务' : busy === 'sample' ? '正在启动少量采样' : busy === 'cache' ? '正在缓存 Bangumi 参考图' : busy === 'targets' ? '正在保存识别名单' : '正在保存确认进度'} />}
+      {busy && <Spinner label={busy === 'continue' ? '正在继续任务' : busy === 'sample' ? '正在启动跨集候选生成' : busy === 'cache' ? '正在缓存 Bangumi 参考图' : busy === 'targets' ? '正在保存识别名单' : '正在保存确认进度'} />}
     </div>
-    {!editingTargets && <footer className="modal-footer"><p className="helper">{pendingCount > 0 ? `还有 ${pendingCount} 项排队或保存中，请保持页面打开。` : readySelections.length > 0 ? `还有 ${readySelections.length} 张已核对裁剪未保存。` : onContinue ? data?.summary.pending ? `还有 ${data.summary.pending} 个角色等待确认或明确跳过。` : '角色确认已完成，可以继续任务。' : '关闭后可从角色档案继续核对。'}</p><div className="button-row"><button type="button" className="button secondary" disabled={!!busy || pendingCount > 0 || readySelections.length > 0} onClick={close}>保存进度并返回</button>{onContinue && <button type="button" className="button primary" disabled={!!busy || pendingCount > 0 || readySelections.length > 0 || failedCount > 0 || loading || !data || data.summary.pending > 0 || sampling?.status === 'running'} onClick={() => void continueTask()}><Play size={15} />继续任务</button>}</div></footer>}
+    <footer className="modal-footer"><p className="helper">{targetsDirty ? '识别名单修改尚未保存。' : pendingCount > 0 ? `还有 ${pendingCount} 项排队或保存中，请保持页面打开。` : readySelections.length > 0 ? `还有 ${readySelections.length} 张已核对裁剪未保存。` : onContinue ? data?.summary.pending ? `还有 ${data.summary.pending} 个角色等待确认或明确跳过。` : '角色确认已完成，可以继续任务。' : '关闭后可从角色档案继续核对。'}</p><div className="button-row"><button type="button" className="button secondary" disabled={!!busy || targetsDirty || pendingCount > 0 || readySelections.length > 0} onClick={close}>保存进度并返回</button>{onContinue && <button type="button" className="button primary" disabled={!!busy || targetsDirty || generationUnknown || pendingCount > 0 || readySelections.length > 0 || failedCount > 0 || loading || !data || data.summary.pending > 0 || samplingActive(sampling?.status)} onClick={() => void continueTask()}><Play size={15} />继续任务</button>}</div></footer>
   </Modal>;
 }

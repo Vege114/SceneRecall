@@ -1,13 +1,165 @@
 """Validate character confirmation provenance before publishing a restored backup."""
 from __future__ import annotations
 
-from .characters import CharacterStore, checked_box
+from .characters import CharacterStore, checked_box, scope_id
 from .library import digest, read_json, safe_id
 
 
 def _identity(registry, value):
     safe_id(value)
     return CharacterStore._resolve(registry, value, strict=True)
+
+
+def _count(value, *, maximum=None):
+    return type(value) is int and value >= 0 and (maximum is None or value <= maximum)
+
+
+def validate_sampling_v2(library, scope, sample):
+    """Validate a bounded work plan without trusting its stored paths or IDs."""
+    registry = CharacterStore(library)._read(scope)
+    invalid = "角色确认跨集采样备份格式无效"
+    statuses = {"running", "cancelling", "cancelled", "completed", "partial", "failed",
+                "unavailable", "interrupted", "invalidated"}
+    if (not isinstance(sample, dict) or sample.get("schema_version") != "1.0"
+            or sample.get("sampling_version") != "2.0" or sample.get("scope_id") != scope
+            or not isinstance(sample.get("status"), str) or sample["status"] not in statuses
+            or not isinstance(sample.get("request_scope"), str) or sample["request_scope"] not in {"asset", "work"}
+            or not isinstance(sample.get("updated_at"), str)
+            or not isinstance(sample.get("plan"), list)
+            or not isinstance(sample.get("assets"), list)
+            or not isinstance(sample.get("completed_frames"), list)
+            or not isinstance(sample.get("selected_character_ids"), list)
+            or not isinstance(sample.get("budget"), dict)):
+        raise ValueError(invalid)
+    budget = sample["budget"]
+    maximum = 24 if sample["request_scope"] == "asset" else 120
+    if any(not _count(budget.get(key), maximum=limit) or budget[key] < 1 for key, limit in (
+            ("max_frames", maximum), ("max_assets", 24), ("frames_per_asset", 24))):
+        raise ValueError(invalid)
+    total, completed, attempted = (sample.get(key) for key in ("total", "completed", "attempted"))
+    if (not _count(total, maximum=budget["max_frames"]) or not _count(completed, maximum=total)
+            or not _count(attempted, maximum=total) or not _count(sample.get("failed_frames"), maximum=total)
+            or attempted != completed + sample["failed_frames"]
+            or len(sample["plan"]) != total or len(sample["completed_frames"]) != completed
+            or not _count(sample.get("round"))):
+        raise ValueError(invalid)
+    safe_id(sample.get("base_id"))
+    selected = sample["selected_character_ids"]
+    for character_id in selected:
+        _identity(registry, character_id)
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError(invalid)
+    entry_id = safe_id(sample.get("asset_id"))
+    entry = library.get_asset(entry_id, include_deleted=True)
+    if scope_id(entry) != scope:
+        raise ValueError("角色确认跨集采样入口来源不一致")
+    sources, planned, totals, failures = {}, {}, {}, 0
+    def source(asset_id):
+        if asset_id not in sources:
+            sources[asset_id] = library.get_asset(asset_id, include_deleted=True)
+        return sources[asset_id]
+
+    for item in sample["plan"]:
+        if not isinstance(item, dict):
+            raise ValueError(invalid)
+        asset_id, frame_id = safe_id(item.get("asset_id")), safe_id(item.get("frame_id"))
+        asset = source(asset_id)
+        if (scope_id(asset) != scope or item.get("source_fingerprint") != asset["fingerprint"]
+                or type(item.get("at_ms")) is not int or not 0 <= item["at_ms"] < asset["duration_ms"]
+                or (asset_id, frame_id) in planned
+                or frame_id != "frame_" + digest([sample["base_id"], sample["round"], asset_id, item["at_ms"]])
+                or not isinstance(item.get("status"), str) or item["status"] not in {"pending", "completed", "failed"}
+                or "error" in item and not isinstance(item["error"], str)):
+            raise ValueError("角色确认跨集采样计划来源或时间范围无效")
+        planned[(asset_id, frame_id)] = item
+        totals[asset_id] = totals.get(asset_id, 0) + 1
+        failures += item["status"] == "failed"
+    plan_identity = [{key: item[key] for key in ("asset_id", "source_fingerprint", "at_ms", "frame_id")}
+                     for item in sample["plan"]]
+    if (sample.get("id") != digest([sample["base_id"], sample["round"], plan_identity])
+            or not isinstance(sample.get("requested_times"), list)
+            or any(type(value) is not int for value in sample["requested_times"])
+            or sample.get("requested_times") != [item["at_ms"] for item in sample["plan"]]
+            or failures != sample["failed_frames"]):
+        raise ValueError("角色确认跨集采样轮次或进度无效")
+    if (len(sources) > budget["max_assets"]
+            or any(value > budget["frames_per_asset"] for value in totals.values())
+            or sample["request_scope"] == "asset" and set(sources) - {entry_id}):
+        raise ValueError("角色确认跨集采样计划超过预算")
+    completed_keys, per_asset, registries = set(), {}, {}
+    for item in sample["completed_frames"]:
+        if not isinstance(item, dict):
+            raise ValueError(invalid)
+        asset_id, frame_id = safe_id(item.get("asset_id")), safe_id(item.get("frame_id"))
+        key = asset_id, frame_id
+        if key not in planned or key in completed_keys or planned[key]["status"] != "completed":
+            raise ValueError("角色确认跨集采样完成帧不属于计划或重复")
+        if asset_id not in registries:
+            registries[asset_id] = read_json(library.asset_dir(asset_id) / "frames" / "registry.json", {})
+        frames = registries[asset_id]
+        if (item.get("source_fingerprint") != planned[key]["source_fingerprint"]
+                or type(item.get("at_ms")) is not int
+                or item["at_ms"] != frames.get(frame_id, {}).get("at_ms")
+                or type(planned[key].get("actual_at_ms")) is not int
+                or item["at_ms"] != planned[key]["actual_at_ms"]):
+            raise ValueError("角色确认跨集采样完成帧来源不一致")
+        library.check_frame_entries(asset_id, [frame_id], registry=frames)
+        completed_keys.add(key)
+        per_asset[asset_id] = per_asset.get(asset_id, 0) + 1
+    if {key for key, item in planned.items() if item["status"] == "completed"} != completed_keys:
+        raise ValueError("角色确认跨集采样完成帧清单不完整")
+    children = {}
+    for child in sample["assets"]:
+        if not isinstance(child, dict):
+            raise ValueError(invalid)
+        asset_id = safe_id(child.get("asset_id"))
+        asset = source(asset_id)
+        if (asset_id in children or scope_id(asset) != scope
+                or child.get("source_fingerprint") != asset["fingerprint"]
+                or not _count(child.get("total")) or child["total"] != totals.get(asset_id, 0)
+                or not _count(child.get("completed")) or child["completed"] != per_asset.get(asset_id, 0)
+                or not isinstance(child.get("status"), str) or child["status"] not in statuses | {"pending"}
+                or "error" in child and not isinstance(child["error"], str)):
+            raise ValueError("角色确认跨集采样分集进度无效")
+        children[asset_id] = child
+    if (set(children) != set(sources) or len(children) > budget["max_assets"]
+            or sample["request_scope"] == "asset" and set(children) - {entry_id}):
+        raise ValueError("角色确认跨集采样分集进度不完整")
+    if sample.get("frame_ids") != [item["frame_id"] for item in sample["completed_frames"]]:
+        raise ValueError("角色确认跨集采样兼容帧清单无效")
+    if (sample["status"] == "completed" and (attempted != total or failures)
+            or sample["status"] == "partial" and (attempted != total or not completed or not failures)):
+        raise ValueError("角色确认跨集采样结束状态与进度不一致")
+    for key in ("reused_frames", "detected_regions", "accepted_regions"):
+        if key in sample and not _count(sample[key]):
+            raise ValueError(invalid)
+    if sample.get("reused_frames", 0) > completed or sample.get("accepted_regions", 0) > sample.get("detected_regions", 0):
+        raise ValueError(invalid)
+    if "error" in sample and not isinstance(sample["error"], str):
+        raise ValueError(invalid)
+    if (not isinstance(sample.get("warnings", []), list)
+            or any(not isinstance(value, str) for value in sample.get("warnings", []))
+            or not isinstance(sample.get("attempt_history", []), list)):
+        raise ValueError(invalid)
+    for attempt in sample.get("attempt_history", []):
+        if (not isinstance(attempt, dict) or not isinstance(attempt.get("status"), str)
+                or attempt["status"] not in statuses or not isinstance(attempt.get("updated_at"), str)
+                or not _count(attempt.get("completed"), maximum=total)
+                or not _count(attempt.get("failed_frames"), maximum=total)
+                or attempt["completed"] + attempt["failed_frames"] > total
+                or attempt.get("error") is not None and not isinstance(attempt["error"], str)
+                or not isinstance(attempt.get("failures"), list)
+                or len(attempt["failures"]) != attempt["failed_frames"]):
+            raise ValueError("角色确认跨集采样重试审计无效")
+        failures = set()
+        for failure in attempt["failures"]:
+            if not isinstance(failure, dict):
+                raise ValueError("角色确认跨集采样重试审计无效")
+            key = safe_id(failure.get("asset_id")), safe_id(failure.get("frame_id"))
+            if (key not in planned or key in failures
+                    or failure.get("error") is not None and not isinstance(failure["error"], str)):
+                raise ValueError("角色确认跨集采样重试审计无效")
+            failures.add(key)
 
 
 def _candidate(library, directory, registry, key, row):
@@ -80,7 +232,12 @@ def validate_character_confirmation_artifacts(library):
         sample = read_json(directory / "sampling.json")
         if sample is None:
             continue
+        if isinstance(sample, dict) and sample.get("sampling_version") == "2.0":
+            validate_sampling_v2(library, scope, sample)
+            continue
         if (not isinstance(sample, dict) or sample.get("scope_id") != scope
+                or sample.get("schema_version", "1.0") != "1.0"
+                or sample.get("sampling_version", "1.0") != "1.0"
                 or not isinstance(sample.get("status"), str)
                 or sample.get("status") not in {"running", "completed", "failed", "unavailable", "interrupted"}
                 or not isinstance(sample.get("updated_at"), str)

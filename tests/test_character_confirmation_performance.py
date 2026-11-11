@@ -10,14 +10,14 @@ from scenerecall.library import atomic_json
 from scenerecall import character_confirmation, visual_identity
 from scenerecall.retrieval_store import RetrievalStore
 from scenerecall.scenes import SceneStore
-from test_character_confirmation import confirm, prepared
+from test_character_confirmation import choices, confirm, prepared
 from test_visual_identity import visual as visual
 from test_organization import bangumi_archive
 
 
 def test_confirmation_and_queue_use_metadata_roster_without_full_catalog(visual, monkeypatch):
     service, identity = prepared(visual)
-    candidate = service.queue("asset_one")["roles"][0]["candidates"][0]
+    candidate = choices(service.queue("asset_one"))[0]
     expected = CharacterStore(service.library).catalog("asset_one")["profiles"][0]
 
     def no_catalog(*args, **kwargs):
@@ -48,12 +48,12 @@ def test_roster_snapshot_does_not_survive_human_edits_or_reference_revocation(vi
     reference = service.gallery.list("asset_one")["references"][0]
     service.gallery.update("asset_one", identity, reference["id"], status="revoked", reason="incorrect reference")
     assert service.queue("asset_one")["roles"][0]["available_count"] == 0
-    assert first["roles"][0]["available_count"] > 0
+    assert first["roles"][0]["coverage"]["review_pool_count"] > 0
 
 
 def test_source_asset_movement_invalidates_reference_with_operation_snapshot(visual):
     service, identity = prepared(visual)
-    candidate = service.queue("asset_one")["roles"][0]["candidates"][0]
+    candidate = choices(service.queue("asset_one"))[0]
     confirm(service, identity, candidate)
     catalog = CharacterStore(service.library).roster("asset_one")
     original = service.gallery.list("asset_one", trusted_only=True, _catalog=catalog)["references"]
@@ -79,14 +79,14 @@ def test_queue_resolves_only_shown_crops_and_keeps_reconstructible_missing_files
 
     monkeypatch.setattr(character_confirmation, "confined_path", counted)
     monkeypatch.setattr(visual_identity, "confined_path", counted)
-    role = service.queue("asset_one")["roles"][0]
-    assert role["available_count"] == 20 and len(role["candidates"]) == 3
-    assert len(resolved) == 4  # One confined directory and the three shown files.
+    queue = service.queue("asset_one")
+    assert queue["review_pool_count"] == len(queue["review_pool"]) == 20
+    assert len(resolved) == 21  # One confined directory and the twenty shown pool files.
 
 
 def test_crop_inventory_keeps_full_confinement_for_symlinks(visual, monkeypatch):
     service, _identity = prepared(visual, times=(200,))
-    chosen = service.queue("asset_one")["roles"][0]["candidates"][0]
+    chosen = choices(service.queue("asset_one"))[0]
     name = f"{chosen['region_id']}.png"
 
     class LinkedEntry:
@@ -116,7 +116,7 @@ def test_crop_inventory_keeps_full_confinement_for_symlinks(visual, monkeypatch)
 
 def test_reference_trust_reads_same_source_asset_once_per_operation(visual, monkeypatch):
     service, identity = prepared(visual)
-    confirm(service, identity, service.queue("asset_one")["roles"][0]["candidates"][0])
+    confirm(service, identity, choices(service.queue("asset_one"))[0])
     scope = CharacterStore(service.library).roster("asset_one")["scope_id"]
     saved = service.gallery._read(scope)
     exemplar = next(row for row in saved["references"] if row["source"]["kind"] == "frame_crop")
@@ -150,7 +150,7 @@ def test_same_scope_source_roster_still_excludes_disallowed_character(visual):
     assert library.get_asset("asset_one")["character_scope_id"] == library.get_asset("asset_two")["character_scope_id"]
     scope = library.get_asset("asset_one")["character_scope_id"]
     before = deepcopy(service.gallery._read(scope))
-    assert all(row["asset_id"] == "asset_one" for row in service.queue("asset_one")["roles"][0]["candidates"])
+    assert all(row["asset_id"] == "asset_one" for row in choices(service.queue("asset_one")))
     with pytest.raises(ValueError, match="同一作品名单"):
         service.decide("asset_one", identity, action="confirm", source_asset_id="asset_two", region_id=region["id"],
                        single_character=True, use_as_reference=True)
