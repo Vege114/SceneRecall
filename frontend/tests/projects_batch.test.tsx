@@ -26,6 +26,23 @@ function mockFetch(handler: (url: string, body: any, options?: RequestInit) => u
 function requests(fetch: ReturnType<typeof mockFetch>) { return fetch.mock.calls.filter((call) => call[0] !== '/api/media/subtitle-detection'); }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); window.history.replaceState({}, '', '/'); });
 
+it('can export all sampled pictures independently of the source videos', async () => {
+  window.history.replaceState({}, '', '/#settings?tab=data');
+  const submitted: unknown[] = [];
+  const user = userEvent.setup();
+  mockFetch((url, body) => {
+    if (url === '/api/backups') submitted.push(body);
+    return { id: 'portable', download_url: '/api/backups/portable' };
+  });
+  show(<Settings />);
+  const pictures = screen.getByRole('checkbox', { name: /包含已采样画面/ });
+  expect((pictures as HTMLInputElement).checked).toBe(false);
+  await user.click(pictures);
+  await user.click(screen.getByRole('button', { name: '生成资料备份' }));
+  expect(await screen.findByRole('link', { name: /点击下载/ })).toBeTruthy();
+  expect(submitted).toEqual([{ include_media: false, include_sampled_frames: true }]);
+});
+
 describe('Native multi-file selection and import', () => {
   it('chooses multiple videos through Finder and submits their local paths in episode order', async () => {
     const user = userEvent.setup();

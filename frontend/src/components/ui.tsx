@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertCircle, Check, Film, LoaderCircle, X } from 'lucide-react';
 
 export function Spinner({ label = '正在加载' }: { label?: string }) {
@@ -45,5 +45,9 @@ export function Status({ status }: { status?: string }) {
   return <span className={`status status-${status || 'registered'}`}><span />{text[status || 'registered'] || status}</span>;
 }
 export function Thumbnail({ src, title = '', className = '' }: { src?: string; title?: string; className?: string }) {
-  return <div className={`thumbnail ${className}`}>{src ? <img src={src} alt={title} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} /> : <Film size={28} strokeWidth={1} />}<div className="thumbnail-grain" /></div>;
+  const [failed, setFailed] = useState<string>();
+  return <div className={`thumbnail ${className}`}>{src && failed !== src
+    ? <img key={src} src={src} alt={title} loading="lazy" onError={() => setFailed(src)} />
+    : src ? <small role="img" aria-label="画面暂不可用">画面暂不可用</small> : <Film size={28} strokeWidth={1} />}
+    <div className="thumbnail-grain" /></div>;
 }

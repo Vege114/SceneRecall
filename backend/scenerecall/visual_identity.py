@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+from itertools import batched
 from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageOps, ImageStat
@@ -606,10 +607,24 @@ class VisualIdentityPipeline:
                 references.append(reference)
                 features.append(self._feature(reference["path"], version, backend, metrics))
             frame_registry = read_json(self.library.asset_dir(asset_id) / "frames" / "registry.json", {})
-            for frame_number, frame in enumerate(frames, 1):
+            def resolved_frames():
+                for batch in batched(frames, 64):
+                    checkpoint()
+                    ids = [frame["id"] for frame in batch]
+                    try:
+                        paths = self.library.frame_paths(asset_id, ids, registry=frame_registry)
+                    except (OSError, ValueError):
+                        # Preserve the original partial-progress boundary if a
+                        # later frame is damaged or unavailable.
+                        for frame in batch:
+                            yield frame, self.library.frame_path(asset_id, frame["id"])
+                        continue
+                    for frame in batch:
+                        yield frame, paths[frame["id"]]
+
+            for frame_number, (frame, path) in enumerate(resolved_frames(), 1):
                 checkpoint()
                 identifier = frame["id"]
-                path = self.library.frame_path(asset_id, identifier)
                 at_ms = frame_registry[identifier]["at_ms"]
                 if frame.get("at_ms", at_ms) != at_ms:
                     raise ValueError("视觉身份帧时间与原片时间轴不一致")
@@ -832,6 +847,9 @@ class VisualIdentityPipeline:
                 raise ValueError("请选择当前作品中的角色档案")
             saved = read_json(self._directory(asset_id) / "decisions.json", {"revision": 0, "decisions": {}, "audit": []})
             before = saved["decisions"].get(region_id)
+            if status == "confirmed" and region.get("frame_id"):
+                from .record_previews import preserve_frames
+                preserve_frames(self.library, asset_id, [region["frame_id"]])
             decision = {"status": status, "character_id": character_id if status == "confirmed" else None,
                         "candidate_character_id": character_id if status == "candidate" else None,
                         "source": "human", "reason": str(reason).strip(), "updated_at": now(),
@@ -927,7 +945,7 @@ def validate_visual_artifacts(library):
             source = reference["source"]
             if source["kind"] == "frame_crop":
                 library.get_asset(source["asset_id"], include_deleted=True)
-                library.frame_path(source["asset_id"], source["frame_id"])
+                library.check_frame_entries(source["asset_id"], [source["frame_id"]])
                 if checked_box(source.get("box")) is None:
                     raise ValueError("参考图裁剪来源缺少区域")
     for directory in (library.root / "assets").glob("*/identity/visual"):
@@ -940,6 +958,7 @@ def validate_visual_artifacts(library):
         values.extend(latest.get("regions", []))
         for path in library.asset_dir(asset_id).glob("analyses/*/identity-prelude.json"):
             values.extend(read_json(path, {}).get("visual", {}).get("regions", []))
+        library.check_frame_entries(asset_id, {safe_id(row["frame_id"]) for row in values}, registry=frame_registry)
         for row in values:
             identity = safe_id(row["id"])
             if row.get("entity_id") != identity or checked_box(row.get("box")) is None:
@@ -947,8 +966,16 @@ def validate_visual_artifacts(library):
             frame_id = safe_id(row["frame_id"])
             if row["at_ms"] != frame_registry.get(frame_id, {}).get("at_ms"):
                 raise ValueError("人物区域备份时间与证据帧不一致")
-            library.frame_path(asset_id, frame_id)
-            _image(crop_bytes(library, asset_id, row))
+            entry = frame_registry[frame_id]
+            ordinary = confined_path(library.asset_dir(asset_id), entry["path"])
+            if entry.get("sample") and not ordinary.is_file() and not crop_path(library, asset_id, identity).is_file():
+                # A metadata backup can refer to an external source that will
+                # be relocated later. Validate any recorded raw-image digest
+                # against the frame recipe before accepting that dependency.
+                if row.get("source_frame_sha256", entry["sample"]["jpeg_sha256"]) != entry["sample"]["jpeg_sha256"]:
+                    raise ValueError("人物区域的原帧与采样摘要不一致")
+            else:
+                _image(crop_bytes(library, asset_id, row))
             if row.get("match", {}).get("status") not in {"confirmed", "candidate", "unknown"}:
                 raise ValueError("人物身份关联状态无效")
         decisions = read_json(directory / "decisions.json", {"decisions": {}, "audit": []})

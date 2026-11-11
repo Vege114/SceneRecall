@@ -31,8 +31,8 @@ class RetrievalStore:
                 or any(type(f.get("at_ms")) is not int or not 0 <= f["at_ms"] < asset["duration_ms"] for f in frames)
                 or [f["at_ms"] for f in frames] != sorted(f["at_ms"] for f in frames)):
             raise ValueError("检索记录的有序源帧无效")
-        self.library.frame_paths(asset_id, ids)
         registry = read_json(self.library.asset_dir(asset_id) / "frames" / "registry.json", {})
+        self.library.check_frame_entries(asset_id, ids, registry=registry)
         if any(registry[f["id"]]["at_ms"] != f["at_ms"] for f in frames):
             raise ValueError("检索记录改变了原始证据帧时间")
         for frame in frames:

@@ -129,6 +129,8 @@ class RetrievalIdentityInput(Contract):
 
 class AnnotationInput(Contract):
     record_id: str
+    preview_frame_id: str | None = None
+    preview_member_ids: list[str] | None = None
     summary: str | None = Field(default=None, max_length=20000)
     note: str | None = Field(default=None, max_length=20000)
     character_name: str | None = Field(default=None, max_length=200)

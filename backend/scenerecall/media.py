@@ -470,22 +470,27 @@ def _last_visible_frame(path: Path, output: Path, crop_filter: str | None, metad
 
     A near-end ffprobe seek includes the preceding keyframe, unlike accurate
     FFmpeg seeking which can discard a final frame whose PTS precedes the target.
-    No nominal fps or invented timestamp is used. Both subprocesses are bounded.
+    Use presented timestamps. Each probe and decode has its own timeout.
     """
     origin = metadata["start_time_ms"] / 1000
-    seek = max(origin, origin + metadata["duration_ms"] / 1000 - 1)
-    result = _run([
-        _tool("ffprobe"), "-v", "error", "-select_streams", "V:0", "-read_intervals", f"{seek:.6f}%",
-        "-show_frames", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", str(path),
-    ], timeout=60)
-    try:
-        raw = json.loads(result.stdout)
-        times = [float(frame["best_effort_timestamp_time"]) - origin for frame in raw.get("frames", [])
-                 if frame.get("best_effort_timestamp_time") is not None]
-        times = [time for time in times if math.isfinite(time) and 0 <= time * 1000 < metadata["duration_ms"]]
-    except (ValueError, TypeError, KeyError) as exc:
-        raise MediaError("无法读取视频末帧时间戳。") from exc
-    if not times:
+    end = origin + metadata["duration_ms"] / 1000
+    # A short seek may land after the last decodable packet of a held image.
+    # Retry from an earlier keyframe and still require an actual presented PTS.
+    for seek in dict.fromkeys((max(origin, end - 1), max(origin, end - 30))):
+        result = _run([
+            _tool("ffprobe"), "-v", "error", "-select_streams", "V:0", "-read_intervals", f"{seek:.6f}%",
+            "-show_frames", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", str(path),
+        ], timeout=60)
+        try:
+            raw = json.loads(result.stdout)
+            times = [float(frame["best_effort_timestamp_time"]) - origin for frame in raw.get("frames", [])
+                     if frame.get("best_effort_timestamp_time") is not None]
+            times = [time for time in times if math.isfinite(time) and 0 <= time * 1000 < metadata["duration_ms"]]
+        except (ValueError, TypeError, KeyError) as exc:
+            raise MediaError("无法读取视频末帧时间戳。") from exc
+        if times:
+            break
+    else:
         raise MediaError("视频末尾没有可解码的画面。")
     # Floor the seek so a fractional source PTS is never rounded beyond the frame.
     at = max(0, math.floor(max(times) * 1000 + 1e-6))
@@ -496,13 +501,13 @@ def _last_visible_frame(path: Path, output: Path, crop_filter: str | None, metad
     return at + round(float(matches[0][2]) * 1000)
 
 
-def extract_frame(path: Path, at_ms: int, out_path: Path, crop: Any = None) -> dict:
+def extract_frame(path: Path, at_ms: int, out_path: Path, crop: Any = None, *, metadata: dict | None = None) -> dict:
     if isinstance(at_ms, bool) or not isinstance(at_ms, int) or at_ms < 0:
         raise MediaError("抽帧时间必须是非负整数毫秒。")
     path, out_path = _source(path), Path(out_path).resolve()
     if path == out_path:
         raise MediaError("抽帧输出不能覆盖原视频。")
-    metadata = probe(path)
+    metadata = _metadata_for_source(path, metadata)
     if at_ms >= metadata["duration_ms"]:
         raise MediaError("抽帧时间超出视频时长。")
     crop_filter = _crop_filter(crop)

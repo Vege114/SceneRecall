@@ -177,3 +177,25 @@ fieldset{border:0;padding:0;margin:0;min-width:0}fieldset:disabled{opacity:.7}.o
 .status-waiting_input{color:#a18a5e;background:#f6f0df;border-color:#e9dfc6}.job-workflow-progress{display:flex;flex-wrap:wrap;gap:12px;list-style:none;margin:16px 0;padding:0}.job-workflow-progress>li{flex:1;min-width:140px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid var(--border);border-radius:6px;padding:10px 12px;color:#8c968a;background:#f7f8f2;font-size:11px}.job-workflow-progress strong{font-weight:500}.job-workflow-progress small{margin-left:auto;font-size:10px}.job-workflow-progress .workflow-completed{background:#edf3e7;color:#688455;border-color:#dbe8cf}.job-workflow-progress .workflow-running{background:#edf1eb;color:#527357;border-color:#c9d8c5}.job-workflow-progress .workflow-partial,.job-workflow-progress .workflow-waiting_input{background:#f7f0de;color:#9a7d49;border-color:#eadfc1}
 
 .resource-status { padding: 16px 0; color: var(--muted); }
+
+.subtitle-card {
+  display: grid;
+  grid-template-columns: clamp(72px, 23%, 116px) minmax(0, 1fr);
+  column-gap: 12px;
+}
+.subtitle-card > * { grid-column: 2; }
+.subtitle-card > .subtitle-preview {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: start;
+  margin: 0;
+}
+.subtitle-card > .record-footer { grid-column: 1 / -1; }
+.record-preview { width: min(144px, 100%); margin: 10px 0; }
+.record-preview .thumbnail, .subtitle-preview .thumbnail {
+  aspect-ratio: 16 / 9;
+  height: auto;
+  border-radius: 4px;
+}
+.record-preview img, .subtitle-preview img { object-fit: contain; }
+.record-preview figcaption { margin-top: 4px; font-size: 11px; color: #626e59; }

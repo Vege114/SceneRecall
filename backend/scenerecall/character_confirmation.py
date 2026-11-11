@@ -494,12 +494,11 @@ class CharacterConfirmation:
                                     if identity not in value["frame_ids"] and abs(row["at_ms"] - requested) <= 500)
                     for _, existing_id in nearby:
                         try:
-                            existing_path = self.library.frame_path(asset_id, existing_id)
+                            self.library.frame_path(asset_id, existing_id)
                             # Reuse local pixels/detection/features with a
                             # sample-owned frame ID. Candidate-only sampling
                             # must not overwrite a canonical calibrated region.
-                            self.library.register_frame(asset_id, {"id": identifier, "path": str(existing_path),
-                                                                 "at_ms": registry[existing_id]["at_ms"]})
+                            self.library.register_sample_alias(asset_id, identifier, existing_id)
                             registry[identifier] = registry[existing_id]
                             break
                         except FileNotFoundError:

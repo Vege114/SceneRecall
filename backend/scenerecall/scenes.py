@@ -260,7 +260,7 @@ class SceneStore:
             for item in ids:
                 safe_id(item)
         frames = set(value["frame_ids"])
-        self.library.frame_paths(asset_id, value["frame_ids"], registry=registry)
+        self.library.check_frame_entries(asset_id, value["frame_ids"], registry=registry)
         for frame_id in frames:
             if not start <= registry[frame_id]["at_ms"] < end:
                 raise ValueError("场景帧超出当前块时间范围，历史上下文不能作为当前证据")

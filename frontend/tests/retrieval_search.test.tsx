@@ -23,6 +23,13 @@ function mockFetch(handler: (url: string, options?: RequestInit) => unknown) {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
 
 describe('Direct visual retrieval evidence', () => {
+  it('automatically displays the corresponding picture for a dialogue hit without a sampled frame', () => {
+    mount(<ResultCard result={{ ...result, kind: 'subtitle', hit_frame_id: undefined, thumbnail_url: undefined,
+      evidence_type: undefined, seek_ms: 1200 }} />);
+    const image = document.querySelector('.result-image img');
+    expect(image?.getAttribute('src')).toBe('/api/assets/episode/preview?at_ms=1200');
+  });
+
   it('limits a dense window preview to eight ordered frames including the hit, and expands every original frame', async () => {
     const user = userEvent.setup(); const onSeek = vi.fn();
     const frames = Array.from({ length: 68 }, (_, index) => ({ id: `dense_${index}`, at_ms: 1000 + index * 73, pts: index, time_base: [73, 1000] as [number, number] }));
@@ -74,7 +81,8 @@ describe('Direct visual retrieval evidence', () => {
     expect(fetch).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: '收藏片段' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({ record_id: 'window', favorite: true });
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({ record_id: 'window', favorite: true,
+      preview_frame_id: 'frame_hit', preview_member_ids: ['window', 'neighbor'] });
   });
 
   it('preserves a zero hit timestamp instead of falling back to the window start', () => {

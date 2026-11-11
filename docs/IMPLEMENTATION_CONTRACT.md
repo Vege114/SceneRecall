@@ -2,6 +2,12 @@
 
 Internal records and REST use snake_case. Time is integer milliseconds relative to asset start. Source data are versioned JSON; all indexes disposable. Engineering tests use generated fixtures and provider doubles. Real media/model validation is recorded separately in `VALIDATION.md` and is not inferred from synthetic tests.
 
+## Sampled images and offline archives (2026-11-11)
+
+`GET /api/assets/{id}/frames/{frame_id}` returns registered evidence image bytes. Source-backed JPEGs carry a source fingerprint and reconstruction parameters. Migrated samples also carry the original JPEG hash. The resolver verifies the decoded image before publication and can share bounded, temporary images between readers. Legacy archived images and explicit user evidence are supported. `GET /api/assets/{id}/preview?at_ms=…` provides a timeline illustration for results without a registered picture. Search and episode views request their visible images automatically.
+
+`POST /api/backups` accepts the optional boolean `include_sampled_frames` independently of `include_media`. The exported ZIP can contain exact samples even if the live archive retains only their metadata. Reconstruction failure aborts publication of the ZIP. See [storage, migration and validation](SAMPLED_FRAMES.md).
+
 ## Completed episode reads and queue responsiveness (2026-10-23)
 
 `GET /api/assets/{id}` projects saved evidence against current annotations and identity decisions. The default `view=full` supplies the complete legacy detail response. The interactive page requests `view=visual` for visual records and their dependencies, `view=timeline` for subtitles and their corrections, and `view=runs` for the timeline and run bodies. `GET /api/assets/{id}/player` supplies current asset metadata for direct navigation. A player opened from an already loaded asset card can use that card immediately. Scene dependency traversal reuses raw rows, semantic overlays, version digests and batched identity projection only within that traversal. The synchronous detail route constructs `JSONResponse` in its worker and reports `Server-Timing` for asset metadata, evidence projection, response assembly and JSON serialization. Card counts and thumbnail assembly contribute to `assembly`. HTTP queueing, transfer and browser rendering are measured separately.

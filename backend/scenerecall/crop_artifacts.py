@@ -16,7 +16,7 @@ import tempfile
 from PIL import Image, ImageOps
 
 from .characters import checked_box
-from .library import confined_path, read_json, safe_id
+from .library import confined_path, safe_id
 
 
 MAX_CROP_SOURCE_BYTES = 20 * 1024 * 1024
@@ -79,14 +79,14 @@ def _source(library, asset_id, row, registry=None, asset=None, *, require_file=T
     asset = library.get_asset(asset_id, include_deleted=True) if asset is None else asset
     if row.get("source_fingerprint", asset["fingerprint"]) != asset["fingerprint"]:
         raise ValueError("Person crop source fingerprint changed")
-    if registry is None:
-        registry = read_json(library.asset_dir(asset_id) / "frames" / "registry.json", {})
-    entry = registry.get(frame_id)
+    entry = library.frame_entry(asset_id, frame_id) if registry is None else registry.get(frame_id)
     if not entry or entry.get("at_ms") != row.get("at_ms"):
         raise ValueError("Person crop source timestamp changed")
     path = confined_path(library.asset_dir(asset_id), entry["path"])
-    if require_file and not path.is_file():
-        raise FileNotFoundError("Person crop source frame is unavailable")
+    if require_file:
+        return library.frame_paths(asset_id, [frame_id], registry=registry)[frame_id]
+    if entry.get("pinned_sha256") and not path.is_relative_to((library.asset_dir(asset_id) / "preserved-frames").resolve()):
+        return confined_path(library.asset_dir(asset_id), f"preserved-frames/{frame_id}{path.suffix}")
     return path
 
 
@@ -95,7 +95,15 @@ def crop_available(library, asset_id, row, registry=None, asset=None):
     # Resolve the owned crop path even when missing, rejecting escaped symlinks.
     retained = crop_path(library, asset_id, row["id"])
     try:
-        _source(library, asset_id, row, registry, asset, require_file=not retained.is_file())
+        path = _source(library, asset_id, row, registry, asset, require_file=False)
+        if retained.is_file() or path.is_file():
+            return True
+        # A queue refresh only checks dependencies; it must not decode every
+        # cropped candidate's frame while building the list.
+        asset = asset if asset is not None else library.get_asset(asset_id, include_deleted=True)
+        if not asset.get("source_available"):
+            return False
+        library.check_frame_entries(asset_id, [row["frame_id"]], registry=registry)
         return True
     except (FileNotFoundError, KeyError, ValueError, TypeError):
         return False
@@ -150,7 +158,7 @@ def rebuild_crop_content(content, row):
 def crop_bytes(library, asset_id, row):
     """Read an owned crop or reconstruct it without changing persisted state."""
     retained = crop_path(library, asset_id, row["id"])
-    _source(library, asset_id, row, require_file=not retained.is_file())
+    _source(library, asset_id, row, require_file=False)
     if retained.is_file():
         try:
             content = retained.read_bytes()

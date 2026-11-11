@@ -750,7 +750,7 @@ def validate_audio_artifacts(library) -> None:
                 except (wave.Error, EOFError) as exc:
                     raise ValueError("备份音频片段格式无效") from exc
                 for frame_id in record.get("frame_ids", []):
-                    library.frame_path(asset_id, frame_id)
+                    library.check_frame_entries(asset_id, [frame_id])
         for run in read_json(root / "active.json", {"runs": []})["runs"]:
             if (run.get("run_id") not in run_records
                     or not 0 <= run["start_ms"] < run["end_ms"] <= asset["duration_ms"]):

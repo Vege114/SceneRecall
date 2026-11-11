@@ -14,6 +14,7 @@ import time
 from .library import atomic_json, digest, read_json, uid
 from .execution import bounded_map, execution_width, finish_on_cancel, run_in_thread, stop_admission, yield_to_io
 from .scene_checkpoints import SceneCheckpointMixin
+from .scene_frame_inputs import freeze_frame_paths, resolve_frame_paths
 from .scene_resume import SceneResumeMixin
 
 STRATEGY = "scene-chunks-v1"
@@ -519,7 +520,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
             args = self._scene_request_args(job["config"], stage, args)
             if stage == "preparation" and versions[stage] in {prompt_versions()[stage], "scene-visual-preparation-v4"}:
                 images += sum(len((args[4] or {}).get(key, [])) for key in ("reference_frames", "region_images")) if len(args) > 4 else 0
-            frozen = {"args": args, "images": images}
+            frozen = {"args": freeze_frame_paths(args), "images": images}
             atomic_json(inputs, frozen)
         args, images = frozen["args"], frozen["images"]
         def observation_data(data):
@@ -557,7 +558,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
                 images += (len((refreshed[3] or {}).get("reference_frames", []))
                            - len((args[3] or {}).get("reference_frames", [])))
             args = refreshed
-            frozen = {"args": args, "images": images}
+            frozen = {"args": freeze_frame_paths(args), "images": images}
             atomic_json(inputs, frozen)
             key = digest([STRATEGY, stage, versions[stage], unit, dependencies,
                           model_identity(profile), canonical(args)])
@@ -591,6 +592,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
         await run_in_thread(self.update, job_id, stage=stage,
                             pending_scene_receipt=output.relative_to(root).as_posix())
         call_id = uid("call")
+        args = await self._scene_local_context(job_id, resolve_frame_paths, self.library, args)
         await self.reserve_call(job_id, profile, call_id=call_id, stage=stage, frames=images,
                                 receipt_path=output.relative_to(self.library.root).as_posix(),
                                 context_tokens=encoded_size(canonical(args)))
@@ -1377,7 +1379,7 @@ class SceneJobMixin(SceneCheckpointMixin, SceneResumeMixin):
     def _scene_frames(self, asset_id, frame_ids):
         registry = read_json(self.library.asset_dir(asset_id) / "frames" / "registry.json", {})
         paths = self.library.frame_paths(asset_id, frame_ids, registry=registry)
-        return [{**registry[fid], "id": fid, "path": str(paths[fid])} for fid in frame_ids]
+        return [{"at_ms": registry[fid]["at_ms"], "id": fid, "path": str(paths[fid])} for fid in frame_ids]
 
     async def _deepen_scene(self, job_id, chunk, frames, cues, memory):
         from .models import Observation, normalize_observation_evidence

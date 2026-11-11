@@ -1020,7 +1020,7 @@ class CharacterStore:
                                *membership.get("previous_scopes", [])}
                     if not asset or scope not in allowed:
                         raise ValueError("角色证据引用了其他作品")
-                    self.library.frame_path(asset["id"], representative["frame_id"])
+                    self.library.check_frame_entries(asset["id"], [representative["frame_id"]])
         for registry in registries.values():
             for profile in registry["profiles"].values():
                 origins = [*profile.get("identity_origins", [])]

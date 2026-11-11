@@ -45,7 +45,8 @@ def test_apply_observation_reads_one_frame_registry_and_matches_legacy_validatio
     original_frame_paths = library.frame_paths
 
     def legacy_paths(asset_id, frame_ids, **_kwargs):
-        return {frame_id: original_frame_paths(asset_id, [frame_id])[frame_id] for frame_id in frame_ids}
+        return {frame_id: original_frame_paths(asset_id, [frame_id],
+                registry=library_module.read_json(registry_path))[frame_id] for frame_id in frame_ids}
 
     reads.clear()
     monkeypatch.setattr(library, "frame_paths", legacy_paths)

@@ -61,6 +61,28 @@ describe('Scene preparation and budgets', () => {
 });
 
 describe('Explicit scene deepening and evidence', () => {
+  it('shows per-cue time previews in the subtitle list and labels visual previews separately from evidence', async () => {
+    const user = userEvent.setup();
+    const subtitles = [1200, 2250].map((at, i) => ({ id: `cue-${i}`, start_ms: at, end_ms: at + 400,
+      text: `示例台词 ${i}`, source: 'external', language: 'zh', review_status: 'confirmed' }));
+    mockFetch(() => ({ asset, scenes: [scene], observations: [{ id: 'unillustrated', summary: '没有登记原帧',
+      start_ms: 3500, end_ms: 4000, entities: [], events: [], uncertainties: [], evidence_frame_ids: [] }],
+      subtitles, annotations: [], runs: [] }));
+    mount(<AssetDetail id={asset.id} />);
+    const visual = await screen.findByRole('img', { name: '00:00:03 原片时间点预览' });
+    expect(visual.getAttribute('src')).toBe(`/api/assets/${asset.id}/preview?at_ms=3500`);
+    expect(visual.closest('figure')?.querySelector('figcaption')?.textContent).toBe('原片时间点预览');
+    expect(document.querySelectorAll('.record-preview')).toHaveLength(1);
+    expect(screen.getAllByRole('img', { name: '场景代表原帧' }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: /台词 2/ }));
+    for (const cue of subtitles) {
+      const card = document.getElementById(`subtitle-${cue.id}`)!;
+      const image = within(card).getByRole('img', { name: /原片时间点预览/ });
+      expect(image.getAttribute('src')).toBe(`/api/assets/${asset.id}/preview?at_ms=${cue.start_ms}`);
+      expect(image.getAttribute('loading')).toBe('lazy');
+    }
+  });
+
   it('searches existing scenes without model analysis, allows optional current estimates before budgeted deepening', async () => {
     const user = userEvent.setup(); const fetch = mockFetch((url) => url === '/api/search' ? { results: [result], degraded: [] } : url.endsWith('/estimate') ? estimate : { id: 'deep-job' });
     mount(<SearchPage />);

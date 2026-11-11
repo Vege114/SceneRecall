@@ -403,7 +403,9 @@ class WorkflowQueueMixin:
         self._validate_keyframe_plan_header(asset, start_ms, end_ms, plan_id, plan)
         if plan.get("status") != "completed":
             raise ValueError("关键帧尚未扫描完成，请等待本地扫描后估算或分析")
-        self.library.validate_keyframe_plan(asset_id, plan, expected_id=plan_id)
+        # An explicit scan can still repair a lost independent legacy JPEG.
+        # Registered source-backed samples remain valid without a stored file.
+        self.library.validate_keyframe_plan(asset_id, plan, expected_id=plan_id, require_legacy_files=True)
         return plan
 
     def plan_view(self, plan_id):
@@ -518,8 +520,8 @@ class WorkflowQueueMixin:
                 for frame in frames:
                     output = directory / "frames" / f"{frame['id']}.jpg"
                     entry = registry.get(frame["id"])
-                    if (entry != {"path": output.relative_to(directory).as_posix(), "at_ms": frame["at_ms"]}
-                            or not output.is_file()):
+                    if (not entry or entry.get("path") != output.relative_to(directory).as_posix()
+                            or entry.get("at_ms") != frame["at_ms"] or not (entry.get("sample") or output.is_file())):
                         missing.append((frame, output))
                 metrics["reused_frames"] = len(frames) - len(missing)
 
@@ -544,7 +546,8 @@ class WorkflowQueueMixin:
                         metrics["extraction_ms"] += round((time.perf_counter() - started) * 1000)
                     started = time.perf_counter()
                     try:
-                        self.library.register_frames(asset_id, extracted)
+                        source_bound = bool(metadata.get("_source_identity")) and type(metadata.get("video_stream_index")) is int
+                        self.library.register_frames(asset_id, [{**frame, "sample_generated": source_bound} for frame in extracted])
                     finally:
                         metrics["registration_ms"] += round((time.perf_counter() - started) * 1000)
                     metrics["extracted_frames"] += len(extracted)

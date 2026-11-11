@@ -723,7 +723,7 @@ class WorkEntityStore:
                     if source["kind"] == "source_frame":
                         if memberships.get(source["asset_id"]) != saved["work_scope_id"]:
                             raise ValueError("作品实体参考图来自另一作品")
-                        self.library.frame_path(source["asset_id"], source["frame_id"])
+                        self.library.check_frame_entries(source["asset_id"], [source["frame_id"]])
             for key, binding in saved["bindings"].items():
                 BindingInput.model_validate({field: binding[field] for field in BindingInput.model_fields})
                 if (key != binding.get("id") or memberships.get(binding["asset_id"]) != saved["work_scope_id"]
@@ -731,4 +731,4 @@ class WorkEntityStore:
                         or binding["concept_id"] and binding["concept_id"] not in saved["entities"]
                         or binding.get("decision_source") != "human"):
                     raise ValueError("作品实体绑定归属或证据状态无效")
-                self.library.frame_paths(binding["asset_id"], binding["evidence_frame_ids"])
+                self.library.check_frame_entries(binding["asset_id"], binding["evidence_frame_ids"])

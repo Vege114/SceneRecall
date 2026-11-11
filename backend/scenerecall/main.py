@@ -179,6 +179,11 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         thumbnail = record.get("thumbnail") or next(iter(record.get("evidence_frame_ids", [])), None)
         if thumbnail:
             record["thumbnail_url"] = f"/api/assets/{asset_id}/frames/{thumbnail}"
+        elif type(record.get("start_ms")) is int:
+            at_ms = record.get("seek_ms")
+            if type(at_ms) is not int:
+                at_ms = record["start_ms"]
+            record["thumbnail_url"] = f"/api/assets/{asset_id}/preview?at_ms={at_ms}"
         record["media_url"] = f"/api/assets/{asset_id}/media"
         return record
 
@@ -214,6 +219,9 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         metadata = {**asset, "observation_count": len(visual_rows), "subtitle_count": len(subtitles)}
         if visual_rows and visual_rows[0].get("evidence_frame_ids"):
             metadata["thumbnail_url"] = f"/api/assets/{asset['id']}/frames/{visual_rows[0]['evidence_frame_ids'][0]}"
+        elif asset.get("source_available") and asset.get("duration_ms", 0) > 0:
+            at_ms = min(1000, asset["duration_ms"] // 2)
+            metadata["thumbnail_url"] = f"/api/assets/{asset['id']}/preview?at_ms={at_ms}"
         return metadata
 
     @app.get("/api/health")
@@ -567,7 +575,13 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
     @app.get("/api/assets/{asset_id}/frames/{frame_id}")
     def frame(asset_id: str, frame_id: str):
         library.get_asset(asset_id)
-        return FileResponse(library.frame_path(asset_id, frame_id), media_type="image/jpeg")
+        content = library.frame_bytes(asset_id, frame_id)
+        return Response(content, media_type="image/png" if content.startswith(b"\x89PNG\r\n\x1a\n") else "image/jpeg")
+
+    @app.get("/api/assets/{asset_id}/preview")
+    def preview_at_time(asset_id: str, at_ms: int = Query(ge=0)):
+        from .record_previews import timeline_preview
+        return Response(timeline_preview(library, asset_id, at_ms), media_type="image/jpeg")
 
     @app.post("/api/assets/{asset_id}/proxy")
     async def proxy(asset_id: str):
@@ -869,7 +883,10 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @app.post("/api/backups")
     async def backup(payload: dict = Body(default={})):
-        return await asyncio.to_thread(library.backup, bool(payload.get("include_media")))
+        sampled_frames = payload.get("include_sampled_frames", False)
+        if type(sampled_frames) is not bool:
+            raise ValueError("包含已采样画面须为布尔值")
+        return await asyncio.to_thread(library.backup, bool(payload.get("include_media")), include_sampled_frames=sampled_frames)
 
     @app.get("/api/backups/{backup_id}")
     def backup_download(backup_id: str):

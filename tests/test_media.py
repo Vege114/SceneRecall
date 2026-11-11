@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 from PIL import Image
+from scenerecall import media
 from scenerecall.media import (
     MediaError,
     create_proxy,
@@ -131,6 +132,26 @@ def test_nonzero_container_origin_is_not_added_to_playback_time(movie, tmp_path)
     shots = detect_shots(path, 0, 2000)
     assert [s["start_ms"] for s in shots] == [0, 1000]
     assert extract_frame(path, 1155, tmp_path / "offset.jpg")["at_ms"] == 1200
+
+
+def test_empty_last_second_probe_retries_earlier_for_a_real_presented_frame(movie, tmp_path, monkeypatch):
+    metadata = probe(movie)
+    original_run = media._run
+    intervals = []
+
+    def run(args, **options):
+        if "-read_intervals" in args:
+            intervals.append(args[args.index("-read_intervals") + 1])
+            if len(intervals) == 1:
+                return subprocess.CompletedProcess(args, 0, b'{"frames":[]}', b"")
+        return original_run(args, **options)
+
+    monkeypatch.setattr(media, "_run", run)
+    output = tmp_path / "last.jpg"
+    at = media._last_visible_frame(movie, output, None, metadata)
+    assert len(intervals) == 2 and intervals[0] != intervals[1]
+    assert 0 < at < metadata["duration_ms"]
+    assert output.read_bytes().startswith(b"\xff\xd8")
 
 
 @pytest.mark.parametrize("offset", [0, 5])

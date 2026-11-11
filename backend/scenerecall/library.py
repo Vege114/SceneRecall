@@ -187,6 +187,8 @@ class Library:
     def __init__(self, root: Path):
         self.root = root.expanduser().resolve()
         self.lock = threading.RLock()
+        from .sample_frames import SampleFrameStore
+        self.sample_frames = SampleFrameStore(self)
         for directory in ("assets", "works", "collections", "indexes", "runtime", "private"):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         (self.root / "private").chmod(0o700)
@@ -509,7 +511,7 @@ class Library:
         record = Observation.model_validate(value).model_dump()
         if record["end_ms"] > asset["duration_ms"] or record["asset_id"] != asset_id:
             raise ValueError("记录不属于当前视频时间轴")
-        self.frame_paths(asset_id, record["evidence_frame_ids"])
+        self.check_frame_entries(asset_id, record["evidence_frame_ids"])
         relative = Path("analyses") / safe_id(record["run_id"]) / "observations" / f"{safe_id(record['id'])}.json"
         with self.lock:
             existing = read_json(self.asset_dir(asset_id) / relative)
@@ -579,6 +581,7 @@ class Library:
         """Commit one extracted batch without rereading and syncing per picture."""
         directory = self.asset_dir(asset_id).resolve()
         entries = {}
+        fingerprint = None
         for frame in frames:
             identity = safe_id(frame["id"])
             path = Path(frame["path"]).resolve()
@@ -588,6 +591,14 @@ class Library:
             if type(frame["at_ms"]) is not int or frame["at_ms"] < 0:
                 raise ValueError("证据帧时间戳无效")
             entry = {"path": relative.as_posix(), "at_ms": frame["at_ms"]}
+            if frame.get("sample_generated"):
+                from .sample_frames import is_sample_path, make_recipe, SHA256
+                if fingerprint is None:
+                    fingerprint = read_json(directory / "manifest.json")["fingerprint"]
+                if (isinstance(fingerprint, str) and SHA256.fullmatch(fingerprint)
+                        and is_sample_path(identity, relative.as_posix())):
+                    entry["sample"] = make_recipe(asset_id, fingerprint, frame, hashlib.sha256(path.read_bytes()).hexdigest())
+                    entry["sample_generated"] = True
             if identity in entries and entries[identity] != entry:
                 raise ValueError("同批证据帧 ID 存在冲突")
             entries[identity] = entry
@@ -596,6 +607,26 @@ class Library:
         with self.lock:
             registry_path = directory / "frames" / "registry.json"
             registry = read_json(registry_path, {})
+            for identity, entry in entries.items():
+                old = registry.get(identity, {})
+                if old.get("pinned_sha256"):
+                    # A scan/retry cannot overwrite or unpin independent human
+                    # evidence. Its image must still agree with the new source.
+                    source_hash = entry.get("sample", {}).get("jpeg_sha256")
+                    if source_hash is None:
+                        source_hash = hashlib.sha256(confined_path(directory, entry["path"]).read_bytes()).hexdigest()
+                    if old["pinned_sha256"] != source_hash or old["at_ms"] != entry["at_ms"]:
+                        raise ValueError("重登记画面与已保留的人工证据不一致")
+                    entries[identity] = old
+                elif old.get("sample"):
+                    expected = old["sample"]["jpeg_sha256"]
+                    new_sample = entry.get("sample")
+                    checksum = (new_sample["jpeg_sha256"] if new_sample else
+                                hashlib.sha256(confined_path(directory, entry["path"]).read_bytes()).hexdigest())
+                    if (old["at_ms"] != entry["at_ms"] or old["path"].replace("\\", "/") != entry["path"] or checksum != expected
+                            or new_sample is not None and old["sample"] != new_sample):
+                        raise ValueError("重登记会改变原采样画面的配方或内容")
+                    entries[identity] = old
             if any(registry.get(identity) != entry for identity, entry in entries.items()):
                 registry.update(entries)
                 atomic_json(registry_path, registry)
@@ -604,31 +635,101 @@ class Library:
     def frame_path(self, asset_id: str, frame_id: str) -> Path:
         return self.frame_paths(asset_id, [frame_id])[frame_id]
 
+    def frame_bytes(self, asset_id: str, frame_id: str) -> bytes:
+        registry = self.sample_frames._registry(self.asset_dir(asset_id) / "frames/registry.json", read_json)
+        raw = self.frame_paths(asset_id, [frame_id], registry=registry)[frame_id].read_bytes()
+        pinned = registry[frame_id].get("pinned_sha256")
+        if pinned is not None and hashlib.sha256(raw).hexdigest() != pinned:
+            raise ValueError("独立保存的人工证据已变化")
+        return raw
+
+    def frame_entry(self, asset_id, frame_id):
+        path = self.asset_dir(asset_id) / "frames/registry.json"
+        return copy.deepcopy(self.sample_frames._registry(path, read_json).get(safe_id(frame_id)))
+
+    def register_sample_alias(self, asset_id, alias, source_id):
+        """Register a confirmation sampler's reference to an existing picture without storing a cache path."""
+        path = self.asset_dir(asset_id) / "frames/registry.json"
+        with self.lock:
+            registry = read_json(path, {})
+            source = registry[safe_id(source_id)]
+            canonical = source.get("alias_of", source_id)
+            self.check_frame_entries(asset_id, [canonical], registry=registry)
+            if alias == canonical:
+                raise ValueError("别名不能引用自身")
+            registry[safe_id(alias)] = {"path": source["path"], "at_ms": source["at_ms"], "alias_of": canonical}
+            atomic_json(path, registry)
+
+    def check_frame_entries(self, asset_id, frame_ids, *, registry=None):
+        """Validate durable references without decoding all sampling-plan pictures."""
+        self._registered_frames(asset_id, frame_ids, registry, pixels=False)
+
     def frame_paths(self, asset_id: str, frame_ids: list[str], *, registry: dict | None = None) -> dict[str, Path]:
-        """Resolve one operation's frames using one registry snapshot, never a persistent cache."""
+        return self._registered_frames(asset_id, frame_ids, registry, pixels=True)
+
+    def _registered_frames(self, asset_id, frame_ids, registry, *, pixels, allow_legacy_plan=True):
+        from .sample_frames import SHA256, is_sample_path, legacy_recipes, validate_recipe
         directory = self.asset_dir(asset_id)
         if registry is None:
-            registry = read_json(directory / "frames" / "registry.json", {})
-        paths = {}
-        for frame_id in frame_ids:
+            registry = self.sample_frames._registry(directory / "frames" / "registry.json", read_json)
+        paths, pending, missing = {}, [], []
+        manifest = None
+        for frame_id in dict.fromkeys(frame_ids):
             value = registry.get(safe_id(frame_id))
             if not value:
                 raise FileNotFoundError("证据帧不存在")
             path = confined_path(directory, value["path"])
-            if not path.is_file():
-                raise FileNotFoundError("证据帧文件不存在")
             paths[frame_id] = path
+            pinned = value.get("pinned_sha256")
+            if value.get("alias_of") and pinned is None:
+                canonical = safe_id(value["alias_of"])
+                source = registry.get(canonical)
+                if (canonical == frame_id or not source or source.get("alias_of")
+                        or source["at_ms"] != value["at_ms"]):
+                    raise ValueError("采样画面别名引用无效")
+                paths[frame_id] = self._registered_frames(asset_id, [canonical], registry, pixels=pixels)[canonical]
+            elif pinned is not None:
+                if (not isinstance(pinned, str) or not SHA256.fullmatch(pinned)
+                        or value.get("sample", {}).get("jpeg_sha256", pinned) != pinned):
+                    raise ValueError("人工画面证据摘要无效")
+                if not path.is_relative_to((directory / "preserved-frames").resolve()):
+                    path = confined_path(directory, f"preserved-frames/{frame_id}{path.suffix}")
+                    paths[frame_id] = path
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != pinned:
+                    raise ValueError("独立保存的人工证据缺失或已变化")
+            elif "sample" in value:
+                if manifest is None:
+                    manifest = read_json(directory / "manifest.json")
+                if not is_sample_path(frame_id, value["path"]):
+                    raise ValueError("采样画面注册路径与 ID 不匹配")
+                validate_recipe(asset_id, manifest["fingerprint"], frame_id, value, manifest=manifest)
+                pending.append((frame_id, value, path))
+            elif not path.is_file():
+                if not allow_legacy_plan or not is_sample_path(frame_id, value["path"]) or not frame_id.startswith("kf_"):
+                    raise FileNotFoundError("证据帧文件不存在")
+                missing.append(frame_id)
+        if missing:
+            manifest = manifest or read_json(directory / "manifest.json")
+            recipes = legacy_recipes(self, asset_id, missing, registry, manifest["fingerprint"])
+            for fid in missing:
+                if fid not in recipes:
+                    raise FileNotFoundError("采样 JPEG 缺失且未找到匹配的精确画面计划")
+                pending.append((fid, {**registry[fid], "sample": recipes[fid]}, paths[fid]))
+        if pixels and pending:
+            paths.update(self.sample_frames.resolve(asset_id, pending))
         return paths
 
-    def validate_keyframe_plan(self, asset_id: str, plan: dict, expected_id: str | None = None) -> dict:
+    def validate_keyframe_plan(self, asset_id: str, plan: dict, expected_id: str | None = None,
+                               *, require_legacy_files=False) -> dict:
         """Validate saved plans without opening the source video or invoking a model."""
-        return self._validate_keyframe_plan(asset_id, plan, expected_id, require_registered=True)
+        return self._validate_keyframe_plan(asset_id, plan, expected_id, require_registered=True,
+                                            require_legacy_files=require_legacy_files)
 
     def validate_keyframe_selection(self, asset_id: str, plan: dict, expected_id: str) -> dict:
         """Validate unpublished selection metadata; this does not make a plan usable."""
         return self._validate_keyframe_plan(asset_id, plan, expected_id, require_registered=False)
 
-    def _validate_keyframe_plan(self, asset_id, plan, expected_id, *, require_registered):
+    def _validate_keyframe_plan(self, asset_id, plan, expected_id, *, require_registered, require_legacy_files=False):
         from fractions import Fraction
         asset = self.get_asset(asset_id, include_deleted=True)
         try:
@@ -670,8 +771,11 @@ class Library:
             elif round(origin * 1000) != asset.get("start_time_ms", 0):
                 raise ValueError("关键帧计划与视频的起始时间不一致")
             if require_registered:
-                registry = read_json(self.asset_dir(asset_id) / "frames" / "registry.json", {})
-                self.frame_paths(asset_id, [frame["id"] for frame in plan["frames"]], registry=registry)
+                directory = self.asset_dir(asset_id)
+                registry = self.sample_frames._registry(directory / "frames/registry.json", read_json)
+                ids = [frame["id"] for frame in plan["frames"]]
+                # An explicit scan repairs a missing legacy independent file.
+                self._registered_frames(asset_id, ids, registry, pixels=False, allow_legacy_plan=not require_legacy_files)
             for frame in plan["frames"]:
                 identity = safe_id(frame["id"])
                 if identity in frames or frame["shot_id"] not in shots:
@@ -750,6 +854,14 @@ class Library:
                 raise ValueError("历史记录只允许修改收藏与笔记；身份和描述请在当前有效记录中确认")
             records[payload["record_id"]] = historical
         record = records[payload["record_id"]]
+        payload = dict(payload)
+        preview_frame = payload.pop("preview_frame_id", None)
+        preview_members = payload.pop("preview_member_ids", None)
+        if preview_frame is not None:
+            from .record_previews import bookmark_frame
+            if not payload.get("favorite"):
+                raise ValueError("选择收藏画面需要收藏当前片段")
+            bookmark_frame(record, safe_id(preview_frame), preview_members, records)
         if payload.get("character_name"):
             if payload.get("entity_id") not in {e["id"] for e in record.get("entities", [])}:
                 raise ValueError("确认角色姓名前请选择记录中的人物实体")
@@ -777,6 +889,9 @@ class Library:
                     decision = reviewed["match"]
                     annotation["identity_review"] = {"region_id": region_id, "character_id": matches[0]["id"],
                         "version": decision["version"], "status": "confirmed", "source": "human"}
+            if payload.get("favorite") or payload.get("character_name"):
+                from .record_previews import preserve_record
+                annotation.update(preserve_record(self, asset_id, record, preview_frame or previous.get("preview_frame_id")))
             atomic_json(path, annotation)
             def semantic(value):
                 return (value.get("summary"), (value.get("entity_id"), value.get("character_name"), value.get("aliases"))
@@ -993,7 +1108,15 @@ class Library:
                        for record in self.records(asset["id"], compact_subtitles=False)]
         favored_ids = {asset["id"] for asset, _ in favored}
         current = {record["id"]: record for record in records if record["asset_id"] in favored_ids}
-        result = [record for record in current.values() if record["favorite"]]
+        annotations_by_asset = {asset["id"]: states for asset, states in favored}
+        result = []
+        for record in current.values():
+            if record["favorite"]:
+                saved = annotations_by_asset[record["asset_id"]].get(record["id"], {})
+                if saved.get("preview_frame_id"):
+                    record = {**record, "thumbnail": saved["preview_frame_id"],
+                              "seek_ms": saved.get("preview_at_ms", record["start_ms"])}
+                result.append(record)
         for asset, states in favored:
             for rid, annotation in states.items():
                 if rid in current or not annotation.get("favorite"):
@@ -1025,31 +1148,47 @@ class Library:
                                "source": record.get("source", "vision"), "review_status": "historical",
                                "is_historical": True, "run_id": run_id, "evidence_frame_ids": frames,
                                "entities": record.get("entities", []), "events": record.get("events", []),
-                               "thumbnail": frames[0] if frames else None,
+                               "thumbnail": annotation.get("preview_frame_id") or (frames[0] if frames else None),
+                               **({"seek_ms": annotation["preview_at_ms"]} if annotation.get("preview_at_ms") is not None else {}),
                                **({key: record.get(key) for key in ("chunk_id", "visual_facts", "dialogue_facts", "inferences",
                                    "subtitle_ids", "frame_ids", "understanding_level", "provenance")}
                                   if "chunk_id" in record else {})})
         return result
 
-    def backup(self, include_media: bool = False) -> dict:
+    def backup(self, include_media: bool = False, *, include_sampled_frames: bool = False) -> dict:
         backup_id = uid("backup")
         target = self.root / "runtime" / "backups" / f"{backup_id}.zip"
         target.parent.mkdir(parents=True, exist_ok=True)
-        with self.lock, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-            self.organization.migrate()
-            for top in ("library.json", "works", "assets", "collections", "organization"):
-                item = self.root / top
-                for path in [item] if item.is_file() else item.rglob("*"):
-                    if (path.is_file() and not path.is_symlink() and path.suffix != ".tmp"
-                            and "proxy" not in path.relative_to(self.root).parts):
-                        archive.write(path, path.relative_to(self.root).as_posix())
-            if include_media:
-                for asset in self.list_assets(include_deleted=True):
-                    if asset["deleted"] and not asset["source_available"]:
-                        continue
-                    path = self.source_path(asset["id"]) if asset["deleted"] else self.require_source(asset["id"])
-                    archive.write(path, f"media/{asset['id']}{path.suffix}", compress_type=zipfile.ZIP_STORED)
-        return {"id": backup_id, "download_url": f"/api/backups/{backup_id}", "includes_media": include_media}
+        temporary = target.with_suffix(".tmp")
+        restored_frames = 0
+        try:
+            with zipfile.ZipFile(temporary, "x", zipfile.ZIP_DEFLATED) as archive:
+                with self.lock:
+                    self.organization.migrate()
+                    for top in ("library.json", "works", "assets", "collections", "organization"):
+                        item = self.root / top
+                        for path in [item] if item.is_file() else item.rglob("*"):
+                            if (path.is_file() and not path.is_symlink() and path.suffix != ".tmp"
+                                    and "proxy" not in path.relative_to(self.root).parts):
+                                archive.write(path, path.relative_to(self.root).as_posix())
+                    if include_media:
+                        for asset in self.list_assets(include_deleted=True):
+                            if asset["deleted"] and not asset["source_available"]:
+                                continue
+                            path = self.source_path(asset["id"]) if asset["deleted"] else self.require_source(asset["id"])
+                            archive.write(path, f"media/{asset['id']}{path.suffix}", compress_type=zipfile.ZIP_STORED)
+            if include_sampled_frames:
+                from .sample_frames import archive_sample_frames
+                # Read the finished metadata directory before adding pictures.
+                # On Windows, ZipInfo objects constructed from live paths carry
+                # a platform spelling until the stored ZIP directory is reopened.
+                with zipfile.ZipFile(temporary, "a") as archive:
+                    restored_frames = archive_sample_frames(self, archive)
+            atomic_replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return {"id": backup_id, "download_url": f"/api/backups/{backup_id}", "includes_media": include_media,
+                "includes_sampled_frames": include_sampled_frames, "reconstructed_sampled_frames": restored_frames}
 
     def restore(self, archive_path: Path) -> dict:
         staging = self.root / "runtime" / uid("restore")
@@ -1093,12 +1232,12 @@ class Library:
                 if not (staging / "assets" / asset_id / "manifest.json").is_file():
                     raise ValueError("资产清单 ID 与目录不一致")
                 registry = read_json(restored.asset_dir(asset_id) / "frames" / "registry.json", {})
-                restored.frame_paths(asset_id, list(registry), registry=registry)
+                restored.check_frame_entries(asset_id, list(registry), registry=registry)
                 for observation in restored.observations(asset_id):
                     checked = Observation.model_validate(observation)
                     if checked.asset_id != asset_id or checked.end_ms > asset["duration_ms"]:
                         raise ValueError("备份识别记录时间轴无效")
-                    restored.frame_paths(asset_id, checked.evidence_frame_ids, registry=registry)
+                    restored.check_frame_entries(asset_id, checked.evidence_frame_ids, registry=registry)
                 for cue in restored.subtitles(asset_id):
                     if not 0 <= cue["start_ms"] < cue["end_ms"] <= asset["duration_ms"]:
                         raise ValueError("备份字幕时间轴无效")

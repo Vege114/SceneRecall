@@ -18,7 +18,7 @@ def _candidate(library, directory, registry, key, row):
     if row.get("source_fingerprint") != asset["fingerprint"]:
         raise ValueError("角色确认候选的原片指纹不一致")
     frame_id = safe_id(row.get("frame_id"))
-    library.frame_path(asset_id, frame_id)
+    library.check_frame_entries(asset_id, [frame_id])
     box = checked_box(row.get("box"))
     region = read_json(library.asset_dir(asset_id) / "identity" / "visual" / "regions" / f"{region_id}.json")
     if (box is None or not isinstance(region, dict) or region.get("id") != region_id
@@ -108,6 +108,6 @@ def validate_character_confirmation_artifacts(library):
         for frame_id in sample["frame_ids"]:
             # Reconstruct paths from owned IDs; saved paths never authorize reads.
             safe_id(frame_id)
-            library.frame_path(asset_id, frame_id)
+            library.check_frame_entries(asset_id, [frame_id])
         if "error" in sample and not isinstance(sample["error"], str):
             raise ValueError("角色确认采样错误记录无效")

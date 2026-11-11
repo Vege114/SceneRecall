@@ -41,14 +41,20 @@ export function ResultCard({ result, saved = false, onSaved, scoreBasis }: { res
   const retrieval = result.evidence_type === 'retrieval_window';
   const scoreHint = (result.match_score_basis || scoreBasis) === 'character_grounded_rrf_v1'
     ? characterGroundedScoreHint : '本次最高候选为100%，随检索范围变化，不代表正确概率';
-  const thumbnail = result.hit_frame_id ? `/api/assets/${encodeURIComponent(result.asset_id)}/frames/${encodeURIComponent(result.hit_frame_id)}` : result.thumbnail_url;
+  const assetUrl = `/api/assets/${encodeURIComponent(result.asset_id)}`;
+  const thumbnail = result.hit_frame_id ? `${assetUrl}/frames/${encodeURIComponent(result.hit_frame_id)}`
+    : result.thumbnail_url || `${assetUrl}/preview?at_ms=${seekMs}`;
   const evidenceLink = `${assetLink(result.asset_id, seekMs)}${result.kind === 'audio' ? `&audio=${encodeURIComponent(result.record_id || result.id)}` : ''}`;
   const [isSaved, setIsSaved] = useState(saved || result.favorite || false);
   const [busy, setBusy] = useState(false);
   const bookmark = async () => {
     setBusy(true);
     try {
-      await post(`/assets/${encodeURIComponent(result.asset_id)}/annotations`, { record_id: result.record_id || result.id, favorite: !isSaved });
+      await post(`/assets/${encodeURIComponent(result.asset_id)}/annotations`, {
+        record_id: result.record_id || result.id, favorite: !isSaved,
+        ...(!isSaved && result.hit_frame_id ? { preview_frame_id: result.hit_frame_id,
+          ...(result.member_ids?.length ? { preview_member_ids: result.member_ids } : {}) } : {}),
+      });
       setIsSaved(!isSaved); notify(isSaved ? '已取消收藏' : '片段已加入收藏'); onSaved?.();
     } catch (error) { notify(message(error), 'error'); } finally { setBusy(false); }
   };

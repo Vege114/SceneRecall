@@ -1,0 +1,425 @@
+{
+  "removed_count": 107740,
+  "removed_bytes": 16758571122,
+  "episodes": [
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 11,
+      "frames_removed": 5721,
+      "jpeg_bytes": 784307778,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "1285da30b90694a865059f51fa308d52f3ad53757d4d83627d71f3e0f04b8249"
+        },
+        {
+          "at_ms": 647772,
+          "sha256": "4d90114a2fbbc27258cc2136041ba990ec01bba51fb2eefa0dda6701c1961031"
+        },
+        {
+          "at_ms": 1445736,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "BanG Dream Yumemita",
+      "episode": 2,
+      "frames_removed": 6297,
+      "jpeg_bytes": 1310639148,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "bfb02fee9e43d25a9896db02aee96375a188eb4ad3622ae8f55c4f39e35da0d6"
+        },
+        {
+          "at_ms": 600433,
+          "sha256": "a9a3a53425c91d3f64daa0a8373e1f7c2ee447a8b2e94de2f4587ebf1939f0a7"
+        },
+        {
+          "at_ms": 1419960,
+          "sha256": "6370635be32760aaf8cdf4f3513359bcc3dec194063de36d2f8f3dca0e1c0df7"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 4,
+      "frames_removed": 6382,
+      "jpeg_bytes": 998320341,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 658449,
+          "sha256": "d8db607be03a68ad3b81608f6991c50c594e14b633cf065b34fe1f9202e3984b"
+        },
+        {
+          "at_ms": 1445611,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 2,
+      "frames_removed": 7533,
+      "jpeg_bytes": 1037614361,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 704078,
+          "sha256": "3c9c4c520f569a0d68855bb16fdaed4acecd972bf5614e4ca74bf6c606f49815"
+        },
+        {
+          "at_ms": 1445569,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 1,
+      "frames_removed": 7643,
+      "jpeg_bytes": 1120466475,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 878252,
+          "sha256": "14375d6f28254ad00810fed10e3ecef4899549572418ff38484368101dff7c01"
+        },
+        {
+          "at_ms": 1446737,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 3,
+      "frames_removed": 7152,
+      "jpeg_bytes": 949539568,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 791290,
+          "sha256": "0e54a2a9d91bb2aa7f6cac201f8606c1da77dacdb886be24b869148c20e0a72d"
+        },
+        {
+          "at_ms": 1445736,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 9,
+      "frames_removed": 6400,
+      "jpeg_bytes": 842732382,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 725350,
+          "sha256": "2b113f4221ec4a7738a58673b41b5c4448a27b250d0b51b1b3c89079b6502b16"
+        },
+        {
+          "at_ms": 1445611,
+          "sha256": "a24a0df7e7ff97e4712ac5c19b1a4ce79d048309d7ab0ac2e66a27b1f9281339"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 7,
+      "frames_removed": 4907,
+      "jpeg_bytes": 695663920,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "b3037495affa6c883391b1538561adfc10cb25508d48e2455b9f336dd8c0e878"
+        },
+        {
+          "at_ms": 631339,
+          "sha256": "9790267b9959b0fb5d474233be1193b11b0c606afcfe44bde6bcc3f353b1c979"
+        },
+        {
+          "at_ms": 1445569,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 5,
+      "frames_removed": 6862,
+      "jpeg_bytes": 960425185,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 779612,
+          "sha256": "b57b4cee3ad02133df0dfbceaeefe0dff58d43bbacbdc077f960bfe195f09008"
+        },
+        {
+          "at_ms": 1446737,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 10,
+      "frames_removed": 7552,
+      "jpeg_bytes": 968493216,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 849015,
+          "sha256": "debc9d0d4163f6d4e649109bd194ae64ca123ab1cff1dfc841bb3e275176742d"
+        },
+        {
+          "at_ms": 1446862,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "BanG Dream Yumemita",
+      "episode": 1,
+      "frames_removed": 7453,
+      "jpeg_bytes": 1598995437,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "77ca4d4db333ab23bc912abe7dc29ebeb00e6f73e06839b4f9eb95db9a670359"
+        },
+        {
+          "at_ms": 561060,
+          "sha256": "1dcb0ca8914b9dfc50eadaa523c0e0aae27f45b37105eb99ba7ca8cd8a198065"
+        },
+        {
+          "at_ms": 1419960,
+          "sha256": "01e6438ce05b4973b8e583eca1ef303cf7b72bf430034ae6102538496ed3ce0f"
+        }
+      ]
+    },
+    {
+      "title": "BanG Dream Yumemita",
+      "episode": 3,
+      "frames_removed": 6603,
+      "jpeg_bytes": 1417942281,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "4f5b408ad7bf4e4f0fbceae77a83d8735bb3509281056437371426beb8d51fdd"
+        },
+        {
+          "at_ms": 569486,
+          "sha256": "e716f82f48ad5cf72f171e86aabd4959c987ed2346586d1b7606a042d6922f37"
+        },
+        {
+          "at_ms": 1420002,
+          "sha256": "6147312dd5a764bf393a5a50fa15d4aab66125c3f052d3c3a384c4f4572d89c7"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 12,
+      "frames_removed": 6003,
+      "jpeg_bytes": 642676567,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "41865b9ee965e04fbbe7fd226f423fdab5485c1578729e7ab47705ca9996d25b"
+        },
+        {
+          "at_ms": 790873,
+          "sha256": "6ce4b7fff32d5668229e7e6f6e40233f5e97f06b8354494ceb4e44645c2dc5ea"
+        },
+        {
+          "at_ms": 1430763,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "BanG Dream Yumemita",
+      "episode": 4,
+      "frames_removed": 6671,
+      "jpeg_bytes": 1327158307,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "02861fd375a3bb1f7d069291e7e0580adfbb4f280a0a556639854686f7359a0b"
+        },
+        {
+          "at_ms": 535535,
+          "sha256": "446dbafd1e0188209a13d0f5d6973e928df2278f397e3457e1b5d29d65a5db09"
+        },
+        {
+          "at_ms": 1419918,
+          "sha256": "2093cfe330777d6b0630412fb1675ba364a3870008a353876b0a5f154d76ca0a"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 6,
+      "frames_removed": 6927,
+      "jpeg_bytes": 1057271229,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "359cc53828062053b257225b658531ec9c30eda43d81923a81e88bec0120b5ea"
+        },
+        {
+          "at_ms": 683725,
+          "sha256": "16cbd6cfa9c7017fa0729b54a812d85e8cee49db54b6244e58cc3f6c1ec40ee2"
+        },
+        {
+          "at_ms": 1445736,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    },
+    {
+      "title": "Shoujo Kageki Revue Starlight",
+      "episode": 8,
+      "frames_removed": 7634,
+      "jpeg_bytes": 1046324927,
+      "remaining_sample_jpeg": 0,
+      "single_frame_checks": [
+        {
+          "at_ms": 0,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        },
+        {
+          "at_ms": 824991,
+          "sha256": "0ce91d915b6f58e8f0344b0dddd9394de5cb0d14853bc3bdf9dcecb239d68980"
+        },
+        {
+          "at_ms": 1445611,
+          "sha256": "9477377d9261811c8769d258e951becc1de7c94ea15dcba1eab44073d29524e3"
+        }
+      ]
+    }
+  ],
+  "browser": {
+    "test": "YumeMita E02",
+    "archived_jpeg_before": 0,
+    "images": [
+      {
+        "area": "first result",
+        "kind": "timeline preview",
+        "dimensions": [
+          640,
+          360
+        ],
+        "sha256": "19a0345a7db6ab44fc4af62235819ef081db718b0369cdd241fdf59591314758"
+      },
+      {
+        "area": "ninth result after scrolling",
+        "kind": "timeline preview",
+        "dimensions": [
+          640,
+          360
+        ],
+        "sha256": "7adf9cd7394e1914803311019a15f9445b3aa899dfefd3669b94621d73fdb2f8"
+      },
+      {
+        "area": "timeline result",
+        "kind": "timeline preview",
+        "dimensions": [
+          640,
+          360
+        ],
+        "sha256": "19a0345a7db6ab44fc4af62235819ef081db718b0369cdd241fdf59591314758"
+      },
+      {
+        "area": "visual result",
+        "kind": "registered frame",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "sha256": "b2648e3d77bdf7e3c794fd062de63dca0fdb3d2970ed11d87d406e3c6cf0ac1b"
+      },
+      {
+        "area": "episode detail",
+        "kind": "registered frame",
+        "dimensions": [
+          1920,
+          1080
+        ],
+        "sha256": "bfb02fee9e43d25a9896db02aee96375a188eb4ad3622ae8f55c4f39e35da0d6"
+      }
+    ],
+    "browser": "155.0.8059.85",
+    "results": 122,
+    "archived_jpeg_after": 0,
+    "success": true
+  },
+  "offline_bookmark": {
+    "title": "YumeMita",
+    "episode": 2,
+    "offline": true,
+    "selected_seek_ms": 159493,
+    "saved_seek_ms": 159493,
+    "bytes": 328251,
+    "sha256": "b2648e3d77bdf7e3c794fd062de63dca0fdb3d2970ed11d87d406e3c6cf0ac1b",
+    "explicit_pin_count": 1
+  },
+  "subtitle_preview": {
+    "episode": 2,
+    "opened_from": "subtitle deep link",
+    "cue_start_ms": 1100,
+    "pixels": [
+      640,
+      360
+    ],
+    "file_count": 0
+  },
+  "library_file_bytes_after": 13216827491,
+  "earlier_library_file_bytes": 29931730168,
+  "workspace_older_test_outputs": {
+    "removed_sample_paths": 54731,
+    "logical_file_bytes": 1244608381,
+    "preserved_independent_or_alias_images": 189,
+    "preserved_image_bytes": 6440946
+  }
+}

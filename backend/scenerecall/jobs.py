@@ -651,6 +651,11 @@ class JobQueue(KnowledgeJobMixin, TaskLifecycleMixin, RetrievalJobMixin, Identit
             if job["config"].get("analysis_strategy") == "retrieval-first-v1" and (
                     not retrieval or retrieval.get("status") not in {"core_ready", "completed"}):
                 raise ValueError("检索任务的必需能力尚未完成")
+            if not failures and job["type"] in {"analysis", "keyframe_scan"} and job.get("asset_id"):
+                from .task_sample_storage import finish_task_samples
+                storage = await self._local_work(job_id, lambda check: finish_task_samples(self.library, job["asset_id"], check))
+                if storage["candidate_count"]:
+                    self.update(job_id, sample_frame_storage=storage)
             self.update(job_id, status="partial" if failures else "completed", progress=1,
                         message=f"完成，{len(failures)} 个单元失败，可重试" if failures else
                         "核心检索实验完成；默认完整流程尚未完成" if retrieval and retrieval.get("status") == "core_ready" else "处理完成")
@@ -690,22 +695,28 @@ class JobQueue(KnowledgeJobMixin, TaskLifecycleMixin, RetrievalJobMixin, Identit
         from .media import extract_frames
         self.library.require_source(asset_id)
         frames, missing_times, missing_paths = {}, [], []
+        registered = {}
         registry = read_json(self.library.asset_dir(asset_id) / "frames" / "registry.json", {})
         for at in times_ms:
             frame_id = "f_" + digest([asset_id, at, crop])
             path = self.library.asset_dir(asset_id) / "frames" / f"{frame_id}.jpg"
-            if path.is_file() and frame_id in registry:
-                frames[at] = {"id": frame_id, "path": str(path), "at_ms": registry[frame_id]["at_ms"],
-                              "requested_at_ms": at}
+            if frame_id in registry and (registry[frame_id].get("sample") or path.is_file()):
+                registered[at] = frame_id
             else:
                 missing_times.append(at)
                 missing_paths.append(path)
+        if registered:
+            paths = await asyncio.to_thread(self.library.frame_paths, asset_id, list(registered.values()), registry=registry)
+            for at, frame_id in registered.items():
+                frames[at] = {"id": frame_id, "path": str(paths[frame_id]), "at_ms": registry[frame_id]["at_ms"],
+                              "requested_at_ms": at}
         if missing_times:
             extracted = await asyncio.to_thread(extract_frames, source, missing_times, missing_paths, crop)
             for at, value in zip(missing_times, extracted, strict=True):
                 value["requested_at_ms"] = at
-                self.library.register_frame(asset_id, value)
                 frames[at] = value
+            await asyncio.to_thread(self.library.register_frames, asset_id,
+                                    [{**value, "sample_crop": crop, "sample_generated": True} for value in extracted])
         return [frames[at] for at in times_ms]
 
     async def analyze(self, job_id: str):

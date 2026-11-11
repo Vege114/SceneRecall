@@ -115,7 +115,7 @@ class RetrievalJobMixin:
                     or saved.get("sampling_version") != VERSION
                     or saved.get("decoder_profile", LEGACY_KEYFRAME_DECODER_PROFILE) != profile):
                 raise ValueError("检索采样计划身份不匹配")
-            self.library.frame_paths(asset_id, [f["id"] for f in saved["frames"]])
+            self.library.check_frame_entries(asset_id, [f["id"] for f in saved["frames"]])
             return saved
         self.update(job_id, stage="retrieval_sampling", message="正在扫描画面检索证据")
         source = self.library.require_source(asset_id)
@@ -140,15 +140,16 @@ class RetrievalJobMixin:
             for frame in frames:
                 frame["id"] = "kf_" + digest([asset_id, config["source_fingerprint"], frame["pts"], frame["time_base"]])
             registry = read_json(root / "frames" / "registry.json", {})
-            missing = [f for f in frames if f["id"] not in registry
-                       or not (root / registry[f["id"]]["path"]).is_file()]
+            missing = [f for f in frames if f["id"] not in registry or
+                       (not registry[f["id"]].get("sample") and not (root / registry[f["id"]]["path"]).is_file())]
             if missing:
                 check()
                 outputs = [root / "frames" / f"{f['id']}.jpg" for f in missing]
                 extraction = {}
-                self.library.register_frames(asset_id,
-                    extract_keyframes_stream(source, missing, outputs, checkpoint=check, metadata=metadata,
-                                             metrics=extraction))
+                extracted = extract_keyframes_stream(source, missing, outputs, checkpoint=check,
+                                                     metadata=metadata, metrics=extraction)
+                source_bound = bool(metadata.get("_source_identity")) and type(metadata.get("video_stream_index")) is int
+                self.library.register_frames(asset_id, [{**frame, "sample_generated": source_bound} for frame in extracted])
                 execution["extraction"] = extraction
             else:
                 execution["extraction"] = {"decode_passes": 0, "extraction_processes": 0, "frames": 0}
@@ -240,8 +241,9 @@ class RetrievalJobMixin:
         self._retrieval_metric(job_id, "subtitle_index", started)
         capability("subtitle_index")
         self.update(job_id, stage="visual_index", message="正在建立直接视觉索引")
-        records = [r for r in self.library.records(asset_id) if r["id"] in {u["id"] for u in units}]
-        paths = self.library.frame_paths(asset_id, [f["id"] for f in plan["frames"]])
+        unit_ids = {unit["id"] for unit in units}
+        records = self.library.records(asset_id, record_ids=unit_ids)
+        paths = await asyncio.to_thread(self.library.frame_paths, asset_id, [f["id"] for f in plan["frames"]])
         frames = [{**f, "path": str(paths[f["id"]]), "asset_id": asset_id,
                    "source_fingerprint": asset["fingerprint"]} for f in plan["frames"]]
 
@@ -487,9 +489,11 @@ class RetrievalJobMixin:
                 batch, local, context, concept_context, local_cues = args
                 permitted = {p["id"] for p in context["profiles"]}
             else:
+                from .scene_frame_inputs import freeze_frame_paths
+                durable_args = freeze_frame_paths(args)
                 key = digest([STRATEGY, prompt_version, config["source_fingerprint"], config["subtitle_digest"],
-                              model_identity(profile), args])
-                atomic_json(inputs, {"key": key, "prompt_version": prompt_version, "args": args})
+                              model_identity(profile), durable_args])
+                atomic_json(inputs, {"key": key, "prompt_version": prompt_version, "args": durable_args})
             receipt = run / "retrieval-receipts" / f"{key}.json"
             data = await self.call(job_id, profile, self.providers.analyze_retrieval, *args,
                 frames=len(local) + len(context["reference_frames"]) + len(concept_context["reference_frames"]),
