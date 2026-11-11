@@ -59,7 +59,7 @@
 
 `selected_assets` 记录当前搜索筛选实际选中的素材数；`knowledge.revision.identity` 的 `scope_assets` 记录身份版本核验涉及的作品范围。**单集搜索仍可能核验整个作品的身份资料**，应按这两项实测数量解释耗时，不能假定所有核验都只访问一集。各阶段还保留作品范围数、资料卡片数、原文数、路径数量、缓存命中／未命中／逐出次数等数值状态。
 
-`canonical.owner_lookup` 先定位候选所属素材，记录候选数、去重后的请求记录 ID 数及来源素材数。随后每个 `canonical.asset_records` 用请求内的 `owner_index` 区分素材，不输出素材路径或 ID：`produced_count` 是重建出的整素材记录数，`produced_visual_count` 等是类型分布；`requested_record_count` 是其中落入候选 `id`、`member_ids`、`source_ids` 集合的记录条数，**不是最终展示结果条数**。两者用于判断实际请求的记录相对整素材重建规模有多大。
+`canonical.owner_lookup` 按索引核对候选 `id`、合并片段 `member_ids` 和上下文 `source_ids` 的所属素材，记录去重请求数及素材数。每个 `canonical.asset_records` 用请求内的 `owner_index` 标识素材，`produced_count` 记录交给来源核验的条数，`produced_visual_count` 等记录类型分布，`requested_record_count` 记录其中匹配请求 ID 的条数。旧记录统计整集恢复的输出。定向恢复按请求 ID 输出，通过下面的分阶段计数可以核对实际读取的依赖量，包括字幕重叠链、替代旧观察的场景和场景引用的音频。
 
 来源内部再分为 `records.asset_metadata`、`.annotations`、`.observations`、`.scenes`、`.audio`、`.retrieval`、`.subtitles`；`records.observation_filter`、`.assemble`、`.work_projection`、`.subtitle_compact` 分别记录筛选、组装、补充作品字段与字幕合并前后的数量。`retrieval.load_validate` 记录窗口及观察／身份附属记录数。`identity.decorate`、`identity.resolver_init`、`identity.resolve_batch` 分别衡量身份字段补充、解析资料初始化、批量解析，并保留记录、实体、参考图等数量。
 

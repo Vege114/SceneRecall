@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from scenerecall.identity_bindings import resolve_observations
-from scenerecall.library import Library, atomic_json, digest, read_json, read_jsonl
+from scenerecall.library import Library, atomic_json, atomic_jsonl, digest, read_json, read_jsonl
 from scenerecall.search_timing import trace_request, trace_span
 from test_identity_bindings import calibrated  # noqa: F401
 from test_scene_api import scene_app  # noqa: F401
@@ -103,6 +103,18 @@ def test_whole_asset_source_projection_is_unchanged_and_spans_do_not_scale_per_f
     assert len(snapshot["spans"]) < 25
     assert "PRIVATE-SOURCE-CONTENT" not in json.dumps(snapshot)
     assert_tree(snapshot)
+    selected = {"window_3", "window_61", "missing"}
+    with trace_request() as targeted:
+        actual = library.records(ASSET_ID, record_ids=selected)
+    assert actual == [row for row in expected if row["id"] in selected]
+    loading = next(row["attributes"] for row in targeted.snapshot()["spans"]
+                   if row["name"] == "retrieval.load_validate")
+    assert loading["window_count"] == loading["digest_sha256_count"] == 2
+    assert loading["file_read_text_count"] == 3  # active pointer and the two source windows
+    changed = read_json(root / "retrieval/units/window_3.json")
+    atomic_json(root / "retrieval/units/window_3.json", {**changed, "summary": "tampered"})
+    with pytest.raises(ValueError, match="激活引用"):
+        library.records(ASSET_ID, record_ids=selected)
 
 
 def test_identity_batch_keeps_decisions_and_reuses_region_reference_reads(calibrated):  # noqa: F811
@@ -124,7 +136,7 @@ def test_identity_batch_keeps_decisions_and_reuses_region_reference_reads(calibr
     assert_tree(snapshot)
 
 
-def test_http_source_timing_reports_requested_and_whole_asset_counts(scene_app):  # noqa: F811
+def test_http_source_timing_reports_only_requested_scene(scene_app):  # noqa: F811
     _app, client, _provider, scene = scene_app
     response = client.post("/api/search", json={"query": "站台", "filters": {"kind": "scene"}})
     assert response.status_code == 200, response.text
@@ -134,7 +146,30 @@ def test_http_source_timing_reports_requested_and_whole_asset_counts(scene_app):
     assert lookup["attributes"]["owner_count"] == 1
     owner = next(row for row in snapshot["spans"] if row["name"] == "canonical.asset_records")
     assert owner["attributes"]["requested_record_count"] == 1
-    assert owner["attributes"]["produced_count"] > owner["attributes"]["requested_record_count"]
+    assert owner["attributes"]["produced_count"] == owner["attributes"]["requested_record_count"]
     assert owner["attributes"]["produced_scene_count"] == 1
-    assert owner["attributes"]["produced_subtitle_count"] == 1
+    assert owner["attributes"].get("produced_subtitle_count", 0) == 0
     assert_tree(snapshot)
+
+
+def test_targeted_sources_follow_scene_replacement_and_transitive_subtitle_compaction(scene_app):  # noqa: F811
+    app, _, _, scene = scene_app
+    library = app.state.library
+    asset = "scene_asset"
+    root = library.asset_dir(asset)
+    cues = [{"id": identity, "start_ms": start, "end_ms": end, "text": "repeat", "source": "external"}
+            for identity, start, end in (("z", 10, 30), ("b", 20, 50), ("a", 40, 60), ("later", 60, 80))]
+    atomic_jsonl(root / "subtitles/external.jsonl", cues)
+    selected = {"a", "old_observation", scene["id"]}
+
+    def equivalent():
+        complete = library.records(asset)
+        current = library.records(asset, record_ids=selected)
+        assert current == [row for row in complete if row["id"] in selected]
+        assert {row["id"] for row in current} == {"a", scene["id"]}
+        return next(row for row in current if row["id"] == "a")
+
+    assert equivalent()["source_record_ids"] == ["z", "b", "a"]
+    # An unrequested intermediate cue becomes collectible, breaking the chain.
+    library.annotate(asset, {"record_id": "b", "favorite": True})
+    assert "source_record_ids" not in equivalent()

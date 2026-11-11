@@ -375,6 +375,8 @@ export interface Run {
   [key: string]: unknown;
 }
 export interface AssetDetail {
+  view?: 'visual' | 'timeline' | 'runs';
+  run_count?: number;
   asset: Asset;
   observations: Observation[];
   scenes?: SceneChunk[];

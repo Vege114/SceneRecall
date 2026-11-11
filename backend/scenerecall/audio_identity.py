@@ -565,9 +565,11 @@ class AudioIdentityService:
         return result
 
     def records(self, asset_id: str, start_ms: int | None = None, end_ms: int | None = None, *,
-                embedder=None, checkpoint=None) -> list[dict]:
+                embedder=None, checkpoint=None, record_ids=None) -> list[dict]:
         root = self._directory(asset_id)
         raw = self._raw_records(asset_id)
+        if record_ids is not None:
+            raw = [row for row in raw if row["id"] in record_ids]
         if not raw:
             return []
         bank_path, catalog = self._bank(asset_id)

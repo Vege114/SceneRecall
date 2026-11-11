@@ -53,12 +53,13 @@ def _windows_reserved(value: str) -> bool:
     return bool(re.match(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", value, re.I))
 
 
-def atomic_json(path: Path, data) -> None:
+def atomic_json(path: Path, data, *, compact: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
         with tmp.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, allow_nan=False)
+            json.dump(data, f, ensure_ascii=False, indent=None if compact else 2,
+                      separators=(",", ":") if compact else None, allow_nan=False)
             f.flush()
             os.fsync(f.fileno())
         atomic_replace(tmp, path)
@@ -482,9 +483,11 @@ class Library:
             raise ValueError("容器字幕记录或原始提取文件缺失，或引用无效")
         return pointer
 
-    def observations(self, asset_id: str) -> list[dict]:
+    def observations(self, asset_id: str, *, record_ids=None) -> list[dict]:
         directory = self.asset_dir(asset_id)
-        return sorted([read_json(confined_path(directory, p)) for p in self.active(asset_id)["observations"].values()],
+        return sorted([read_json(confined_path(directory, path))
+                       for identity, path in self.active(asset_id)["observations"].items()
+                       if record_ids is None or identity in record_ids],
                       key=lambda r: r["start_ms"])
 
     def subtitles(self, asset_id: str) -> list[dict]:
@@ -716,14 +719,20 @@ class Library:
         except (KeyError, TypeError, ZeroDivisionError, OverflowError) as exc:
             raise ValueError("关键帧计划格式无效") from exc
 
-    def annotations(self, asset_id: str) -> list[dict]:
+    def annotations(self, asset_id: str, *, record_ids=None) -> list[dict]:
         from .scenes import SceneStore
         from .retrieval_store import RetrievalStore
         annotations = sorted([read_json(p) for p in (self.asset_dir(asset_id) / "annotations").glob("*.json")], key=lambda a: a["updated_at"])
+        if record_ids is not None:
+            annotations = [row for row in annotations if row["record_id"] in record_ids]
         if not annotations:
             return []
-        records = {r["id"]: r for r in self.observations(asset_id) + self.subtitles(asset_id)
-                   + SceneStore(self).list(asset_id) + RetrievalStore(self).records(asset_id)}
+        # Reassociation only compares the current record's run. Raw active
+        # scenes have the same run as their derived staleness projection.
+        annotated_ids = {row["record_id"] for row in annotations}
+        records = {r["id"]: r for r in self.observations(asset_id, record_ids=annotated_ids) + self.subtitles(asset_id)
+                   + SceneStore(self)._raw(asset_id, record_ids=annotated_ids)
+                   + RetrievalStore(self).records(asset_id, record_ids=annotated_ids)}
         for annotation in annotations:
             record = records.get(annotation["record_id"])
             annotation["needs_reassociation"] = record is None or bool(annotation.get("character_name") and annotation.get("base_run_id") != record.get("run_id"))
@@ -776,45 +785,68 @@ class Library:
                 SceneStore(self).mark_dependents_stale(asset_id, record["start_ms"], "前序证据的人工解释已变化")
             return annotation
 
-    def records(self, asset_id: str | None = None, *, compact_subtitles: bool = True) -> list[dict]:
+    def records(self, asset_id: str | None = None, *, compact_subtitles: bool = True, record_ids=None) -> list[dict]:
+        """Project current evidence, optionally restoring only selected record IDs and their dependencies."""
         from .characters import CharacterStore
         from .scenes import SceneStore
         from .identity_scene import project_actions, project_audio_evidence
         from .audio_identity import AudioIdentityService
         from .retrieval_store import RetrievalStore
+        if record_ids is not None:
+            record_ids = frozenset(record_ids)
         characters = CharacterStore(self)
         result = []
         with trace_span("records.asset_metadata") as phase:
             assets = [self.get_asset(asset_id)] if asset_id else self.list_assets()
             phase.set(asset_count=len(assets))
         for asset in assets:
+            with trace_span("records.subtitles") as phase:
+                subtitles = self.subtitles(asset["id"])
+                if record_ids is not None:
+                    if compact_subtitles:
+                        from .subtitle_projection import subtitle_dependencies
+                        subtitles = subtitle_dependencies(subtitles, record_ids)
+                    else:
+                        subtitles = [cue for cue in subtitles if cue["id"] in record_ids]
+                phase.set(record_count=len(subtitles))
             with trace_span("records.annotations") as phase:
-                annotations = self.annotations(asset["id"])
+                overlay_ids = None if record_ids is None else record_ids.union(cue["id"] for cue in subtitles)
+                annotations = self.annotations(asset["id"], record_ids=overlay_ids)
+                by_record = {}
+                for annotation in annotations:
+                    by_record.setdefault(annotation["record_id"], []).append(annotation)
                 phase.set(record_count=len(annotations))
             with trace_span("records.observations") as phase:
-                observations = characters.decorate_observations(asset["id"], self.observations(asset["id"]))
+                observations = self.observations(asset["id"], record_ids=record_ids)
+                if observations:
+                    observations = characters.decorate_observations(asset["id"], observations)
                 phase.set(record_count=len(observations))
             with trace_span("records.scenes") as phase:
-                scenes = characters.decorate_observations(asset["id"], SceneStore(self).list(asset["id"]))
+                scene_store = SceneStore(self)
+                scenes = scene_store.list(asset["id"], record_ids=record_ids)
+                if scenes:
+                    scenes = characters.decorate_observations(asset["id"], scenes)
                 phase.set(record_count=len(scenes))
             # Original observations stay immutable and collectible, but are not
             # duplicated as search hits where a new scene plan replaced them.
             with trace_span("records.observation_filter", input_count=len(observations), scene_count=len(scenes)) as phase:
+                covering_scenes = scene_store._raw(asset["id"]) if observations and record_ids is not None else scenes
                 observations = [row for row in observations if not any(
-                    scene["start_ms"] < row["end_ms"] and scene["end_ms"] > row["start_ms"] for scene in scenes)]
+                    scene["start_ms"] < row["end_ms"] and scene["end_ms"] > row["start_ms"] for scene in covering_scenes)]
                 phase.set(output_count=len(observations))
             with trace_span("records.audio") as phase:
-                audio = AudioIdentityService(self, characters).records(asset["id"])
+                audio_ids = (None if record_ids is None else record_ids.union(
+                    item["id"] for scene in scenes for item in (scene.get("audio_evidence") or [])))
+                audio = AudioIdentityService(self, characters).records(asset["id"], record_ids=audio_ids)
                 for scene in scenes:
                     if scene.get("audio_evidence"):
                         scene["audio_evidence"] = project_audio_evidence(scene["audio_evidence"], audio)
+                if record_ids is not None:
+                    audio = [row for row in audio if row["id"] in record_ids]
                 phase.set(record_count=len(audio))
             with trace_span("records.retrieval") as phase:
-                retrieval = RetrievalStore(self).records(asset["id"])
+                retrieval = RetrievalStore(self).records(asset["id"], record_ids=record_ids)
                 phase.set(record_count=len(retrieval))
-            with trace_span("records.subtitles") as phase:
-                subtitles = self.subtitles(asset["id"])
-                phase.set(record_count=len(subtitles))
             with trace_span("records.assemble", input_count=len(observations) + len(scenes) + len(retrieval)
                             + len(subtitles) + len(audio)) as phase:
                 before_count = len(result)
@@ -824,7 +856,7 @@ class Library:
                     is_scene = "chunk_id" in record
                     is_audio = record.get("kind") == "audio"
                     is_retrieval = record.get("evidence_type") == "retrieval_window"
-                    related = [a for a in annotations if a["record_id"] == record["id"]]
+                    related = by_record.get(record["id"], ())
                     text = record.get("summary", record.get("text", ""))
                     favorite, note, user_confirmed = False, "", False
                     names = []
@@ -916,10 +948,9 @@ class Library:
         if compact_subtitles:
             from .subtitle_projection import compact_subtitle_records
             with trace_span("records.subtitle_compact", input_count=len(result)) as phase:
-                compacted = compact_subtitle_records(result)
-                phase.set(output_count=len(compacted))
-            return compacted
-        return result
+                result = compact_subtitle_records(result)
+                phase.set(output_count=len(result))
+        return result if record_ids is None else [row for row in result if row["id"] in record_ids]
 
     def save_run(self, asset_id: str, run_id: str, data: dict):
         atomic_json(self.asset_dir(asset_id) / "analyses" / safe_id(run_id) / "run.json",

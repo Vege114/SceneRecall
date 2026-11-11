@@ -24,13 +24,20 @@ def clear_status_cache():
 
 @pytest.mark.asyncio
 async def test_each_preflight_command_has_its_own_deadline(tmp_path, monkeypatch):
-    monkeypatch.setattr(codex_cli, "STATUS_TIMEOUT_S", .05)
+    loop = asyncio.get_running_loop()
+    clock = loop.time()
+    monkeypatch.setattr(loop, "time", lambda: clock)
+    monkeypatch.setattr(codex_cli, "STATUS_TIMEOUT_S", 10)
     calls = []
 
     async def run(args, *, timeout_s, **kwargs):
+        nonlocal clock
         calls.append(args[1:])
         async with asyncio.timeout(timeout_s):
-            await asyncio.sleep(.02)
+            clock += 4
+            # Let the event loop dispatch any expired enclosing deadline.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
         if args[1:] == ["--version"]:
             return 0, b"codex-cli 0.155.1", b""
         if args[1:] == ["exec", "--help"]:
@@ -41,7 +48,7 @@ async def test_each_preflight_command_has_its_own_deadline(tmp_path, monkeypatch
 
     monkeypatch.setattr(codex_cli, "_run", run)
     checked = await codex_cli._inspect("fixture", tmp_path)
-    # Four individually valid calls take > .05 seconds in total. The old shared
+    # Four four-second calls take longer than ten seconds in total. The old shared
     # deadline rejected this successfully authenticated installation.
     assert checked["authenticated"] and checked["compatible"] and len(calls) == 4
 

@@ -108,7 +108,7 @@ describe('Explicit scene deepening and evidence', () => {
     expect(screen.getByRole('button', { name: '深入分析此片段' })).toBeTruthy();
     await user.click(screen.getByText('查看事实与来源'));
     expect(screen.getAllByText(/「他已经走了。」/).length).toBeGreaterThan(0);
-    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets/episode-one']);
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets/episode-one?view=visual']);
   });
 
   it('shows representatives first and reveals 24 remaining original frames per click without duplicates', async () => {
@@ -144,7 +144,7 @@ describe('Explicit scene deepening and evidence', () => {
     const cue = document.getElementById('subtitle-cue-44');
     expect(cue?.className).toContain('active');
     expect(cue?.textContent).toContain('00:00:44');
-    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets/episode-one']);
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets/episode-one?view=timeline']);
   });
 
   it('links possible similar scenes without merging evidence and reveals a linked scene beyond the first page', async () => {
@@ -165,7 +165,7 @@ describe('Explicit scene deepening and evidence', () => {
     await waitFor(() => expect(document.getElementById('scene-scene-44')?.className).toContain('active'));
     expect(document.getElementById('scene-scene-0')?.textContent).toContain('独立场景 0');
     expect(document.getElementById('scene-scene-44')?.textContent).toContain('独立场景 44');
-    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets/episode-one']);
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual(['/api/assets/episode-one?view=visual']);
   });
 
   it('keeps an estimate error visible without starting a task and hides historical scene actions', async () => {

@@ -64,9 +64,18 @@ def service(work, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_explicit_scope_applies_to_legacy_and_card_film_evidence(service):
+async def test_explicit_scope_applies_to_legacy_and_card_film_evidence(service, monkeypatch):
     svc, _, engine, scope, _, _, concept = service
+    projections = []
+    build = svc.knowledge.projection
+
+    def counted(identity):
+        projections.append(identity)
+        return build(identity)
+
+    monkeypatch.setattr(svc.knowledge, "projection", counted)
     result = await svc.asearch("暂停时间", {"_knowledge_scope": scope}, engine)
+    assert projections == [scope]
     assert [row["id"] for row in result["record_candidates"]] == ["window-one"]
     assert result["record_candidates"][0]["matched_concept_ids"] == [concept["concept_id"]]
     assert result["record_candidates"][0]["event_verified"] is False

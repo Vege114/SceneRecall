@@ -650,18 +650,23 @@ class SearchEngine:
             return [row[0] for row in db.execute(f"""SELECT DISTINCT r.asset_id FROM records r
                 WHERE {where} AND r.is_context=0 {evidence_clause} ORDER BY r.asset_id""", params)]
 
-    def result_asset_ids(self, candidates):
-        """Resolve ownership from the index, never generated result metadata."""
-        identifiers = list(dict.fromkeys(value for row in candidates for value in
-            [row.get("id"), *row.get("member_ids", []), *row.get("source_ids", [])] if isinstance(value, str)))
-        owners = set()
+    def indexed_record_owners(self, identifiers):
+        """Group requested record IDs by their authoritative index owner."""
+        identifiers = list(identifiers)
+        owners = {}
         with self._db() as db:
             db.execute("BEGIN")
             for offset in range(0, len(identifiers), 256):
                 batch = identifiers[offset:offset + 256]
-                owners.update(row[0] for row in db.execute(
-                    f"SELECT DISTINCT asset_id FROM records WHERE id IN ({','.join('?' for _ in batch)})", batch))
-        return sorted(owners)
+                for owner, identity in db.execute(
+                        f"SELECT asset_id,id FROM records WHERE id IN ({','.join('?' for _ in batch)})", batch):
+                    owners.setdefault(owner, set()).add(identity)
+        return owners
+
+    def result_asset_ids(self, candidates):
+        identifiers = {value for row in candidates for value in
+            [row.get("id"), *row.get("member_ids", []), *row.get("source_ids", [])] if isinstance(value, str)}
+        return sorted(self.indexed_record_owners(identifiers))
 
     @timed("snapshot.revision.work")
     def query_token(self, filters):

@@ -13,6 +13,7 @@ from contextlib import nullcontext
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
+from typing import Literal
 
 from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
@@ -23,6 +24,7 @@ from . import codex_cli
 from .characters import CharacterStore, StaleCharacterRevision
 from .jobs import JobQueue
 from .library import Library, atomic_json, read_json, safe_id, subtitle_track_info, uid
+from .library_activity import library_activity
 from .models import (
     AnalysisInput, AnnotationInput, AssetInput, CharacterEditInput, ConcurrencyInput,
     CharacterMergeInput, CharacterReanalysisInput, DeepenInput, ExecutionOptions, RetrievalIdentityInput,
@@ -46,8 +48,12 @@ DEFAULTS = {"bindings": {k: None for k in ("preparation", "vision", "subtitle", 
 def create_app(data_dir: Path | None = None, start_worker=True, providers=None, token=None, allowed_ports=None):
     from .opencv_runtime import configure_opencv_threads
     configure_opencv_threads()
-    root = data_dir or Path(os.environ.get("SCENERECALL_DATA", str(Path.home() / "SceneRecallLibrary")))
-    library = Library(Path(root))
+    root = Path(data_dir or os.environ.get("SCENERECALL_DATA", Path.home() / "SceneRecallLibrary")).expanduser().resolve()
+    (root / "runtime").mkdir(parents=True, exist_ok=True)
+    # Construction can recover an interrupted archive restore before lifespan
+    # starts. Keep that filesystem work out of an offline compaction as well.
+    with library_activity(root):
+        library = Library(root)
     characters = CharacterStore(library)
     providers = providers or ProviderManager(library.root / "private")
     from .concurrency import recover_concurrency
@@ -66,15 +72,16 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
 
     @asynccontextmanager
     async def lifespan(app):
-        preparation.start()
-        try:
-            yield
-        finally:
-            await preparation.stop()
-            await queue.stop()
-            await search.visual_encoder.close()
-            if getattr(app.state, "knowledge_runtime", None):
-                await app.state.knowledge_runtime.close()
+        with library_activity(library.root):
+            preparation.start()
+            try:
+                yield
+            finally:
+                await preparation.stop()
+                await queue.stop()
+                await search.visual_encoder.close()
+                if getattr(app.state, "knowledge_runtime", None):
+                    await app.state.knowledge_runtime.close()
 
     app = FastAPI(title="SceneRecall", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.library, app.state.providers, app.state.search, app.state.jobs = library, providers, search, queue
@@ -197,17 +204,17 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                 "budget": {"max_requests": job["config"].get("max_requests", 1000), "max_cost": job["config"].get("max_cost")}}
 
     def asset_view(asset):
-        asset = dict(asset)
         observations = library.observations(asset["id"])
         # Cards need only the active count and first frame, not a full semantic
         # projection and recursive dependency/staleness verification.
         scenes = SceneStore(library)._raw(asset["id"])
-        observations = scenes or observations
-        if observations and observations[0].get("evidence_frame_ids"):
-            asset["thumbnail_url"] = f"/api/assets/{asset['id']}/frames/{observations[0]['evidence_frame_ids'][0]}"
-        asset["observation_count"] = len(observations)
-        asset["subtitle_count"] = len(library.subtitles(asset["id"]))
-        return asset
+        return card_metadata(asset, scenes or observations, library.subtitles(asset["id"]))
+
+    def card_metadata(asset, visual_rows, subtitles):
+        metadata = {**asset, "observation_count": len(visual_rows), "subtitle_count": len(subtitles)}
+        if visual_rows and visual_rows[0].get("evidence_frame_ids"):
+            metadata["thumbnail_url"] = f"/api/assets/{asset['id']}/frames/{visual_rows[0]['evidence_frame_ids'][0]}"
+        return metadata
 
     @app.get("/api/health")
     async def health():
@@ -385,20 +392,44 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
         await search.rebuild_from_source(library.records)
         return asset_view(asset)
 
+    @app.get("/api/assets/{asset_id}/player")
+    def asset_player(asset_id: str):
+        return library.get_asset(asset_id)
+
     @app.get("/api/assets/{asset_id}")
-    def asset_detail(asset_id: str):
+    def asset_detail(asset_id: str, view: Literal["full", "visual", "timeline", "runs"] = "full"):
         started = perf_counter()
-        asset = asset_view(library.get_asset(asset_id))
+        asset = library.get_asset(asset_id)
         asset_ready = perf_counter()
-        projection = {r["id"]: r for r in library.records(asset_id, compact_subtitles=False)}
+        if view == "full":
+            rows = library.records(asset_id, compact_subtitles=False)
+        elif view == "visual":
+            active = library.active(asset_id)
+            windows = read_json(library.asset_dir(asset_id) / "retrieval" / "active.json", {"units": {}})
+            ids = set(active["observations"]) | set(active.get("scenes", {})) | set(windows["units"])
+            rows = library.records(asset_id, compact_subtitles=False, record_ids=ids) if ids else []
+        else:
+            rows = []
+        projection = {r["id"]: r for r in rows}
         projected = perf_counter()
+        raw_observations = library.observations(asset_id) if view in {"full", "visual"} else []
+        subtitles = library.subtitles(asset_id)
+        if view == "full":
+            # The legacy API includes card counts for all active raw scenes, even ones without searchable text.
+            asset = card_metadata(asset, SceneStore(library)._raw(asset_id) or raw_observations, subtitles)
         observations = [{**r, "model_summary": r["summary"],
                          **{k: projection[r["id"]][k] for k in ("summary", "entities", "review_status", "note", "favorite") if r["id"] in projection},
-                         "asset_id": asset_id} for r in library.observations(asset_id) if r["id"] in projection]
-        content = {"asset": asset, "observations": [enrich(r) for r in observations], "subtitles": library.subtitles(asset_id),
+                         "asset_id": asset_id} for r in raw_observations if r["id"] in projection]
+        annotations = (library.annotations(asset_id) if view == "full" else
+                       library.annotations(asset_id, record_ids=set(projection) | {cue["id"] for cue in subtitles}))
+        content = {"asset": asset, "observations": [enrich(r) for r in observations], "subtitles": subtitles,
                 "retrieval_windows": [enrich(r) for r in projection.values() if r.get("evidence_type") == "retrieval_window"],
                 "scenes": [enrich(r) for r in projection.values() if r.get("kind") == "scene"],
-                "annotations": library.annotations(asset_id), "runs": library.runs(asset_id)}
+                "annotations": annotations, "runs": library.runs(asset_id) if view in {"full", "runs"} else []}
+        if view != "full":
+            content["view"] = view
+            content["run_count"] = (len(content["runs"]) if view == "runs" else
+                                    sum(1 for _ in (library.asset_dir(asset_id) / "analyses").glob("*/run.json")))
         assembled = perf_counter()
         # These persisted records already contain JSON primitives. Serialize in
         # this worker, avoiding FastAPI's second recursive conversion on the
@@ -618,12 +649,13 @@ def create_app(data_dir: Path | None = None, start_worker=True, providers=None, 
                              if isinstance(value, str)}
             with trace_span("canonical.owner_lookup", candidate_count=len(candidates),
                             requested_id_count=len(requested_ids)) as phase:
-                owners = search.result_asset_ids(candidates)
+                owners = search.indexed_record_owners(requested_ids)
                 phase.set(owner_count=len(owners))
-            for owner_index, owner in enumerate(owners):
+            for owner_index, (owner, identities) in enumerate(sorted(owners.items())):
                 try:
-                    with trace_span("canonical.asset_records", owner_index=owner_index) as phase:
-                        records = library.records(owner)
+                    with trace_span("canonical.asset_records", owner_index=owner_index,
+                                    indexed_id_count=len(identities)) as phase:
+                        records = library.records(owner, record_ids=identities)
                         produced = {}
                         for row in records:
                             kind = row.get("kind")

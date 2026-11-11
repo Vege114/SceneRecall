@@ -318,7 +318,7 @@ class RetrievalJobMixin:
             if visual.get("status") not in {"completed", "disabled"}:
                 raise ValueError(visual.get("degraded_reason") or "本地人物匹配不可用；已发布画面索引保留")
             saved = {"input_signature": signature, "visual": visual}
-            atomic_json(path, saved)
+            atomic_json(path, saved, compact=True)
         visual = saved["visual"]
         pipeline.apply_crop_retention(asset_id, visual.get("regions", []), config["visual_identity_settings"])
         if visual.get("status") not in {"completed", "disabled"}:

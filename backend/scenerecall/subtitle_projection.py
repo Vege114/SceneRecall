@@ -27,6 +27,29 @@ def _time_order(record: dict) -> tuple:
     return record["start_ms"], record["end_ms"], *_identity(record)
 
 
+def subtitle_dependencies(cues: list[dict], record_ids) -> list[dict]:
+    """Keep time-connected cue groups containing a requested ID before semantic compaction.
+
+    Library.subtitles supplies start-ordered raw cues. An annotation can change
+    their semantic grouping, but compact_subtitle_records never crosses a gap
+    or a touching boundary, irrespective of the later semantic projection.
+    """
+    result = []
+    first = end = 0
+    wanted = False
+    for index, cue in enumerate(cues):
+        if cue["start_ms"] >= end:
+            if wanted:
+                result.extend(cues[first:index])
+            first, end, wanted = index, cue["end_ms"], False
+        else:
+            end = max(end, cue["end_ms"])
+        wanted |= cue["id"] in record_ids
+    if wanted:
+        result.extend(cues[first:])
+    return result
+
+
 def _protected(record: dict) -> bool:
     # Each collectible or manually interpreted cue must keep its own identity,
     # even when two such cues currently happen to contain the same metadata.

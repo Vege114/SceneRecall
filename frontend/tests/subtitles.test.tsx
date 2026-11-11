@@ -170,7 +170,7 @@ describe('Existing asset extraction and OCR exclusion', () => {
     await user.click(screen.getByRole('button', { name: /台词 1/ }));
     expect(screen.getByText('Synthetic searchable dialogue')).toBeTruthy();
     expect(value.refresh).toHaveBeenCalledOnce();
-    expect(fetch.mock.calls.map((call) => call[0])).toEqual([`/api/assets/${asset.id}`, `/api/assets/${asset.id}/subtitle-tracks`, `/api/assets/${asset.id}/subtitles/extract`, `/api/assets/${asset.id}`]);
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([`/api/assets/${asset.id}?view=visual`, `/api/assets/${asset.id}/subtitle-tracks`, `/api/assets/${asset.id}/subtitles/extract`, `/api/assets/${asset.id}?view=visual`]);
     expect(JSON.parse(fetch.mock.calls[2][1]!.body as string)).toEqual({ subtitle_stream_index: 3, subtitle_offset_ms: 1250 });
   });
 

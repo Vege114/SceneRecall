@@ -292,6 +292,8 @@ class KnowledgeService:
                 named[target_key(target)] = target
         if len(named) == 1:
             wanted.update(named)
+        if not wanted:
+            return []
         results = []
         memberships = self.store._memberships()["assets"]
         allowed_scopes = set(self.scopes(filters, engine))
@@ -302,7 +304,7 @@ class KnowledgeService:
                 if memberships.get(owner) not in allowed_scopes:
                     continue
                 ids = {row["id"] for row in candidates if row["asset_id"] == owner}
-                for record in self.library.records(owner):
+                for record in self.library.records(owner, record_ids=ids):
                     if record["id"] not in ids or not self.store._matches_filters(record, filters):
                         continue
                     evidence, bindings, matched = confirmed_character_evidence(
@@ -326,7 +328,7 @@ class KnowledgeService:
         for scope in scopes:
             projections[scope] = await run_in_thread(self.knowledge.projection, scope)
             lexical.extend(await run_in_thread(self.knowledge.lexical_hits, scope, query,
-                                               limit=None if all_candidates else 50))
+                                               limit=None if all_candidates else 50, projection=projections[scope]))
         explicit = filters.get("_knowledge_target")
         if explicit:
             # An explicit navigation target must not depend on its display name

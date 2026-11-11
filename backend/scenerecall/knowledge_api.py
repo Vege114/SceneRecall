@@ -157,8 +157,10 @@ def register_knowledge_routes(app, library, providers, search, queue, entities):
         # The engine rechecks SQL evidence. This endpoint also fences candidates
         # against the authoritative current library projection, just like /search.
         current = {}
-        for asset_id in search.result_asset_ids(result["results"]):
-            current.update((row["id"], row) for row in await run_in_thread(library.records, asset_id))
+        requested = {row["id"] for row in result["results"] if "concept" in row.get("retrieval_branches", [])}
+        owners = await run_in_thread(search.indexed_record_owners, requested)
+        for asset_id, identities in owners.items():
+            current.update((row["id"], row) for row in await run_in_thread(library.records, asset_id, record_ids=identities))
         film = []
         from .visual_index import evidence_digest
         for row in result["results"]:

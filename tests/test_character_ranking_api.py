@@ -43,8 +43,8 @@ async def publish(tmp_path, monkeypatch, current, *, contributions, reference, t
 
     monkeypatch.setattr(engine, "search", search)
     monkeypatch.setattr(engine, "completed_character_targets", lambda: deepcopy(TARGETS))
-    monkeypatch.setattr(engine, "result_asset_ids", lambda _candidates: ["asset_one"])
-    monkeypatch.setattr(library, "records", lambda *_args: [deepcopy(current)])
+    monkeypatch.setattr(engine, "indexed_record_owners", lambda ids: {"asset_one": ids})
+    monkeypatch.setattr(library, "records", lambda *_args, **_kwargs: [deepcopy(current)])
     if visual_verification:
         async def verify(*args, **kwargs):
             response = args[-1]

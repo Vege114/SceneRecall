@@ -51,19 +51,59 @@ beforeEach(() => { vi.useFakeTimers(); hidden = false; vi.spyOn(document, 'hidde
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Asset detail refresh under slow server projections', () => {
+  it('opens a deep-linked player before the visual projection and preserves the seek when evidence arrives', async () => {
+    const pending = deferred<Detail>();
+    const { counts } = requests((url) => url.endsWith('/player') ? asset : pending.promise);
+    const value = { ...context(false), assets: [] };
+    await act(async () => { render(<AppContext.Provider value={value}><AssetDetail id={asset.id} initialTime={6543} /></AppContext.Provider>); });
+    const player = screen.getByLabelText(`${asset.title} 原片播放器`) as HTMLVideoElement;
+    fireEvent.loadedMetadata(player);
+    expect(player.currentTime).toBe(6.543);
+    expect(screen.queryByText('这部作品还没有画面资料')).toBeNull();
+    await act(async () => { pending.resolve({ ...detail(), view: 'visual' }); });
+    expect(screen.getByLabelText(`${asset.title} 原片播放器`)).toBe(player);
+    expect(player.currentTime).toBe(6.543);
+    expect(counts).toEqual({ '/api/assets/episode/player': 1, '/api/assets/episode?view=visual': 1 });
+  });
+
+  it('loads subtitle links without visual evidence and requests run payloads and visuals only when visited', async () => {
+    const cue = { id: 'cue', start_ms: 550, end_ms: 950, text: '校正前', language: 'zh', source: 'external' };
+    const { counts } = requests((url) => ({ ...detail(), view: new URL(url, 'http://localhost').searchParams.get('view'),
+      subtitles: [cue], annotations: [{ record_id: cue.id, summary: '校正后' }, { record_id: cue.id, note: '复核笔记' }], run_count: 1,
+      runs: url.endsWith('view=runs') ? [{ id: 'test-run', status: 'completed' }] : [] }));
+    await act(async () => { render(<AppContext.Provider value={context(false)}><AssetDetail id={asset.id} initialCue={cue.id} /></AppContext.Provider>); });
+    const player = screen.getByLabelText(`${asset.title} 原片播放器`) as HTMLVideoElement;
+    fireEvent.loadedMetadata(player);
+    expect(player.currentTime).toBe(.55);
+    expect(counts).toEqual({ '/api/assets/episode?view=timeline': 1 });
+    const caption = document.querySelector('.player-caption')!;
+    expect(caption.textContent).toContain('校正后');
+    await act(async () => { player.currentTime = .94; fireEvent.timeUpdate(player); });
+    expect(caption.textContent).toContain('校正后');
+    await act(async () => { player.currentTime = .95; fireEvent.timeUpdate(player); });
+    expect(caption.textContent).not.toContain('校正后');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '版本' })); });
+    expect(screen.getByText('test-run')).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^画面/ })); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^台词/ })); });
+    expect(counts).toEqual({ '/api/assets/episode?view=timeline': 1, '/api/assets/episode?view=visual': 1, '/api/assets/episode?view=runs': 1 });
+  });
+
   it('keeps one slow GET in flight and waits five seconds after completion before polling again', async () => {
     const first = deferred<Detail>();
     const { counts } = requests((_url, count) => count === 1 ? first.promise : detail('Updated episode'));
     await mount();
     await advance(29999);
-    expect(counts['/api/assets/episode']).toBe(1);
+    expect(counts['/api/assets/episode?view=visual']).toBe(1);
     expect(screen.getByText('正在读取作品资料')).toBeTruthy();
+    const player = screen.getByLabelText(`${asset.title} 原片播放器`);
     await act(async () => { first.resolve(detail()); });
     expect(screen.getByRole('heading', { name: asset.title })).toBeTruthy();
+    expect(screen.getByLabelText(`${asset.title} 原片播放器`)).toBe(player);
     await advance(4999);
-    expect(counts['/api/assets/episode']).toBe(1);
+    expect(counts['/api/assets/episode?view=visual']).toBe(1);
     await advance(1);
-    expect(counts['/api/assets/episode']).toBe(2);
+    expect(counts['/api/assets/episode?view=visual']).toBe(2);
     expect(screen.getByRole('heading', { name: 'Updated episode' })).toBeTruthy();
   });
 
@@ -78,10 +118,10 @@ describe('Asset detail refresh under slow server projections', () => {
     await advance(10000);
     hidden = false;
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(counts['/api/assets/episode']).toBe(1);
+    expect(counts['/api/assets/episode?view=visual']).toBe(1);
     await act(async () => { first.resolve(detail()); });
     await advance(30000);
-    expect(counts['/api/assets/episode']).toBe(1); // No active job remains.
+    expect(counts['/api/assets/episode?view=visual']).toBe(1); // No active job remains.
   });
 
   it('suspends hidden-tab polling and cancels the active request on unmount', async () => {
@@ -91,26 +131,26 @@ describe('Asset detail refresh under slow server projections', () => {
     hidden = true;
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     await advance(60000);
-    expect(counts['/api/assets/episode']).toBe(1);
+    expect(counts['/api/assets/episode?view=visual']).toBe(1);
     hidden = false;
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
-    expect(counts['/api/assets/episode']).toBe(2);
+    expect(counts['/api/assets/episode?view=visual']).toBe(2);
     const signal = fetch.mock.calls[1][1]?.signal;
     view.unmount();
     expect(signal?.aborted).toBe(true);
     await act(async () => { second.resolve(detail('Response after unmount')); });
     await advance(30000);
-    expect(counts['/api/assets/episode']).toBe(2);
+    expect(counts['/api/assets/episode?view=visual']).toBe(2);
   });
 
   it('loads an episode opened while hidden without waiting for a visibility event', async () => {
     hidden = true;
     const { counts } = requests(() => detail());
     await mount(context(false));
-    expect(counts['/api/assets/episode']).toBe(1);
+    expect(counts['/api/assets/episode?view=visual']).toBe(1);
     expect(screen.getByRole('heading', { name: asset.title })).toBeTruthy();
     await advance(60000);
-    expect(counts['/api/assets/episode']).toBe(1);
+    expect(counts['/api/assets/episode?view=visual']).toBe(1);
   });
 
   it('ends a stalled first request with a recoverable error and ignores its late response after retry', async () => {
@@ -122,7 +162,7 @@ describe('Asset detail refresh under slow server projections', () => {
     expect(screen.queryByText('正在读取作品资料')).toBeNull();
     expect(screen.getByText('读取作品资料超时，请重试。已保存的分析结果不会丢失。')).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新读取作品资料' })); });
-    expect(counts['/api/assets/episode']).toBe(2);
+    expect(counts['/api/assets/episode?view=visual']).toBe(2);
     expect(screen.getByRole('heading', { name: 'Recovered episode' })).toBeTruthy();
     await act(async () => { first.resolve(detail('Expired response')); });
     expect(screen.queryByRole('heading', { name: 'Expired response' })).toBeNull();
@@ -156,7 +196,7 @@ describe('Asset detail refresh under slow server projections', () => {
 
   it('aborts the previous asset GET and ignores its late response after navigation', async () => {
     const first = deferred<Detail>();
-    const { fetch } = requests((url) => url === '/api/assets/episode' ? first.promise : detail('Second episode', 'second'));
+    const { fetch } = requests((url) => url === '/api/assets/episode?view=visual' ? first.promise : detail('Second episode', 'second'));
     const value = context();
     const view = await mount(value);
     await act(async () => { view.rerender(<AppContext.Provider value={value}><AssetDetail id="second" /></AppContext.Provider>); });
@@ -171,15 +211,16 @@ describe('Asset detail refresh under slow server projections', () => {
     const stale = deferred<Detail>();
     const fresh = deferred<Detail>();
     const { counts } = requests((url, count, options) => options?.method === 'POST' ? {}
-      : count === 1 ? detail() : count === 2 ? stale.promise : fresh.promise);
+      : url.endsWith('view=timeline') ? fresh.promise : count === 1 ? detail() : stale.promise);
     const value = context();
     await mount(value);
     await advance(5000);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '视听身份' })); });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '保存身份测试' })); });
-    expect(counts['/api/assets/episode']).toBe(2);
+    expect(counts['/api/assets/episode?view=visual']).toBe(2);
     await act(async () => { stale.resolve(detail('Pre-mutation snapshot')); });
-    expect(counts['/api/assets/episode']).toBe(3);
+    expect(counts['/api/assets/episode?view=visual']).toBe(2);
+    expect(counts['/api/assets/episode?view=timeline']).toBe(1);
     expect(screen.queryByRole('heading', { name: 'Pre-mutation snapshot' })).toBeNull();
     expect(value.refresh).not.toHaveBeenCalled();
     await act(async () => { fresh.resolve(detail('Post-mutation snapshot')); });

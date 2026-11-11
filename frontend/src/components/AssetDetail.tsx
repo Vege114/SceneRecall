@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { ArrowLeft, Bookmark, Check, ChevronRight, Clock3, FileVideo, FolderSearch, Layers3, Maximize2, Pencil, Play, ScanLine, Search, Subtitles, Trash2, UsersRound } from 'lucide-react';
-import { api, duration, formatTime, friendlyDate, message, post } from '../api';
+import { api, ApiError, duration, formatTime, friendlyDate, message, post } from '../api';
 import { pickLocalFiles } from '../lib/localFiles';
 import { searchLink } from '../anime';
 import { useApp } from '../context';
-import { KIND_LABELS, SUBTITLE_SOURCE_LABELS, type Annotation, type AssetDetail as AssetDetailType, type Entity, type Observation, type SceneChunk, type Subtitle } from '../types';
+import { KIND_LABELS, SUBTITLE_SOURCE_LABELS, type Annotation, type Asset, type AssetDetail as AssetDetailType, type Entity, type Observation, type SceneChunk, type Subtitle } from '../types';
 import { Alert, Empty, Field, Modal, Spinner, Status } from './ui';
 import CharacterProfiles from './CharacterProfiles';
 import AudioIdentity from './AudioIdentity';
@@ -18,6 +18,42 @@ import { RetrievalFrames, RetrievalState } from './RetrievalEvidence';
 import WorkEntities from './WorkEntities';
 
 const DETAIL_REQUEST_TIMEOUT_MS = 30000;
+type DetailView = NonNullable<AssetDetailType['view']>;
+const EMPTY_SUBTITLES: Subtitle[] = [];
+
+function visualTimeline(detail: AssetDetailType | null): (Observation | SceneChunk)[] {
+  if (!detail) return [];
+  const windows: Observation[] = (detail.retrieval_windows || []).map((record) => ({
+    ...record, evidence_type: 'retrieval_window', window_id: record.id, shot_id: '', summary: record.summary || '',
+    entities: record.entities || [], events: record.events || [], uncertainties: record.uncertainties || [],
+    evidence_frame_ids: record.evidence_frame_ids || record.ordered_frames?.map((frame) => frame.id) || [],
+    run_id: record.run_id || '',
+  }));
+  return [...(detail.scenes || []), ...detail.observations, ...windows].sort((a, b) => a.start_ms - b.start_ms);
+}
+
+function intervalAt(boundaries: number[], time: number) {
+  let lo = 0;
+  let hi = boundaries.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (boundaries[mid] <= time) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function PlaybackClock({ video, time }: { video: RefObject<HTMLVideoElement>; time: number }) {
+  const [seconds, setSeconds] = useState(Math.floor(time / 1000));
+  useEffect(() => {
+    const player = video.current;
+    setSeconds(Math.floor(player?.readyState ? player.currentTime : time / 1000));
+    const update = () => { if (player) setSeconds(Math.floor(player.currentTime)); };
+    player?.addEventListener('timeupdate', update);
+    return () => player?.removeEventListener('timeupdate', update);
+  }, [video, time]);
+  return <strong className="mono">{formatTime(seconds * 1000)}</strong>;
+}
 
 function AnnotationModal({ assetId, record, existing, onClose, onSaved }: { assetId: string; record: Observation | SceneChunk | Subtitle; existing?: Annotation; onClose: () => void; onSaved: () => Promise<void> }) {
   const { notify } = useApp();
@@ -61,11 +97,18 @@ function RelocateModal({ assetId, onClose, onSaved }: { assetId: string; onClose
 }
 
 export default function AssetDetail({ id, initialTime = 0, initialCue, initialChunk, initialAudio }: { id: string; initialTime?: number; initialCue?: string; initialChunk?: string; initialAudio?: string }) {
-  const { openJob, refresh, notify, jobs } = useApp();
+  const { openJob, refresh, notify, jobs, assets } = useApp();
+  const listedAsset = assets.find((asset) => asset.id === id);
+  const [playerAsset, setPlayerAsset] = useState<Asset>();
+  const [unavailable, setUnavailable] = useState(false);
   const [detail, setDetail] = useState<AssetDetailType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [tab, setTab] = useState<'visual' | 'subtitle' | 'characters' | 'identity' | 'entities' | 'runs'>(initialAudio ? 'identity' : 'visual');
+  const [tab, setTab] = useState<'visual' | 'subtitle' | 'characters' | 'identity' | 'entities' | 'runs'>(initialAudio ? 'identity' : initialCue ? 'subtitle' : 'visual');
+  const view: DetailView = tab === 'visual' || tab === 'entities' ? 'visual' : tab === 'runs' ? 'runs' : 'timeline';
+  const activeView = useRef(view);
+  activeView.current = view;
+  const cache = useRef<Partial<Record<DetailView, AssetDetailType>>>({});
   const [workBinding, setWorkBinding] = useState<{ recordId: string; entityId: string }>();
   useEffect(() => { if (initialAudio) setTab('identity'); }, [initialAudio]);
   const [selectedCharacter, setSelectedCharacter] = useState<string | undefined>();
@@ -88,9 +131,15 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
   const appliedCue = useRef('');
   const appliedChunk = useRef('');
   const detailFlight = useRef<{ assetId: string; promise: Promise<void>; dirty: boolean; cancelled: boolean; controller: AbortController } | null>(null);
-  const load = useCallback((afterMutation = false): Promise<void> => {
+  const load = useCallback((afterMutation = false, useCache = false): Promise<void> => {
+    const requestedView = activeView.current;
+    const cached = cache.current[requestedView];
+    if (useCache && cached?.asset.id === id) {
+      setDetail(cached); setLoading(false);
+      return Promise.resolve();
+    }
     if (detailFlight.current?.assetId === id) {
-      if (afterMutation) detailFlight.current.dirty = true;
+      if (afterMutation) { detailFlight.current.dirty = true; cache.current = {}; }
       return detailFlight.current.promise;
     }
     const flight = { assetId: id, promise: Promise.resolve(), dirty: false, cancelled: false, controller: new AbortController() };
@@ -99,17 +148,34 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
       try {
         do {
           flight.dirty = false;
+          const section = activeView.current;
           flight.controller = new AbortController();
           let timedOut = false;
           const timeout = window.setTimeout(() => { timedOut = true; flight.controller.abort(); }, DETAIL_REQUEST_TIMEOUT_MS);
           try {
-            const next = await api<AssetDetailType>(`/assets/${encodeURIComponent(id)}`, { signal: flight.controller.signal });
+            const next = await api<AssetDetailType>(`/assets/${encodeURIComponent(id)}?view=${section}`, { signal: flight.controller.signal });
             // api() can recover an unreadable response body as {}. An aborted
             // body must not replace valid detail after headers already arrived.
             if (timedOut) throw new Error('Detail response timed out');
-            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) { setDetail(next); setError(''); }
+            if (!next.asset || next.asset.id !== id) throw new Error('作品资料响应不完整，请重试。');
+            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) {
+              if (!useCache) cache.current = {};
+              cache.current[section] = next;
+              cache.current.timeline = next;
+              const visible = cache.current[activeView.current];
+              if (visible) setDetail(visible);
+              else flight.dirty = true; // The user switched to a section this response does not cover.
+              setUnavailable(false); setError('');
+            }
           } catch (error) {
-            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) setError(timedOut ? '读取作品资料超时，请重试。已保存的分析结果不会丢失。' : message(error));
+            if (!flight.cancelled && !flight.dirty && detailFlight.current === flight) {
+              if (error instanceof ApiError && [401, 404, 410].includes(error.status)) {
+                cache.current = {}; setDetail(null); setUnavailable(true);
+              } else if (section !== activeView.current && !cache.current[activeView.current]) {
+                flight.dirty = true;
+              }
+              setError(timedOut ? '读取作品资料超时，请重试。已保存的分析结果不会丢失。' : message(error));
+            }
           } finally { window.clearTimeout(timeout); }
         } while (flight.dirty && !flight.cancelled);
       } finally {
@@ -120,15 +186,27 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
     return flight.promise;
   }, [id]);
   useEffect(() => {
-    setDetail(null); setLoading(true); setError(''); setIdentitySubmitted(null); identityFlight.current = false;
-    // Opening an episode must always start its first request. Visibility only
-    // suspends background polling, including when navigation happens offscreen.
-    void load();
+    cache.current = {}; setDetail(null); setLoading(true); setError(''); setUnavailable(false);
+    setIdentitySubmitted(null); identityFlight.current = false;
     return () => {
       const flight = detailFlight.current;
       if (flight?.assetId === id) { flight.cancelled = true; flight.controller.abort(); detailFlight.current = null; }
     };
-  }, [id, load]);
+  }, [id]);
+  useEffect(() => { void load(false, true); }, [view, load]);
+  // Bookmarks can open before the library list arrives. This read never builds the evidence projection.
+  const needsPlayerAsset = !listedAsset && !detail && view === 'visual';
+  useEffect(() => {
+    if (!needsPlayerAsset) return;
+    const controller = new AbortController();
+    void api<Asset>(`/assets/${encodeURIComponent(id)}/player`, { signal: controller.signal })
+      .then((asset) => { if (!controller.signal.aborted && asset.id === id) setPlayerAsset(asset); })
+      .catch(() => { /* The section request owns errors and retry. */ });
+    return () => controller.abort();
+  }, [id, needsPlayerAsset]);
+  const observations = useMemo(() => visualTimeline(detail), [detail]);
+  useEffect(() => { if (initialChunk) setTab('visual'); }, [initialChunk]);
+  useEffect(() => { if (initialCue) setTab('subtitle'); }, [initialCue]);
   useEffect(() => { pendingSeek.current = initialTime; setCurrentTime(initialTime); if (video.current && video.current.readyState > 0) video.current.currentTime = initialTime / 1000; }, [initialTime]);
   useEffect(() => {
     if (!initialCue) { appliedCue.current = ''; return; }
@@ -147,15 +225,14 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
   useEffect(() => {
     if (!initialChunk) { appliedChunk.current = ''; return; }
     if (!detail || appliedChunk.current === `${id}:${initialChunk}`) return;
-    const records = [...(detail.scenes || []), ...detail.observations].sort((a, b) => a.start_ms - b.start_ms);
-    const index = records.findIndex((record) => 'chunk_id' in record && record.chunk_id === initialChunk);
+    const index = observations.findIndex((record) => 'chunk_id' in record && record.chunk_id === initialChunk);
     if (index < 0) return;
     appliedChunk.current = `${id}:${initialChunk}`;
-    const at = records[index].start_ms;
+    const at = observations[index].start_ms;
     pendingSeek.current = at; setCurrentTime(at); setTab('visual'); setQuery('');
     setLimit(Math.max(40, Math.ceil((index + 1) / 40) * 40));
     if (video.current && video.current.readyState > 0) video.current.currentTime = at / 1000;
-  }, [detail, initialChunk, id]);
+  }, [detail, initialChunk, id, observations]);
   useEffect(() => {
     if (initialChunk && tab === 'visual') document.getElementById(`scene-${initialChunk}`)?.scrollIntoView?.({ block: 'center' });
   }, [initialChunk, tab, limit, detail]);
@@ -193,13 +270,16 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
   };
   const saveAndReload = async () => { await load(true); await refresh(); };
   const seek = (at: number) => { pendingSeek.current = at; setCurrentTime(at); if (video.current && video.current.readyState > 0) { video.current.currentTime = at / 1000; void video.current.play().catch(() => undefined); } };
-  const annotation = (recordId: string): Annotation | undefined => {
-    const related = detail?.annotations?.filter((item) => item.record_id === recordId) || [];
-    if (!related.length) return undefined;
-    const merged = related.reduce<Annotation>((value, item) => ({ ...value, ...item }), { record_id: recordId });
-    merged.needs_reassociation = related.some((item) => item.character_name && item.needs_reassociation);
-    return merged;
-  };
+  const annotations = useMemo(() => {
+    const byRecord = new Map<string, Annotation>();
+    for (const item of detail?.annotations || []) {
+      const previous = byRecord.get(item.record_id);
+      byRecord.set(item.record_id, { ...previous, ...item,
+        needs_reassociation: Boolean(previous?.needs_reassociation || (item.character_name && item.needs_reassociation)) });
+    }
+    return byRecord;
+  }, [detail?.annotations]);
+  const annotation = (id: string) => annotations.get(id);
   const favorite = async (record: Observation | SceneChunk | Subtitle) => {
     try { await post(`/assets/${encodeURIComponent(id)}/annotations`, { record_id: record.id, favorite: !annotation(record.id)?.favorite }); await load(true); notify(annotation(record.id)?.favorite ? '已取消收藏' : '片段已加入收藏'); } catch (error) { notify(message(error), 'error'); }
   };
@@ -207,19 +287,35 @@ export default function AssetDetail({ id, initialTime = 0, initialCue, initialCh
     setProxyBusy(true);
     try { await post(`/assets/${encodeURIComponent(id)}/proxy`); await refresh(); notify('播放代理任务已创建；任务完成后点击重新加载播放器'); } catch (error) { notify(message(error), 'error'); } finally { setProxyBusy(false); }
   };
-  if (loading) return <div className="page-loading"><Spinner label="正在读取作品资料" /></div>;
-  if (!detail) return <><a className="back-link" href="#/library"><ArrowLeft size={16} />返回资料库</a><Alert tone="error">{error || '无法读取作品资料'}</Alert><button className="button secondary" onClick={() => { setError(''); setLoading(true); void load(); }}>重新读取作品资料</button><p className="helper">如果视频已被删除，可以到<a href="#/trash">回收站</a>查看或恢复。</p></>;
-  const { asset, subtitles, runs } = detail;
-  const retrievalWindows: Observation[] = (detail.retrieval_windows || []).map((record) => ({ ...record, evidence_type: 'retrieval_window', window_id: record.id, shot_id: '', summary: record.summary || '', entities: record.entities || [], events: record.events || [], uncertainties: record.uncertainties || [], evidence_frame_ids: record.evidence_frame_ids || record.ordered_frames?.map((frame) => frame.id) || [], run_id: record.run_id || '' }));
-  const observations: (Observation | SceneChunk)[] = [...(detail.scenes || []), ...detail.observations, ...retrievalWindows].sort((a, b) => a.start_ms - b.start_ms);
-  const observationsFiltered = observations.filter((record) => `${annotation(record.id)?.summary || record.summary} ${annotation(record.id)?.note || ''}`.includes(query));
-  const subtitlesFiltered = subtitles.filter((record) => `${annotation(record.id)?.summary || record.text}`.includes(query));
+  const subtitles = detail?.subtitles || EMPTY_SUBTITLES;
+  const runs = detail?.runs || [];
+  const observationsFiltered = useMemo(() => query ? observations.filter((record) =>
+    `${annotations.get(record.id)?.summary || record.summary} ${annotations.get(record.id)?.note || ''}`.includes(query)) : observations,
+    [observations, annotations, query]);
+  const subtitlesFiltered = useMemo(() => query ? subtitles.filter((record) =>
+    (annotations.get(record.id)?.summary || record.text || '').includes(query)) : subtitles, [subtitles, annotations, query]);
+  const boundaries = useMemo(() => Array.from(new Set([...observations, ...subtitles]
+    .flatMap((record) => [record.start_ms, record.end_ms]))).sort((a, b) => a - b), [observations, subtitles]);
+  useEffect(() => {
+    if (video.current?.readyState) setCurrentTime(Math.floor(video.current.currentTime * 1000));
+  }, [boundaries]);
+  const updatePlayback = () => {
+    if (!video.current) return;
+    const at = Math.floor(video.current.currentTime * 1000);
+    setCurrentTime((previous) => intervalAt(boundaries, previous) === intervalAt(boundaries, at) ? previous : at);
+  };
+  const asset = detail?.asset.id === id ? detail.asset : unavailable ? undefined : listedAsset || (playerAsset?.id === id ? playerAsset : undefined);
+  const retry = <button className="button secondary" onClick={() => { setError(''); setLoading(true); void load(); }}>重新读取作品资料</button>;
+  if (!asset && loading) return <div className="page-loading"><Spinner label="正在读取作品资料" /></div>;
+  if (!asset) return <><a className="back-link" href="#/library"><ArrowLeft size={16} />返回资料库</a><Alert tone="error">{error || '无法读取作品资料'}</Alert>{retry}<p className="helper">如果视频已被删除，可以到<a href="#/trash">回收站</a>查看或恢复。</p></>;
+  const sectionReady = detail && (!detail.view || view === 'timeline' || detail.view === view);
+  const visualCount = detail && (!detail.view || detail.view === 'visual') ? observations.length : '…';
   const currentSubtitles = subtitles.filter((record) => record.start_ms <= currentTime && record.end_ms > currentTime);
   const currentObservation = observations.find((record) => record.start_ms <= currentTime && record.end_ms > currentTime);
-  return <><div className="detail-topbar"><a className="back-link" href="#/library"><ArrowLeft size={16} />资料库 <ChevronRight size={14} /><span>{KIND_LABELS[asset.kind]}</span></a><div><a className="button secondary" href={searchLink({ project_id: asset.project_id, anime_id: asset.anime_id, asset_id: asset.id })}><Search size={16} />检索本集</a>{!!detail.retrieval_windows?.length && <button className="button secondary" onClick={() => void supplementIdentity()} disabled={!asset.source_available || running || identityBusy || !!identitySubmitted}><UsersRound size={16} />{identityBusy ? '正在提交人物匹配…' : identitySubmitted ? '人物匹配已提交' : '补充人物匹配'}</button>}<button className="button secondary" onClick={() => setDeleting(true)}><Trash2 size={16} />删除视频</button><button className="button secondary" onClick={() => setRelocating(true)}><FolderSearch size={16} />定位原文件</button><button className="button primary" onClick={() => openJob(asset)} disabled={!asset.source_available}><ScanLine size={16} />分析作品</button></div></div><div className="detail-heading"><h1>{asset.title}</h1><div><Status status={asset.status} /><span>{duration(asset.duration_ms)}</span><span>{asset.width} × {asset.height}</span><span>{SUBTITLE_SOURCE_LABELS[asset.subtitle_mode]}</span>{asset.subtitle_track && <span>{[asset.subtitle_track.language, asset.subtitle_track.title, asset.subtitle_track.codec].filter(Boolean).join(' · ')}</span>}{asset.project_name && <span>{asset.project_name}</span>}{asset.tags?.map((tag) => <span className="tag" key={tag}>{tag}</span>)}{asset.season != null && <span>第 {asset.season} 季</span>}{asset.episode != null && <span>第 {asset.episode} 集</span>}{asset.version && <span>{asset.version}</span>}</div></div>{error && <Alert tone="error">{error}</Alert>}{!asset.source_available && <Alert>{asset.source_changed ? '原视频文件状态已变化，播放与分析已暂停。请点击「定位原文件」重新校验，确认它与现有资料对应。已保存的资料仍可浏览。' : '原视频暂时不可用，已保存的资料仍可浏览。请点击「定位原文件」重新连接视频以继续播放或分析。'}</Alert>}<div className="subtitle-source-bar"><div><strong>字幕来源</strong><span>{asset.subtitle_mode === 'container' ? '文本字幕已在本地提取，可直接检索台词。' : asset.subtitle_fallback_reason || '视频内含文本字幕轨时，可直接提取并更新台词。'}</span></div><button className="button secondary small" onClick={() => setExtractingSubtitles(true)} disabled={!asset.source_available || running}><Subtitles size={16} />提取 / 切换字幕轨</button></div>{asset.subtitle_import_warnings?.map((warning) => <Alert key={warning}>{warning}</Alert>)}<RetrievalState retrieval={detail.retrieval} />{asset.anime_profile && <section className="asset-anime-archive" aria-label="作品初始档案"><AnimeArchivePreview profile={asset.anime_profile} /></section>}{asset.anime_profile?.mode === 'bangumi' && <AnimeCredits key={`${asset.id}:${asset.anime_profile.dossier.subject.id}`} assetId={asset.id} />}<div className="detail-layout"><aside className="player-column"><div className="player-wrap"><video key={mediaVersion} ref={video} controls preload="metadata" poster={asset.thumbnail_url} src={`/api/assets/${encodeURIComponent(id)}/media?v=${mediaVersion}`} onLoadedMetadata={() => { if (video.current) video.current.currentTime = pendingSeek.current / 1000; setPlaybackError(false); }} onTimeUpdate={() => { if (video.current) setCurrentTime(Math.floor(video.current.currentTime * 1000)); }} onError={() => setPlaybackError(true)} aria-label={`${asset.title} 原片播放器`} /></div><div className="player-time"><span className="live-dot" />原片时间码 <strong className="mono">{formatTime(currentTime)}</strong><span className="player-time-end">/ {formatTime(asset.duration_ms)}</span></div><div className="player-caption">{currentSubtitles.length ? currentSubtitles.map((record) => <p key={record.id}>{annotation(record.id)?.summary || record.text}<small>{record.language}</small></p>) : <span>当前时间没有字幕记录</span>}</div>{playbackError && <Alert>浏览器暂时无法播放此视频。{asset.source_available ? '可生成兼容的播放代理，保持原片时间映射。' : asset.source_changed ? '原文件状态已变化，请点击「定位原文件」重新校验。' : '请先点击「定位原文件」重新连接原视频。'}<div className="button-row"><button className="button small secondary" disabled={proxyBusy || !asset.source_available} onClick={createProxy}>{proxyBusy ? <Spinner label="提交中" /> : '生成播放代理'}</button><button className="button small ghost" onClick={() => { setPlaybackError(false); setMediaVersion((value) => value + 1); }}>重新加载播放器</button></div></Alert>}<div className="player-note"><Layers3 size={17} /><div><strong>有证据，才有记忆</strong><p>识别记录基于有限采样，可能遗漏动作。写作引用前，请播放原片核对。</p></div></div><div className="detail-mini-stats"><div><strong>{observations.length}</strong><span>画面记录</span></div><div><strong>{subtitles.length}</strong><span>字幕记录</span></div><div><strong>{runs.length}</strong><span>分析版本</span></div></div>{currentObservation && <div className="now-playing-note"><span className="eyebrow">CURRENT SCENE</span><p>{annotation(currentObservation.id)?.summary || currentObservation.summary || (currentObservation.evidence_type === 'retrieval_window' ? '画面证据' : '')}</p></div>}</aside><section className="records-column"><div className="section-row records-tabs"><div className="tabs"><button className={tab === 'visual' ? 'active' : ''} onClick={() => { setTab('visual'); setLimit(40); }}><ScanLine size={15} />画面 <span>{observations.length}</span></button><button className={tab === 'subtitle' ? 'active' : ''} onClick={() => { setTab('subtitle'); setLimit(40); }}><Subtitles size={15} />台词 <span>{subtitles.length}</span></button><button className={tab === 'characters' ? 'active' : ''} onClick={() => setTab('characters')}><UsersRound size={15} />角色档案</button><button className={tab === 'identity' ? 'active' : ''} onClick={() => setTab('identity')}>视听身份</button><button className={tab === 'entities' ? 'active' : ''} onClick={() => setTab('entities')}>作品实体</button><button className={tab === 'runs' ? 'active' : ''} onClick={() => setTab('runs')}><Clock3 size={15} />版本</button></div></div>{(tab === 'visual' || tab === 'subtitle') && <input className="record-filter" aria-label="筛选当前作品资料" placeholder="筛选这部作品的记录…" value={query} onChange={(e) => { setQuery(e.target.value); setLimit(40); }} />}{tab === 'visual' && (observationsFiltered.length ? <><div className="observation-list">{observationsFiltered.slice(0, limit).map((record) => {
+  return <><div className="detail-topbar"><a className="back-link" href="#/library"><ArrowLeft size={16} />资料库 <ChevronRight size={14} /><span>{KIND_LABELS[asset.kind]}</span></a><div><a className="button secondary" href={searchLink({ project_id: asset.project_id, anime_id: asset.anime_id, asset_id: asset.id })}><Search size={16} />检索本集</a>{!!detail?.retrieval_windows?.length && <button className="button secondary" onClick={() => void supplementIdentity()} disabled={!asset.source_available || running || identityBusy || !!identitySubmitted}><UsersRound size={16} />{identityBusy ? '正在提交人物匹配…' : identitySubmitted ? '人物匹配已提交' : '补充人物匹配'}</button>}<button className="button secondary" onClick={() => setDeleting(true)}><Trash2 size={16} />删除视频</button><button className="button secondary" onClick={() => setRelocating(true)}><FolderSearch size={16} />定位原文件</button><button className="button primary" onClick={() => openJob(asset)} disabled={!asset.source_available}><ScanLine size={16} />分析作品</button></div></div><div className="detail-heading"><h1>{asset.title}</h1><div><Status status={asset.status} /><span>{duration(asset.duration_ms)}</span><span>{asset.width} × {asset.height}</span><span>{SUBTITLE_SOURCE_LABELS[asset.subtitle_mode]}</span>{asset.subtitle_track && <span>{[asset.subtitle_track.language, asset.subtitle_track.title, asset.subtitle_track.codec].filter(Boolean).join(' · ')}</span>}{asset.project_name && <span>{asset.project_name}</span>}{asset.tags?.map((tag) => <span className="tag" key={tag}>{tag}</span>)}{asset.season != null && <span>第 {asset.season} 季</span>}{asset.episode != null && <span>第 {asset.episode} 集</span>}{asset.version && <span>{asset.version}</span>}</div></div>{error && <Alert tone="error">{error} {retry}</Alert>}{!asset.source_available && <Alert>{asset.source_changed ? '原视频文件状态已变化，播放与分析已暂停。请点击「定位原文件」重新校验，确认它与现有资料对应。已保存的资料仍可浏览。' : '原视频暂时不可用，已保存的资料仍可浏览。请点击「定位原文件」重新连接视频以继续播放或分析。'}</Alert>}<div className="subtitle-source-bar"><div><strong>字幕来源</strong><span>{asset.subtitle_mode === 'container' ? '文本字幕已在本地提取，可直接检索台词。' : asset.subtitle_fallback_reason || '视频内含文本字幕轨时，可直接提取并更新台词。'}</span></div><button className="button secondary small" onClick={() => setExtractingSubtitles(true)} disabled={!asset.source_available || running}><Subtitles size={16} />提取 / 切换字幕轨</button></div>{asset.subtitle_import_warnings?.map((warning) => <Alert key={warning}>{warning}</Alert>)}<RetrievalState retrieval={detail?.retrieval} />{asset.anime_profile && <section className="asset-anime-archive" aria-label="作品初始档案"><AnimeArchivePreview profile={asset.anime_profile} /></section>}{asset.anime_profile?.mode === 'bangumi' && <AnimeCredits key={`${asset.id}:${asset.anime_profile.dossier.subject.id}`} assetId={asset.id} />}<div className="detail-layout"><aside className="player-column"><div className="player-wrap"><video key={mediaVersion} ref={video} controls preload="metadata" poster={asset.thumbnail_url || listedAsset?.thumbnail_url} src={`/api/assets/${encodeURIComponent(id)}/media?v=${mediaVersion}`} onLoadedMetadata={() => { if (video.current) video.current.currentTime = pendingSeek.current / 1000; setPlaybackError(false); }} onTimeUpdate={updatePlayback} onError={() => setPlaybackError(true)} aria-label={`${asset.title} 原片播放器`} /></div><div className="player-time"><span className="live-dot" />原片时间码 <PlaybackClock key={mediaVersion} video={video} time={currentTime} /><span className="player-time-end">/ {formatTime(asset.duration_ms)}</span></div><div className="player-caption">{currentSubtitles.length ? currentSubtitles.map((record) => <p key={record.id}>{annotation(record.id)?.summary || record.text}<small>{record.language}</small></p>) : detail ? <span>当前时间没有字幕记录</span> : null}</div>{playbackError && <Alert>浏览器暂时无法播放此视频。{asset.source_available ? '可生成兼容的播放代理，保持原片时间映射。' : asset.source_changed ? '原文件状态已变化，请点击「定位原文件」重新校验。' : '请先点击「定位原文件」重新连接原视频。'}<div className="button-row"><button className="button small secondary" disabled={proxyBusy || !asset.source_available} onClick={createProxy}>{proxyBusy ? <Spinner label="提交中" /> : '生成播放代理'}</button><button className="button small ghost" onClick={() => { setPlaybackError(false); setMediaVersion((value) => value + 1); }}>重新加载播放器</button></div></Alert>}<div className="player-note"><Layers3 size={17} /><div><strong>有证据，才有记忆</strong><p>识别记录基于有限采样，可能遗漏动作。写作引用前，请播放原片核对。</p></div></div><div className="detail-mini-stats"><div><strong>{visualCount}</strong><span>画面记录</span></div><div><strong>{detail ? subtitles.length : '…'}</strong><span>字幕记录</span></div><div><strong>{detail ? detail.run_count ?? runs.length : '…'}</strong><span>分析版本</span></div></div>{currentObservation && <div className="now-playing-note"><span className="eyebrow">CURRENT SCENE</span><p>{annotation(currentObservation.id)?.summary || currentObservation.summary || (currentObservation.evidence_type === 'retrieval_window' ? '画面证据' : '')}</p></div>}</aside><section className="records-column"><div className="section-row records-tabs"><div className="tabs"><button className={tab === 'visual' ? 'active' : ''} onClick={() => { setTab('visual'); setLimit(40); }}><ScanLine size={15} />画面 <span>{visualCount}</span></button><button className={tab === 'subtitle' ? 'active' : ''} onClick={() => { setTab('subtitle'); setLimit(40); }}><Subtitles size={15} />台词 <span>{detail ? subtitles.length : '…'}</span></button><button className={tab === 'characters' ? 'active' : ''} onClick={() => setTab('characters')}><UsersRound size={15} />角色档案</button><button className={tab === 'identity' ? 'active' : ''} onClick={() => setTab('identity')}>视听身份</button><button className={tab === 'entities' ? 'active' : ''} onClick={() => setTab('entities')}>作品实体</button><button className={tab === 'runs' ? 'active' : ''} onClick={() => setTab('runs')}><Clock3 size={15} />版本</button></div></div>{(tab === 'visual' || tab === 'subtitle') && <input className="record-filter" aria-label="筛选当前作品资料" placeholder="筛选这部作品的记录…" value={query} onChange={(e) => { setQuery(e.target.value); setLimit(40); }} />}{(!sectionReady && !error) && <Spinner label="正在读取作品资料" />}{sectionReady && tab === 'visual' && (observationsFiltered.length ? <><div className="observation-list">{observationsFiltered.slice(0, limit).map((record) => {
     const edited = annotation(record.id);
     const isActive = currentTime >= record.start_ms && currentTime < record.end_ms;
     const entityLabel = (entityId: string) => { const entity = record.entities?.find((item) => (item.id || item.entity_id || item.local_id) === entityId); return entity ? entityDisplayName(entity) : entityId; };
     return <article className={`observation-card ${isActive ? 'active' : ''}`} key={record.id} id={'chunk_id' in record ? `scene-${record.chunk_id}` : undefined}><div className="record-header"><button className="record-time" onClick={() => seek(record.seek_ms ?? record.start_ms)}><Play size={12} fill="currentColor" />{formatTime(record.start_ms)} — {formatTime(record.end_ms)}</button><span className={`review-label ${edited?.summary ? 'reviewed' : ''}`}>{edited?.summary ? '人工校正' : record.evidence_type === 'retrieval_window' ? '画面索引 · 待核对' : 'AI 识别 · 待复核'}</span></div>{'chunk_id' in record && <div className="scene-badges"><SceneBadges scene={record} /></div>}<p className="observation-summary">{edited?.summary || record.summary || (record.evidence_type === 'retrieval_window' ? '画面证据' : '')}</p><RetrievalFrames assetId={id} record={record} onSeek={seek} /><EntityIdentities entities={record.entities} onCharacter={(characterId) => { setSelectedCharacter(characterId); setTab('characters'); }} onWorkEntity={(entityId) => { setWorkBinding({ recordId: record.id, entityId }); setTab('entities'); }} correctedName={(entity) => edited && !edited.needs_reassociation && edited.entity_id === (entity.id || entity.entity_id || entity.local_id) ? edited.character_name : undefined} />{((record.events?.length || 0) > 0 || (record.spatial_observations?.length || 0) > 0) && <details className="record-relations"><summary>动作与空间关系</summary>{record.events?.map((event, index) => <p key={`event-${index}`}><span>动作</span>{[event.actor_ids?.map(entityLabel).join('、') || event.actor_names?.join('、'), event.action, event.target_ids?.map(entityLabel).join('、') || event.target_names?.join('、')].filter(Boolean).join(' · ')}</p>)}{record.spatial_observations?.map((spatial, index) => <p key={`spatial-${index}`}><span>位置</span>{[entityLabel(spatial.subject_id), spatial.relation, spatial.object_id ? entityLabel(spatial.object_id) : ''].filter(Boolean).join(' · ')}</p>)}</details>}{'chunk_id' in record && <SceneFacts scene={record} assetId={id} subtitles={subtitles} startMs={record.start_ms} />}{'chunk_id' in record && <RelatedScenes scene={record} scenes={detail.scenes || []} assetId={id} />}{'chunk_id' in record ? <SceneFrames scene={record} assetId={id} onSelect={setImage} /> : record.evidence_type !== 'retrieval_window' && record.evidence_frame_ids?.length > 0 && <div className="evidence-strip">{record.evidence_frame_ids.map((frameId) => <button key={frameId} onClick={() => setImage(`/api/assets/${encodeURIComponent(id)}/frames/${encodeURIComponent(frameId)}`)} aria-label="放大证据画面"><img src={`/api/assets/${encodeURIComponent(id)}/frames/${encodeURIComponent(frameId)}`} alt="模型使用的证据画面" loading="lazy" /><Maximize2 size={13} /></button>)}</div>}{(record.uncertainties?.length || 0) > 0 && <p className="uncertainty">待核对：{record.uncertainties?.join('；')}</p>}{edited?.needs_reassociation && <p className="uncertainty">人物关联需重新确认：分析版本已改变。</p>}{edited?.note && <div className="record-note"><Pencil size={13} />{edited.note}</div>}<footer className="record-footer"><span>{record.evidence_frame_ids?.length || 0} 帧证据</span>{'chunk_id' in record && <DeepenSceneButton contentKind={record.content_kind} assetId={id} chunkId={record.chunk_id} title={`${asset.title} · ${formatTime(record.start_ms)} — ${formatTime(record.end_ms)}`} contextStale={record.context_stale} />}<button className="text-button" onClick={() => setEditRecord(record)}><Pencil size={14} />纠错 / 笔记</button><button className={`text-button ${edited?.favorite ? 'saved' : ''}`} onClick={() => { void favorite(record); }}><Bookmark size={14} fill={edited?.favorite ? 'currentColor' : 'none'} />{edited?.favorite ? '已收藏' : '收藏'}</button></footer></article>;
-  })}</div>{observationsFiltered.length > limit && <button className="button secondary load-more" onClick={() => setLimit(limit + 40)}>加载更多画面记录</button>}</> : <Empty icon={<ScanLine size={28} />} title={query ? '没有符合条件的画面记录' : '这部作品还没有画面资料'} action={!query && <button className="button secondary" onClick={() => openJob(asset)} disabled={!asset.source_available}>开始画面分析</button>}>{query ? '试试其他关键词。' : '配置视觉模型并完成分析，人物、动作与证据画面会保存在这里。'}</Empty>)}{tab === 'subtitle' && (subtitlesFiltered.length ? <><div className="subtitle-list">{subtitlesFiltered.slice(0, limit).map((record) => { const edited = annotation(record.id); return <article id={`subtitle-${record.id}`} className={`subtitle-card ${currentTime >= record.start_ms && currentTime < record.end_ms ? 'active' : ''}`} key={record.id}><div><button className="record-time" onClick={() => seek(record.start_ms)}><Play size={12} fill="currentColor" />{formatTime(record.start_ms)}</button><span className="tag">{record.language || 'und'}</span></div><p>{edited?.summary || record.text}</p>{record.review_status && !['confirmed', 'reviewed'].includes(record.review_status) && (record.review_status === 'needs_review' || !['external', 'container'].includes(record.source)) && <small className="warning-text">{record.review_status === 'uncertain' ? '文字不确定，请复核' : '待复核'}</small>}{edited?.needs_reassociation && <p className="uncertainty">人物关联需重新确认：分析版本已改变。</p>}{edited?.note && <div className="record-note"><Pencil size={12} />{edited.note}</div>}<footer className="record-footer"><span>{formatTime(record.end_ms)}</span><button className="text-button" onClick={() => setEditRecord(record)}><Pencil size={14} />纠错 / 笔记</button><button className={`text-button ${edited?.favorite ? 'saved' : ''}`} onClick={() => { void favorite(record); }}><Bookmark size={14} fill={edited?.favorite ? 'currentColor' : 'none'} />{edited?.favorite ? '已收藏' : '收藏'}</button></footer></article>; })}</div>{subtitlesFiltered.length > limit && <button className="button secondary load-more" onClick={() => setLimit(limit + 40)}>加载更多字幕</button>}</> : <Empty icon={<Subtitles size={29} />} title={query ? '没有匹配的台词' : '还没有字幕记录'}>{query ? '试试缩短关键词。' : asset.subtitle_mode === 'embedded' ? '可先提取容器文本字幕轨；画面烧录文字可配置模型进行 OCR。' : asset.subtitle_mode === 'container' ? '可重新提取或切换其他文本字幕轨。' : '外挂字幕会在导入时解析并保存。'}</Empty>)}{tab === 'characters' && <CharacterProfiles asset={asset} selectedId={selectedCharacter} onSeek={seek} onSaved={saveAndReload} />}{tab === 'entities' && <WorkEntities assetId={id} title={asset.title} records={observations} initialBinding={workBinding} onSaved={saveAndReload} />}{tab === 'identity' && <AudioIdentity asset={asset} initialAudio={initialAudio} onSeek={seek} onSaved={saveAndReload} />}{tab === 'runs' && (runs.length ? <div className="run-list">{runs.map((run, index) => <article key={run.id || index}><div><FileVideo size={20} /><h3>{run.stage === 'vision' ? '画面分析' : run.stage === 'subtitle' ? '字幕识别' : '分析运行'}</h3><Status status={run.status} /></div><p>{friendlyDate(run.created_at)}{run.model ? ` · ${run.model}` : ''}</p><code>{run.id}</code><details><summary>查看运行参数与来源</summary><pre className="json-report">{JSON.stringify(run, null, 2)}</pre></details></article>)}</div> : <Empty icon={<Clock3 size={27} />} title="还没有分析版本">每次分析都会保存独立版本，记录模型与采样参数。</Empty>)}</section></div>{deleting && <DeleteModal target={{ kind: 'assets', asset_ids: [id] }} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); window.location.hash = '#/library'; }} />}{editRecord && <AnnotationModal assetId={id} record={editRecord} existing={annotation(editRecord.id)} onClose={() => setEditRecord(null)} onSaved={saveAndReload} />}{relocating && <RelocateModal assetId={id} onClose={() => setRelocating(false)} onSaved={async () => { await saveAndReload(); setMediaVersion((value) => value + 1); }} />}{extractingSubtitles && <ExtractSubtitlesModal asset={asset} onClose={() => setExtractingSubtitles(false)} onSaved={saveAndReload} />}{image && <Modal title="证据画面" subtitle="这是分析时实际使用的采样图片。" onClose={() => setImage(null)} wide><div className="evidence-full"><img src={image} alt="完整证据画面" /></div></Modal>}</>;
+  })}</div>{observationsFiltered.length > limit && <button className="button secondary load-more" onClick={() => setLimit(limit + 40)}>加载更多画面记录</button>}</> : <Empty icon={<ScanLine size={28} />} title={query ? '没有符合条件的画面记录' : '这部作品还没有画面资料'} action={!query && <button className="button secondary" onClick={() => openJob(asset)} disabled={!asset.source_available}>开始画面分析</button>}>{query ? '试试其他关键词。' : '配置视觉模型并完成分析，人物、动作与证据画面会保存在这里。'}</Empty>)}{sectionReady && tab === 'subtitle' && (subtitlesFiltered.length ? <><div className="subtitle-list">{subtitlesFiltered.slice(0, limit).map((record) => { const edited = annotation(record.id); return <article id={`subtitle-${record.id}`} className={`subtitle-card ${currentTime >= record.start_ms && currentTime < record.end_ms ? 'active' : ''}`} key={record.id}><div><button className="record-time" onClick={() => seek(record.start_ms)}><Play size={12} fill="currentColor" />{formatTime(record.start_ms)}</button><span className="tag">{record.language || 'und'}</span></div><p>{edited?.summary || record.text}</p>{record.review_status && !['confirmed', 'reviewed'].includes(record.review_status) && (record.review_status === 'needs_review' || !['external', 'container'].includes(record.source)) && <small className="warning-text">{record.review_status === 'uncertain' ? '文字不确定，请复核' : '待复核'}</small>}{edited?.needs_reassociation && <p className="uncertainty">人物关联需重新确认：分析版本已改变。</p>}{edited?.note && <div className="record-note"><Pencil size={12} />{edited.note}</div>}<footer className="record-footer"><span>{formatTime(record.end_ms)}</span><button className="text-button" onClick={() => setEditRecord(record)}><Pencil size={14} />纠错 / 笔记</button><button className={`text-button ${edited?.favorite ? 'saved' : ''}`} onClick={() => { void favorite(record); }}><Bookmark size={14} fill={edited?.favorite ? 'currentColor' : 'none'} />{edited?.favorite ? '已收藏' : '收藏'}</button></footer></article>; })}</div>{subtitlesFiltered.length > limit && <button className="button secondary load-more" onClick={() => setLimit(limit + 40)}>加载更多字幕</button>}</> : <Empty icon={<Subtitles size={29} />} title={query ? '没有匹配的台词' : '还没有字幕记录'}>{query ? '试试缩短关键词。' : asset.subtitle_mode === 'embedded' ? '可先提取容器文本字幕轨；画面烧录文字可配置模型进行 OCR。' : asset.subtitle_mode === 'container' ? '可重新提取或切换其他文本字幕轨。' : '外挂字幕会在导入时解析并保存。'}</Empty>)}{tab === 'characters' && <CharacterProfiles asset={asset} selectedId={selectedCharacter} onSeek={seek} onSaved={saveAndReload} />}{sectionReady && tab === 'entities' && <WorkEntities assetId={id} title={asset.title} records={observations} initialBinding={workBinding} onSaved={saveAndReload} />}{tab === 'identity' && <AudioIdentity asset={asset} initialAudio={initialAudio} onSeek={seek} onSaved={saveAndReload} />}{sectionReady && tab === 'runs' && (runs.length ? <div className="run-list">{runs.map((run, index) => <article key={run.id || index}><div><FileVideo size={20} /><h3>{run.stage === 'vision' ? '画面分析' : run.stage === 'subtitle' ? '字幕识别' : '分析运行'}</h3><Status status={run.status} /></div><p>{friendlyDate(run.created_at)}{run.model ? ` · ${run.model}` : ''}</p><code>{run.id}</code><details><summary>查看运行参数与来源</summary><pre className="json-report">{JSON.stringify(run, null, 2)}</pre></details></article>)}</div> : <Empty icon={<Clock3 size={27} />} title="还没有分析版本">每次分析都会保存独立版本，记录模型与采样参数。</Empty>)}</section></div>{deleting && <DeleteModal target={{ kind: 'assets', asset_ids: [id] }} onClose={() => setDeleting(false)} onDeleted={() => { setDeleting(false); window.location.hash = '#/library'; }} />}{editRecord && <AnnotationModal assetId={id} record={editRecord} existing={annotation(editRecord.id)} onClose={() => setEditRecord(null)} onSaved={saveAndReload} />}{relocating && <RelocateModal assetId={id} onClose={() => setRelocating(false)} onSaved={async () => { await saveAndReload(); setMediaVersion((value) => value + 1); }} />}{extractingSubtitles && <ExtractSubtitlesModal asset={asset} onClose={() => setExtractingSubtitles(false)} onSaved={saveAndReload} />}{image && <Modal title="证据画面" subtitle="这是分析时实际使用的采样图片。" onClose={() => setImage(null)} wide><div className="evidence-full"><img src={image} alt="完整证据画面" /></div></Modal>}</>;
 }

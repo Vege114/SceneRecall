@@ -66,12 +66,15 @@ class RetrievalStore:
             atomic_json(active_path, active)
         return record
 
-    def records(self, asset_id):
+    def records(self, asset_id, *, record_ids=None):
         with trace_span("retrieval.load_validate") as phase:
             active = read_json(self.directory(asset_id) / "active.json", {"units": {}})
             result = []
-            timing_count("window_count", len(active.get("units", {})))
-            for identity, entry in active.get("units", {}).items():
+            units = active.get("units", {})
+            selected = units.keys() if record_ids is None else units.keys() & record_ids
+            timing_count("window_count", len(selected))
+            for identity in selected:
+                entry = units[identity]
                 record = read_json(confined_path(self.library.asset_dir(asset_id), entry["path"]))
                 if record is None or record.get("id") != identity or digest(record) != entry["digest"]:
                     raise ValueError("检索记录激活引用不完整")

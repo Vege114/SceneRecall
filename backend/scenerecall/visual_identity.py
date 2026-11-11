@@ -730,7 +730,7 @@ class VisualIdentityPipeline:
         except IdentityUnavailable as exc:
             result.update(status="unavailable", degraded_reason=str(exc))
         metrics["total_ms"] = round((time.monotonic() - started) * 1000)
-        atomic_json(self._directory(asset_id) / "latest.json", result)
+        atomic_json(self._directory(asset_id) / "latest.json", result, compact=True)
         return result
 
     def _project(self, asset_id, regions, *, _catalog=None, _crop_paths=True):

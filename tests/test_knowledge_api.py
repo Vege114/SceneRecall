@@ -220,7 +220,7 @@ def test_knowledge_http_final_projection_rechecks_character_scope(knowledge_http
         return {"results": [candidate], "knowledge_hits": [], "knowledge_diagnostics": {}}
 
     monkeypatch.setattr(search, "search", recalled)
-    monkeypatch.setattr(service.library, "records", lambda *_: [current])
+    monkeypatch.setattr(service.library, "records", lambda *_, **_kw: [current])
     response = client.post(f"/api/work-entity-scopes/{scope}/knowledge/query", json={"query": "角色出场"})
     assert response.status_code == 200, response.text
     assert response.json()["film_hits"] == []

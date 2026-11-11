@@ -93,6 +93,42 @@ def test_scene_search_and_detail_only_project_current_records_without_model_work
     assert app.state.jobs.list() == []
 
 
+def test_player_and_timeline_skip_visual_projection_and_run_payloads(scene_app, monkeypatch):
+    app, client, _, scene = scene_app
+    library = app.state.library
+    base = "/api/assets/scene_asset"
+    library.save_run("scene_asset", "test_run", {"status": "complete"})
+    full = client.get(base).json()
+    project = library.records
+    requested = []
+
+    def record_projection(asset_id, *, compact_subtitles, record_ids):
+        requested.append(record_ids)
+        return project(asset_id, compact_subtitles=compact_subtitles, record_ids=record_ids)
+
+    monkeypatch.setattr(library, "records", record_projection)
+    with monkeypatch.context() as guard:
+        def unexpected(*args, **kwargs):
+            pytest.fail("Player metadata must not build the timeline or load run payloads")
+
+        for name in ("records", "observations", "subtitles", "annotations", "runs"):
+            guard.setattr(library, name, unexpected)
+        player = client.get(base + "/player").json()
+        assert player["id"] == "scene_asset" and player["source_available"]
+    with monkeypatch.context() as guard:
+        guard.setattr(library, "runs", lambda _: pytest.fail("Only the versions tab needs run payloads"))
+        timeline = client.get(base, params={"view": "timeline"}).json()
+        assert timeline["subtitles"] == full["subtitles"] and timeline["run_count"] == len(full["runs"])
+        assert requested == [] and timeline["scenes"] == timeline["runs"] == []
+        visual = client.get(base, params={"view": "visual"}).json()
+    assert requested == [{scene["id"], "old_observation"}]
+    for key in ("observations", "scenes", "retrieval_windows", "subtitles", "annotations"):
+        assert visual[key] == full[key]
+    requested.clear()
+    assert client.get(base, params={"view": "runs"}).json()["runs"] == full["runs"]
+    assert requested == []
+
+
 def test_scene_deepen_estimate_is_read_only_and_submit_is_durable_budgeted_and_deduplicated(scene_app):
     app, client, _, scene = scene_app
     base = f"/api/assets/scene_asset/chunks/{scene['id']}/deepen"

@@ -58,9 +58,11 @@ class SceneStore:
                 "character_semantic_revision": registry.get("semantic_revision", registry["revision"]),
                 "membership_revision": asset.get("membership_revision", 0)}
 
-    def _raw(self, asset_id: str) -> list[dict]:
+    def _raw(self, asset_id: str, *, record_ids=None) -> list[dict]:
         result = []
         for identity, relative in self.library.active(asset_id).get("scenes", {}).items():
+            if record_ids is not None and identity not in record_ids:
+                continue
             safe_id(identity)
             path = confined_path(self.library.asset_dir(asset_id), relative)
             row = read_json(path)
@@ -70,14 +72,17 @@ class SceneStore:
             result.append(row)
         return sorted(result, key=lambda row: (row["start_ms"], row["end_ms"]))
 
-    def list(self, asset_id: str, include_stale: bool = True) -> list[dict]:
+    def list(self, asset_id: str, include_stale: bool = True, *, record_ids=None) -> list[dict]:
         asset = self.library.get_asset(asset_id, include_deleted=True)
-        rows = self._raw(asset_id)
+        rows = self._raw(asset_id) if record_ids is None else self._raw(asset_id, record_ids=record_ids)
         if not rows:
             return []
         annotations = self._annotations(asset_id)
-        cache = {(asset_id, "annotations"): annotations, (asset_id, "asset_info"): asset,
-                 (asset_id, "rows"): {row["id"]: row for row in rows}}
+        cache = {(asset_id, "annotations"): annotations, (asset_id, "asset_info"): asset}
+        # Dependency walks can reference other active scenes, even in a
+        # different episode. Only seed their lookup with a complete row map.
+        if record_ids is None:
+            cache[(asset_id, "rows")] = {row["id"]: row for row in rows}
         result = []
         for row in rows:
             row = self._cached_semantics(asset_id, row, cache)

@@ -367,6 +367,10 @@ class KnowledgeStore:
             timing_count("knowledge_sources", len(saved["source_documents"]))
             cards = []
             for card in sorted(saved["knowledge_cards"].values(), key=lambda row: row["card_id"]):
+                # Source/identity checks can disqualify a reviewed card. They
+                # cannot promote a draft, rejected or revoked card into recall.
+                if card["review_status"] != "reviewed":
+                    continue
                 public = self._public_card(saved, card)
                 if public["effective_status"] != "reviewed":
                     continue
@@ -403,15 +407,20 @@ class KnowledgeStore:
                     "work_version": saved["work_version"], "title": saved["title"], "signature": signature,
                     "cards": cards, "alignments": self._active_alignments(saved, cards)}
 
-    def lexical_hits(self, scope, query, *, limit=50):
+    def lexical_hits(self, scope, query, *, limit=50, projection=None):
         from .search import normalize, tokenize
         if not isinstance(query, str) or not query.strip():
             return []
+        if projection is None:
+            projection = self.projection(scope)
+        elif projection["work_scope_id"] != scope:
+            raise ValueError("词法检索资料不属于当前作品")
         terms = set(tokenize(query))
+        normalized_query = normalize(query)
         hits = []
-        for card in self.projection(scope)["cards"]:
+        for card in projection["cards"]:
             score = len(terms & set(tokenize(card["text"])))
-            if normalize(query) in normalize(card["text"]):
+            if normalized_query in normalize(card["text"]):
                 score += 10
             if score:
                 hits.append({**card, "score": score, "retrieval_source": "lexical", "mapping_status": "reviewed",

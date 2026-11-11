@@ -1,5 +1,6 @@
 """Deletion safety contracts use generated media and never access user videos."""
 import asyncio
+from contextlib import contextmanager
 import copy
 import os
 from pathlib import Path
@@ -47,11 +48,17 @@ def sources(tmp_path, generated_sources):
     return paths
 
 
-@pytest.fixture
-def client(tmp_path):
+@contextmanager
+def client_session(tmp_path):
     app = create_app(tmp_path / "library", start_worker=False, providers=NoRemoteProvider(), token="test")
     with TestClient(app) as result:
         result.post("/api/session", json={"token": "test"})
+        yield result
+
+
+@pytest.fixture
+def client(tmp_path):
+    with client_session(tmp_path) as result:
         yield result
 
 
@@ -283,36 +290,38 @@ def test_partial_unlink_failure_keeps_persistent_per_source_outcomes(client, sou
 
 @pytest.mark.parametrize("replace_after_crash", [False, True])
 def test_interrupted_unlink_reconciliation_never_deletes_new_or_pending_sources(
-        client, sources, monkeypatch, replace_after_crash):
+        tmp_path, sources, monkeypatch, replace_after_crash):
     from scenerecall.deletions import DeletionStore
-
-    assets = [register(client, source) for source in sources]
-    store = client.app.state.library.deletions
-    request = {"kind": "assets", "asset_ids": [asset["id"] for asset in assets], "delete_source": True}
-    prepared = store.preview(**request)
-    deleted_path = Path(prepared["source_files"][0]["path"])
-    remaining_path = Path(prepared["source_files"][1]["path"])
-    original_remaining = remaining_path.read_bytes()
-    original_result = DeletionStore._set_source_result
 
     def crash_after_unlink(self, trash_id, index, status, message):
         raise OSError("synthetic crash after unlink, before result checkpoint")
 
-    monkeypatch.setattr(DeletionStore, "_set_source_result", crash_after_unlink)
-    with pytest.raises(OSError, match="synthetic crash"):
-        store.delete(expected_token=prepared["token"], **request)
-    assert not deleted_path.exists() and remaining_path.is_file()
-    trash_id = store.list()[0]["id"]
-    assert {entry["status"] for entry in store.list()[0]["source_results"]} == {"pending"}
+    # A restart drains the previous process's background readers before the
+    # new Library acquires its own in-process catalog lock.
+    with client_session(tmp_path) as client:
+        assets = [register(client, source) for source in sources]
+        library = client.app.state.library
+        store = library.deletions
+        request = {"kind": "assets", "asset_ids": [asset["id"] for asset in assets], "delete_source": True}
+        prepared = store.preview(**request)
+        deleted_path = Path(prepared["source_files"][0]["path"])
+        remaining_path = Path(prepared["source_files"][1]["path"])
+        original_remaining = remaining_path.read_bytes()
+        with monkeypatch.context() as patch:
+            patch.setattr(DeletionStore, "_set_source_result", crash_after_unlink)
+            with pytest.raises(OSError, match="synthetic crash"):
+                store.delete(expected_token=prepared["token"], **request)
+        assert not deleted_path.exists() and remaining_path.is_file()
+        trash_id = store.list()[0]["id"]
+        assert {entry["status"] for entry in store.list()[0]["source_results"]} == {"pending"}
     if replace_after_crash:
         deleted_path.write_bytes(b"a new unrelated file now occupies the former source path")
-    monkeypatch.setattr(DeletionStore, "_set_source_result", original_result)
 
     def never_replay_unlink(_path):
         raise AssertionError("Startup must inspect interrupted source deletions, never replay unlink")
 
     monkeypatch.setattr(DeletionStore, "_unlink_source", staticmethod(never_replay_unlink))
-    restored = Library(client.app.state.library.root)
+    restored = Library(library.root)
     record = next(entry for entry in restored.deletions.list() if entry["id"] == trash_id)
     assert [entry["status"] for entry in record["source_results"]] == ["error", "error"]
     if not replace_after_crash:
